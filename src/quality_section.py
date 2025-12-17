@@ -17,7 +17,7 @@ import logging
 from .data_loader import load_nc_data
 from .kpi_cards import render_open_nc_status_tracker
 from .aging_analysis import render_aging_dashboard
-from .cost_analysis import render_cost_analysis
+from .cost_analysis import render_cost_of_rework, render_cost_avoided
 from .customer_analysis import render_customer_analysis
 from .pareto_chart import render_issue_type_pareto
 
@@ -118,7 +118,15 @@ def render_cost_tab(nc_data: pd.DataFrame):
     st.markdown("Track rework costs and cost avoidance")
     
     try:
-        render_cost_analysis(nc_data)
+        # Show both cost of rework and cost avoided
+        st.markdown("#### Cost of Rework")
+        render_cost_of_rework(nc_data)
+        
+        st.markdown("---")
+        
+        st.markdown("#### Cost Avoided")
+        render_cost_avoided(nc_data)
+        
     except Exception as e:
         st.error(f"Error rendering cost analysis: {str(e)}")
         logger.error(f"Cost analysis error: {e}")
