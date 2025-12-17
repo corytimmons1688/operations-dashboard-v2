@@ -221,13 +221,34 @@ def load_sheet_data(sheet_name: str, sheet_key: str = None) -> Optional[pd.DataF
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(sheet_name)
         
-        data = worksheet.get_all_records()
+        # Get all values first to handle duplicate headers
+        all_values = worksheet.get_all_values()
         
-        if not data:
+        if not all_values or len(all_values) < 2:
             logger.warning(f"No data found in worksheet: {sheet_name}")
             return pd.DataFrame()
         
-        df = pd.DataFrame(data)
+        # Get headers and deduplicate them
+        headers = all_values[0]
+        seen = {}
+        unique_headers = []
+        for h in headers:
+            h_str = str(h).strip() if h else 'Unnamed'
+            if not h_str:
+                h_str = 'Unnamed'
+            if h_str in seen:
+                seen[h_str] += 1
+                unique_headers.append(f"{h_str}_{seen[h_str]}")
+            else:
+                seen[h_str] = 0
+                unique_headers.append(h_str)
+        
+        # Create DataFrame with unique headers
+        df = pd.DataFrame(all_values[1:], columns=unique_headers)
+        
+        # Remove completely empty/unnamed columns
+        cols_to_keep = [c for c in df.columns if not c.startswith('Unnamed')]
+        df = df[cols_to_keep]
         
         # Process column types if sheet_key provided
         if sheet_key:
