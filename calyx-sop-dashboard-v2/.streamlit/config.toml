@@ -1,0 +1,19 @@
+[theme]
+# Calyx Containers Brand Colors
+primaryColor = "#0033A1"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F1F2F2"
+textColor = "#1A1A1A"
+font = "sans serif"
+
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = true
+maxUploadSize = 200
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+fastReruns = true
