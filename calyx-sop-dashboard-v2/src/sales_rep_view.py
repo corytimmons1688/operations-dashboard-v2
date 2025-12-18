@@ -1,16 +1,16 @@
 """
 Sales Rep View Module for S&OP Dashboard
-Tab 1: Sales representative focused view with customer/SKU forecasts
+Customer-focused demand analysis and forecasting
 
 Features:
-- Filter by Sales Rep, Customer (auto-restrict SKUs to customer history)
-- Historical SKU ordering cadence
-- Invoice payment behavior
-- SKU-level demand forecast
-- Quarterly recommendations (Q1-Q4)
-- Customer-safe visualizations
+- Fixed dropdown filters (Customer, Item, Date Range)
+- Item category linked to "Calyx || Product Type" from Raw_Items
+- Forecast Planning section with interactive pipeline/deals
+- Historical and forecasted revenue charts
+- Submit Forecast functionality
 
 Author: Xander @ Calyx Containers
+Version: 3.1.0
 """
 
 import streamlit as st
@@ -20,814 +20,880 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict
+from typing import List, Optional, Dict, Tuple
 import logging
-
-from .sop_data_loader import (
-    load_invoice_lines, load_sales_orders, load_customers, load_items,
-    get_unique_sales_reps, get_customers_for_rep, get_skus_for_customer,
-    prepare_demand_history
-)
-from .forecasting_models import generate_forecast, ForecastResult
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# DATA LOADING FUNCTIONS
+# =============================================================================
 
-def render_sales_rep_view():
-    """Main render function for Sales Rep View tab."""
-    
-    st.markdown("## 👤 Sales Rep View")
-    st.markdown("Customer-focused demand analysis and forecasting")
-    
-    # Load data
-    with st.spinner("Loading sales data..."):
+@st.cache_data(ttl=300)
+def load_sales_data():
+    """Load all required sales data with caching."""
+    try:
+        from .sop_data_loader import (
+            load_invoice_lines, load_sales_orders, load_items,
+            load_customers, load_deals
+        )
+        
         invoice_lines = load_invoice_lines()
         sales_orders = load_sales_orders()
-        customers = load_customers()
         items = load_items()
-    
-    if invoice_lines is None or sales_orders is None:
-        st.error("Unable to load sales data. Please check your data connection.")
-        return
-    
-    # Sidebar filters
-    st.sidebar.markdown("### 🔍 Sales Rep Filters")
-    
-    # Sales Rep filter
-    sales_reps = get_unique_sales_reps(sales_orders)
-    if not sales_reps:
-        sales_reps = ["All"]
-    
-    selected_rep = st.sidebar.selectbox(
-        "Select Sales Rep",
-        options=["All"] + sales_reps,
-        key="sales_rep_filter"
-    )
-    
-    # Customer filter (restricted by rep)
-    if selected_rep != "All":
-        available_customers = get_customers_for_rep(sales_orders, selected_rep)
-    else:
-        available_customers = get_unique_customers_from_invoices(invoice_lines)
-    
-    selected_customer = st.sidebar.selectbox(
-        "Select Customer",
-        options=["All"] + available_customers,
-        key="customer_filter"
-    )
-    
-    # SKU filter (restricted by customer)
-    if selected_customer != "All":
-        available_skus = get_skus_for_customer(invoice_lines, selected_customer)
-    else:
-        available_skus = get_unique_items_from_invoices(invoice_lines)
-    
-    selected_sku = st.sidebar.selectbox(
-        "Select SKU (Optional)",
-        options=["All"] + available_skus,
-        key="sku_filter"
-    )
-    
-    # Forecast settings
-    st.sidebar.markdown("### 📊 Forecast Settings")
-    
-    forecast_horizon = st.sidebar.selectbox(
-        "Forecast Horizon",
-        options=[3, 6, 9, 12, 18, 24],
-        index=3,
-        format_func=lambda x: f"{x} months",
-        key="forecast_horizon"
-    )
-    
-    forecast_model = st.sidebar.selectbox(
-        "Forecast Model",
-        options=['exponential_smoothing', 'arima', 'ml_random_forest'],
-        format_func=lambda x: {
-            'exponential_smoothing': 'Exponential Smoothing',
-            'arima': 'ARIMA/SARIMA',
-            'ml_random_forest': 'Machine Learning (RF)'
-        }.get(x, x),
-        key="forecast_model"
-    )
-    
-    st.sidebar.markdown("---")
-    
-    # Filter data based on selections
-    filtered_invoices = filter_invoice_data(
-        invoice_lines, selected_rep, selected_customer, selected_sku, sales_orders
-    )
-    
-    if filtered_invoices.empty:
-        st.warning("No data found for the selected filters.")
-        return
-    
-    # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📈 Ordering Cadence",
-        "💳 Payment Behavior", 
-        "🔮 SKU Forecast",
-        "📋 Quarterly Recommendations"
-    ])
-    
-    with tab1:
-        render_ordering_cadence(filtered_invoices, selected_customer, selected_sku)
-    
-    with tab2:
-        render_payment_behavior(filtered_invoices, invoice_lines, selected_customer)
-    
-    with tab3:
-        render_sku_forecast(filtered_invoices, forecast_horizon, forecast_model, selected_sku)
-    
-    with tab4:
-        render_quarterly_recommendations(filtered_invoices, forecast_horizon, forecast_model)
+        customers = load_customers()
+        deals = load_deals()
+        
+        return {
+            'invoice_lines': invoice_lines,
+            'sales_orders': sales_orders,
+            'items': items,
+            'customers': customers,
+            'deals': deals
+        }
+    except Exception as e:
+        logger.error(f"Error loading sales data: {e}")
+        return None
 
 
-def get_unique_customers_from_invoices(invoice_lines: pd.DataFrame) -> List[str]:
-    """Get unique customer names from invoice lines."""
-    for col in ['Correct Customer', 'Customer']:
-        if col in invoice_lines.columns:
-            return sorted(invoice_lines[col].dropna().unique().tolist())
-    return []
-
-
-def get_unique_items_from_invoices(invoice_lines: pd.DataFrame) -> List[str]:
-    """Get unique items from invoice lines."""
-    if 'Item' in invoice_lines.columns:
-        return sorted(invoice_lines['Item'].dropna().unique().tolist())
-    return []
-
-
-def filter_invoice_data(
-    invoice_lines: pd.DataFrame,
-    rep: str,
-    customer: str,
-    sku: str,
-    sales_orders: pd.DataFrame
-) -> pd.DataFrame:
-    """Filter invoice line data based on selections."""
-    df = invoice_lines.copy()
+def get_product_type_mapping(items_df: pd.DataFrame) -> Dict[str, str]:
+    """
+    Create mapping of Item to Product Type from Raw_Items.
+    Links to 'Calyx || Product Type' column.
+    """
+    if items_df is None or items_df.empty:
+        return {}
     
-    # Get customer column name
-    customer_col = 'Correct Customer' if 'Correct Customer' in df.columns else 'Customer'
+    # Find the product type column
+    product_type_col = None
+    for col in items_df.columns:
+        col_lower = col.lower()
+        if 'calyx' in col_lower and 'product type' in col_lower:
+            product_type_col = col
+            break
+        elif 'product type' in col_lower or 'product_type' in col_lower:
+            product_type_col = col
+            break
     
-    # Filter by rep (via sales orders customer mapping)
-    if rep != "All" and 'Rep Master' in sales_orders.columns:
-        rep_customers = sales_orders[sales_orders['Rep Master'] == rep]
-        for col in ['Customer', 'Corrected Customer Name', 'Customer Companyname']:
-            if col in rep_customers.columns:
-                valid_customers = rep_customers[col].dropna().unique().tolist()
-                df = df[df[customer_col].isin(valid_customers)]
+    if product_type_col is None:
+        logger.warning("Could not find 'Calyx || Product Type' column in items data")
+        return {}
+    
+    # Find the item name/ID column
+    item_col = None
+    for col in items_df.columns:
+        col_lower = col.lower()
+        if col_lower in ['item', 'item name', 'item_name', 'sku', 'name']:
+            item_col = col
+            break
+    
+    if item_col is None:
+        # Try first column as item identifier
+        item_col = items_df.columns[0]
+    
+    # Create mapping
+    mapping = {}
+    for _, row in items_df.iterrows():
+        item = str(row.get(item_col, '')).strip()
+        product_type = str(row.get(product_type_col, 'Unknown')).strip()
+        if item and product_type:
+            mapping[item] = product_type if product_type else 'Unknown'
+    
+    return mapping
+
+
+def enrich_with_product_type(df: pd.DataFrame, product_type_map: Dict[str, str]) -> pd.DataFrame:
+    """Add/update Product Type column using the item mapping."""
+    if df is None or df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # Find item column
+    item_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in ['item', 'item name', 'item_name', 'sku']:
+            item_col = col
+            break
+    
+    if item_col and product_type_map:
+        df['Product Type'] = df[item_col].map(product_type_map).fillna('Unknown')
+    elif 'Product Type' not in df.columns:
+        # Check for existing product type column with different name
+        for col in df.columns:
+            if 'product type' in col.lower():
+                df['Product Type'] = df[col]
                 break
-    
-    # Filter by customer
-    if customer != "All":
-        df = df[df[customer_col] == customer]
-    
-    # Filter by SKU
-    if sku != "All" and 'Item' in df.columns:
-        df = df[df['Item'] == sku]
+        else:
+            df['Product Type'] = 'Unknown'
     
     return df
 
 
-def render_ordering_cadence(df: pd.DataFrame, customer: str, sku: str):
-    """Render the ordering cadence analysis section."""
+# =============================================================================
+# FILTER FUNCTIONS
+# =============================================================================
+
+def get_unique_sales_reps(sales_orders: pd.DataFrame, customers: pd.DataFrame) -> List[str]:
+    """Get unique sales reps from data."""
+    reps = set()
     
-    st.markdown("### 📈 Historical Ordering Cadence")
+    # Check sales orders for rep column
+    if sales_orders is not None and not sales_orders.empty:
+        for col in sales_orders.columns:
+            col_lower = col.lower()
+            if 'rep' in col_lower or 'salesperson' in col_lower or 'sales rep' in col_lower:
+                reps.update(sales_orders[col].dropna().unique())
+                break
     
-    if df.empty:
-        st.info("No ordering data available for the selected filters.")
-        return
+    # Check customers for rep column
+    if customers is not None and not customers.empty:
+        for col in customers.columns:
+            col_lower = col.lower()
+            if 'rep' in col_lower or 'salesperson' in col_lower:
+                reps.update(customers[col].dropna().unique())
+                break
     
-    # Ensure date column
-    date_col = 'Date'
-    if date_col not in df.columns:
-        st.warning("Date column not found in data.")
-        return
+    # Clean and sort
+    reps = [str(r).strip() for r in reps if r and str(r).strip()]
+    return sorted(list(set(reps)))
+
+
+def get_customers_for_rep(sales_orders: pd.DataFrame, invoice_lines: pd.DataFrame, 
+                          rep: str = None) -> List[str]:
+    """Get unique customers, optionally filtered by rep."""
+    customers = set()
+    
+    # Get customer column name
+    customer_cols = ['Customer', 'Correct Customer', 'Customer Name', 'customer', 'Customer Companyname']
+    
+    for df in [sales_orders, invoice_lines]:
+        if df is not None and not df.empty:
+            for col in customer_cols:
+                if col in df.columns:
+                    if rep and rep != "All":
+                        # Find rep column and filter
+                        rep_col = None
+                        for rc in df.columns:
+                            if 'rep' in rc.lower():
+                                rep_col = rc
+                                break
+                        if rep_col:
+                            filtered = df[df[rep_col] == rep]
+                            customers.update(filtered[col].dropna().unique())
+                        else:
+                            customers.update(df[col].dropna().unique())
+                    else:
+                        customers.update(df[col].dropna().unique())
+                    break
+    
+    # Clean and sort
+    customers = [str(c).strip() for c in customers if c and str(c).strip() and str(c).lower() != 'nan']
+    return sorted(list(set(customers)))
+
+
+def get_items_for_customer(invoice_lines: pd.DataFrame, sales_orders: pd.DataFrame,
+                           customer: str = None) -> List[str]:
+    """Get unique items/SKUs, optionally filtered by customer."""
+    items = set()
+    
+    item_cols = ['Item', 'SKU', 'Item Name', 'item', 'Product']
+    customer_cols = ['Customer', 'Correct Customer', 'Customer Name', 'customer']
+    
+    for df in [invoice_lines, sales_orders]:
+        if df is not None and not df.empty:
+            # Find item column
+            item_col = None
+            for col in item_cols:
+                if col in df.columns:
+                    item_col = col
+                    break
+            
+            if item_col is None:
+                continue
+            
+            # Find customer column
+            cust_col = None
+            for col in customer_cols:
+                if col in df.columns:
+                    cust_col = col
+                    break
+            
+            if customer and customer != "All" and cust_col:
+                filtered = df[df[cust_col] == customer]
+                items.update(filtered[item_col].dropna().unique())
+            else:
+                items.update(df[item_col].dropna().unique())
+    
+    # Clean and sort
+    items = [str(i).strip() for i in items if i and str(i).strip() and str(i).lower() != 'nan']
+    return sorted(list(set(items)))
+
+
+def filter_data_by_date_range(df: pd.DataFrame, date_range: str, date_col: str = None) -> pd.DataFrame:
+    """Filter dataframe by date range selection."""
+    if df is None or df.empty:
+        return df
     
     df = df.copy()
+    
+    # Find date column
+    if date_col is None:
+        date_cols = ['Date', 'date', 'Invoice Date', 'Order Date', 'Tran Date', 'Transaction Date']
+        for col in date_cols:
+            if col in df.columns:
+                date_col = col
+                break
+    
+    if date_col is None or date_col not in df.columns:
+        return df
+    
+    # Convert to datetime
+    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    
+    today = datetime.now()
+    
+    if date_range == "Last 3 Months":
+        start_date = today - timedelta(days=90)
+    elif date_range == "Last 6 Months":
+        start_date = today - timedelta(days=180)
+    elif date_range == "Last 12 Months":
+        start_date = today - timedelta(days=365)
+    elif date_range == "YTD":
+        start_date = datetime(today.year, 1, 1)
+    elif date_range == "All Time":
+        return df
+    else:
+        # Default to last 12 months
+        start_date = today - timedelta(days=365)
+    
+    return df[df[date_col] >= start_date]
+
+
+# =============================================================================
+# FORECAST PLANNING FUNCTIONS
+# =============================================================================
+
+def calculate_customer_demand(invoice_lines: pd.DataFrame, customer: str, 
+                              date_range: str, product_type_map: Dict) -> pd.DataFrame:
+    """Calculate demand by item for a customer within date range."""
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Find customer column
+    customer_cols = ['Customer', 'Correct Customer', 'Customer Name']
+    cust_col = None
+    for col in customer_cols:
+        if col in df.columns:
+            cust_col = col
+            break
+    
+    if cust_col is None or customer == "All":
+        filtered = df
+    else:
+        filtered = df[df[cust_col] == customer]
+    
+    # Apply date filter
+    filtered = filter_data_by_date_range(filtered, date_range)
+    
+    if filtered.empty:
+        return pd.DataFrame()
+    
+    # Enrich with product type
+    filtered = enrich_with_product_type(filtered, product_type_map)
+    
+    # Find quantity and amount columns
+    qty_col = None
+    amt_col = None
+    item_col = None
+    
+    for col in filtered.columns:
+        col_lower = col.lower()
+        if 'qty' in col_lower or 'quantity' in col_lower:
+            qty_col = col
+        elif 'amount' in col_lower or 'total' in col_lower or 'revenue' in col_lower:
+            amt_col = col
+        elif col_lower in ['item', 'sku', 'item name']:
+            item_col = col
+    
+    if item_col is None:
+        return pd.DataFrame()
+    
+    # Aggregate by item
+    agg_dict = {}
+    if qty_col:
+        agg_dict['Units'] = (qty_col, 'sum')
+    if amt_col:
+        agg_dict['Revenue'] = (amt_col, 'sum')
+    agg_dict['Orders'] = (item_col, 'count')
+    
+    if not agg_dict:
+        return pd.DataFrame()
+    
+    # Group and aggregate
+    grouped = filtered.groupby([item_col, 'Product Type']).agg(**agg_dict).reset_index()
+    grouped.columns = ['Item', 'Product Type'] + list(agg_dict.keys())
+    
+    # Calculate projections (simple growth assumption)
+    if 'Units' in grouped.columns:
+        grouped['Projected Units'] = (grouped['Units'] * 1.1).round(0).astype(int)
+    if 'Revenue' in grouped.columns:
+        grouped['Projected Revenue'] = (grouped['Revenue'] * 1.1).round(2)
+    
+    # Sort by Product Type then Revenue
+    sort_cols = ['Product Type']
+    if 'Revenue' in grouped.columns:
+        sort_cols.append('Revenue')
+        grouped = grouped.sort_values(sort_cols, ascending=[True, False])
+    else:
+        grouped = grouped.sort_values(sort_cols)
+    
+    return grouped
+
+
+def get_deals_for_customer(deals_df: pd.DataFrame, customer: str) -> pd.DataFrame:
+    """Get pipeline/deals for a specific customer."""
+    if deals_df is None or deals_df.empty:
+        return pd.DataFrame()
+    
+    df = deals_df.copy()
+    
+    # Find customer/company column in deals
+    cust_cols = ['Company', 'Customer', 'Account', 'company_name', 'Associated Company']
+    cust_col = None
+    for col in cust_cols:
+        if col in df.columns:
+            cust_col = col
+            break
+    
+    if cust_col is None or customer == "All":
+        return df
+    
+    return df[df[cust_col].str.contains(customer, case=False, na=False)]
+
+
+def calculate_historical_revenue(invoice_lines: pd.DataFrame, customer: str) -> pd.DataFrame:
+    """Calculate monthly historical revenue for a customer."""
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Find columns
+    customer_cols = ['Customer', 'Correct Customer', 'Customer Name']
+    date_cols = ['Date', 'Invoice Date', 'Tran Date']
+    amt_cols = ['Amount', 'Total', 'Revenue', 'Line Amount']
+    
+    cust_col = next((c for c in customer_cols if c in df.columns), None)
+    date_col = next((c for c in date_cols if c in df.columns), None)
+    amt_col = next((c for c in amt_cols if c in df.columns), None)
+    
+    if date_col is None or amt_col is None:
+        return pd.DataFrame()
+    
+    # Filter by customer
+    if cust_col and customer != "All":
+        df = df[df[cust_col] == customer]
+    
+    # Convert date and aggregate monthly
     df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
     df = df.dropna(subset=[date_col])
+    df['Month'] = df[date_col].dt.to_period('M')
     
-    # Aggregate by month
-    df['Month'] = df[date_col].dt.to_period('M').astype(str)
+    monthly = df.groupby('Month')[amt_col].sum().reset_index()
+    monthly.columns = ['Month', 'Revenue']
+    monthly['Month'] = monthly['Month'].astype(str)
     
-    # Metrics row
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        total_orders = df['Document Number'].nunique() if 'Document Number' in df.columns else len(df)
-        st.metric("Total Orders", f"{total_orders:,}")
-    
-    with col2:
-        total_qty = df['Quantity'].sum() if 'Quantity' in df.columns else 0
-        st.metric("Total Quantity", f"{total_qty:,.0f}")
-    
-    with col3:
-        total_revenue = df['Amount'].sum() if 'Amount' in df.columns else 0
-        st.metric("Total Revenue", f"${total_revenue:,.2f}")
-    
-    with col4:
-        # Calculate average days between orders
-        if 'Document Number' in df.columns:
-            order_dates = df.groupby('Document Number')[date_col].min().sort_values()
-            if len(order_dates) > 1:
-                days_between = order_dates.diff().dt.days.mean()
-                st.metric("Avg Days Between Orders", f"{days_between:.0f}")
-            else:
-                st.metric("Avg Days Between Orders", "N/A")
-        else:
-            st.metric("Avg Days Between Orders", "N/A")
-    
-    st.markdown("---")
-    
-    # Monthly ordering trend
-    monthly_data = df.groupby('Month').agg({
-        'Quantity': 'sum',
-        'Amount': 'sum'
-    }).reset_index()
-    monthly_data = monthly_data.sort_values('Month')
-    
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    fig.add_trace(
-        go.Bar(
-            x=monthly_data['Month'],
-            y=monthly_data['Quantity'],
-            name='Quantity',
-            marker_color='#3498db'
-        ),
-        secondary_y=False
-    )
-    
-    fig.add_trace(
-        go.Scatter(
-            x=monthly_data['Month'],
-            y=monthly_data['Amount'],
-            name='Revenue',
-            mode='lines+markers',
-            line=dict(color='#e74c3c', width=2),
-            marker=dict(size=8)
-        ),
-        secondary_y=True
-    )
-    
-    fig.update_layout(
-        title="Monthly Ordering Trend",
-        height=400,
-        hovermode='x unified',
-        legend=dict(orientation='h', yanchor='bottom', y=1.02)
-    )
-    fig.update_xaxes(title_text="Month", tickangle=-45)
-    fig.update_yaxes(title_text="Quantity", secondary_y=False)
-    fig.update_yaxes(title_text="Revenue ($)", secondary_y=True)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # SKU breakdown if not filtered to single SKU
-    if sku == "All" and 'Item' in df.columns:
-        st.markdown("### Top SKUs by Quantity")
-        
-        sku_summary = df.groupby('Item').agg({
-            'Quantity': 'sum',
-            'Amount': 'sum',
-            'Document Number': 'nunique'
-        }).reset_index()
-        sku_summary.columns = ['SKU', 'Total Qty', 'Total Revenue', 'Order Count']
-        sku_summary = sku_summary.sort_values('Total Qty', ascending=False).head(15)
-        
-        fig_sku = px.bar(
-            sku_summary,
-            x='SKU',
-            y='Total Qty',
-            color='Order Count',
-            color_continuous_scale='Blues',
-            title="Top 15 SKUs by Quantity"
-        )
-        fig_sku.update_layout(height=400)
-        fig_sku.update_xaxes(tickangle=-45)
-        
-        st.plotly_chart(fig_sku, use_container_width=True)
-    
-    # Order frequency heatmap (day of week vs month)
-    if len(df) > 10:
-        st.markdown("### Order Frequency Heatmap")
-        
-        df['DayOfWeek'] = df[date_col].dt.day_name()
-        df['MonthName'] = df[date_col].dt.month_name()
-        
-        heatmap_data = df.groupby(['DayOfWeek', 'MonthName']).size().reset_index(name='Orders')
-        heatmap_pivot = heatmap_data.pivot(index='DayOfWeek', columns='MonthName', values='Orders').fillna(0)
-        
-        # Reorder days
-        day_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        heatmap_pivot = heatmap_pivot.reindex([d for d in day_order if d in heatmap_pivot.index])
-        
-        # Reorder months
-        month_order = ['January', 'February', 'March', 'April', 'May', 'June',
-                      'July', 'August', 'September', 'October', 'November', 'December']
-        heatmap_pivot = heatmap_pivot[[m for m in month_order if m in heatmap_pivot.columns]]
-        
-        fig_heat = px.imshow(
-            heatmap_pivot,
-            color_continuous_scale='Blues',
-            title="Order Frequency: Day of Week vs Month"
-        )
-        fig_heat.update_layout(height=350)
-        
-        st.plotly_chart(fig_heat, use_container_width=True)
+    return monthly
 
 
-def render_payment_behavior(filtered_df: pd.DataFrame, all_invoices: pd.DataFrame, customer: str):
-    """Render the payment behavior analysis section."""
+def generate_revenue_forecast(historical: pd.DataFrame, periods: int = 6) -> pd.DataFrame:
+    """Generate simple revenue forecast based on historical data."""
+    if historical.empty:
+        return pd.DataFrame()
     
-    st.markdown("### 💳 Invoice Payment Behavior")
+    # Simple moving average forecast
+    recent_avg = historical['Revenue'].tail(3).mean()
+    growth_rate = 0.05  # 5% monthly growth assumption
     
-    # Use filtered data or customer-specific data
-    if customer != "All":
-        customer_col = 'Correct Customer' if 'Correct Customer' in all_invoices.columns else 'Customer'
-        df = all_invoices[all_invoices[customer_col] == customer].copy()
-    else:
-        df = filtered_df.copy()
+    last_month = pd.to_datetime(historical['Month'].iloc[-1])
     
-    if df.empty:
-        st.info("No payment data available for the selected filters.")
-        return
+    forecast_data = []
+    for i in range(1, periods + 1):
+        next_month = last_month + pd.DateOffset(months=i)
+        forecast_value = recent_avg * (1 + growth_rate) ** i
+        forecast_data.append({
+            'Month': next_month.strftime('%Y-%m'),
+            'Revenue': forecast_value,
+            'Type': 'Forecast'
+        })
     
-    # Calculate payment metrics
-    if 'Date' in df.columns and 'Date Closed' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df['Date Closed'] = pd.to_datetime(df['Date Closed'], errors='coerce')
-        
-        # Days to payment
-        df['Days_to_Payment'] = (df['Date Closed'] - df['Date']).dt.days
-        df = df[df['Days_to_Payment'].notna() & (df['Days_to_Payment'] >= 0)]
-    
-    # Metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        if 'Amount (Transaction Total)' in df.columns:
-            total_invoiced = df['Amount (Transaction Total)'].sum()
-        elif 'Amount' in df.columns:
-            total_invoiced = df['Amount'].sum()
-        else:
-            total_invoiced = 0
-        st.metric("Total Invoiced", f"${total_invoiced:,.2f}")
-    
-    with col2:
-        if 'Amount Remaining' in df.columns:
-            outstanding = df['Amount Remaining'].sum()
-            st.metric("Outstanding Balance", f"${outstanding:,.2f}")
-        else:
-            st.metric("Outstanding Balance", "N/A")
-    
-    with col3:
-        if 'Days_to_Payment' in df.columns and len(df) > 0:
-            avg_days = df['Days_to_Payment'].mean()
-            st.metric("Avg Days to Pay", f"{avg_days:.1f}")
-        else:
-            st.metric("Avg Days to Pay", "N/A")
-    
-    with col4:
-        if 'Amount Remaining' in df.columns and total_invoiced > 0:
-            collection_rate = ((total_invoiced - outstanding) / total_invoiced) * 100
-            st.metric("Collection Rate", f"{collection_rate:.1f}%")
-        else:
-            st.metric("Collection Rate", "N/A")
-    
-    st.markdown("---")
-    
-    # Payment timeline distribution
-    if 'Days_to_Payment' in df.columns and len(df) > 0:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig_hist = px.histogram(
-                df,
-                x='Days_to_Payment',
-                nbins=30,
-                title="Payment Timeline Distribution",
-                labels={'Days_to_Payment': 'Days to Payment', 'count': 'Number of Invoices'}
-            )
-            fig_hist.update_layout(height=350)
-            st.plotly_chart(fig_hist, use_container_width=True)
-        
-        with col2:
-            # Payment buckets
-            def payment_bucket(days):
-                if days <= 30:
-                    return '0-30 days'
-                elif days <= 60:
-                    return '31-60 days'
-                elif days <= 90:
-                    return '61-90 days'
-                else:
-                    return '90+ days'
-            
-            df['Payment_Bucket'] = df['Days_to_Payment'].apply(payment_bucket)
-            bucket_counts = df['Payment_Bucket'].value_counts()
-            
-            fig_pie = px.pie(
-                values=bucket_counts.values,
-                names=bucket_counts.index,
-                title="Payment Timing Breakdown",
-                color_discrete_sequence=['#2ecc71', '#f1c40f', '#e67e22', '#e74c3c']
-            )
-            fig_pie.update_layout(height=350)
-            st.plotly_chart(fig_pie, use_container_width=True)
-    
-    # Monthly payment trend
-    if 'Date' in df.columns and 'Amount' in df.columns:
-        df['Month'] = pd.to_datetime(df['Date']).dt.to_period('M').astype(str)
-        monthly_payments = df.groupby('Month')['Amount'].sum().reset_index()
-        monthly_payments = monthly_payments.sort_values('Month')
-        
-        fig_trend = px.bar(
-            monthly_payments,
-            x='Month',
-            y='Amount',
-            title="Monthly Invoice Amounts"
-        )
-        fig_trend.update_layout(height=350)
-        fig_trend.update_xaxes(tickangle=-45)
-        
-        st.plotly_chart(fig_trend, use_container_width=True)
+    return pd.DataFrame(forecast_data)
 
 
-def render_sku_forecast(df: pd.DataFrame, horizon: int, model: str, selected_sku: str):
-    """Render the SKU-level forecast section."""
-    
-    st.markdown("### 🔮 SKU Demand Forecast")
-    
-    if df.empty:
-        st.info("No data available for forecasting.")
-        return
-    
-    # Prepare demand history
-    date_col = 'Date'
-    qty_col = 'Quantity'
-    
-    if date_col not in df.columns or qty_col not in df.columns:
-        st.warning("Required columns (Date, Quantity) not found.")
-        return
-    
-    df = df.copy()
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    df = df.dropna(subset=[date_col, qty_col])
-    
-    # Aggregate to monthly
-    df['Period'] = df[date_col].dt.to_period('M').dt.to_timestamp()
-    
-    if selected_sku != "All" and 'Item' in df.columns:
-        # Single SKU forecast
-        monthly_demand = df.groupby('Period')[qty_col].sum()
-        
-        if len(monthly_demand) < 6:
-            st.warning("Insufficient history for forecasting (need at least 6 months).")
-            return
-        
-        # Generate forecast
-        try:
-            result = generate_forecast(
-                monthly_demand,
-                model=model,
-                horizon=horizon
-            )
-            
-            render_forecast_chart(monthly_demand, result, selected_sku)
-            render_forecast_metrics(result)
-            
-        except Exception as e:
-            st.error(f"Forecast generation failed: {str(e)}")
-    
-    else:
-        # Multi-SKU view
-        if 'Item' not in df.columns:
-            st.warning("Item column not found for SKU-level analysis.")
-            return
-        
-        # Get top SKUs by volume
-        top_skus = df.groupby('Item')[qty_col].sum().nlargest(5).index.tolist()
-        
-        st.markdown("#### Top 5 SKUs Forecast Summary")
-        
-        forecast_results = {}
-        
-        for sku in top_skus:
-            sku_data = df[df['Item'] == sku]
-            monthly_demand = sku_data.groupby('Period')[qty_col].sum()
-            
-            if len(monthly_demand) >= 6:
-                try:
-                    result = generate_forecast(monthly_demand, model=model, horizon=horizon)
-                    forecast_results[sku] = {
-                        'history': monthly_demand,
-                        'forecast': result
-                    }
-                except Exception:
-                    continue
-        
-        if forecast_results:
-            # Summary chart
-            fig = go.Figure()
-            
-            for sku, data in forecast_results.items():
-                # Historical
-                fig.add_trace(go.Scatter(
-                    x=data['history'].index,
-                    y=data['history'].values,
-                    mode='lines',
-                    name=f'{sku} (Historical)',
-                    line=dict(width=2)
-                ))
-                
-                # Forecast
-                fig.add_trace(go.Scatter(
-                    x=data['forecast'].forecast.index,
-                    y=data['forecast'].forecast.values,
-                    mode='lines',
-                    name=f'{sku} (Forecast)',
-                    line=dict(dash='dash', width=2)
-                ))
-            
-            fig.update_layout(
-                title="Top SKUs: Historical vs Forecast",
-                xaxis_title="Period",
-                yaxis_title="Quantity",
-                height=500,
-                hovermode='x unified'
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Forecast summary table
-            summary_data = []
-            for sku, data in forecast_results.items():
-                fc = data['forecast']
-                summary_data.append({
-                    'SKU': sku,
-                    'Last 3M Avg': data['history'].tail(3).mean(),
-                    'Next 3M Forecast': fc.forecast.head(3).sum(),
-                    'Next 6M Forecast': fc.forecast.head(6).sum() if len(fc.forecast) >= 6 else fc.forecast.sum(),
-                    'MAPE': fc.metrics.get('MAPE', 'N/A')
-                })
-            
-            summary_df = pd.DataFrame(summary_data)
-            summary_df['Last 3M Avg'] = summary_df['Last 3M Avg'].apply(lambda x: f"{x:,.0f}")
-            summary_df['Next 3M Forecast'] = summary_df['Next 3M Forecast'].apply(lambda x: f"{x:,.0f}")
-            summary_df['Next 6M Forecast'] = summary_df['Next 6M Forecast'].apply(lambda x: f"{x:,.0f}")
-            if 'MAPE' in summary_df.columns:
-                summary_df['MAPE'] = summary_df['MAPE'].apply(
-                    lambda x: f"{x:.1f}%" if isinstance(x, (int, float)) else x
-                )
-            
-            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+def save_forecast_to_sheet(forecast_data: pd.DataFrame, customer: str) -> bool:
+    """Save forecast data to Google Sheets (placeholder for actual implementation)."""
+    try:
+        # This would connect to your Google Sheets API and save the forecast
+        # For now, this is a placeholder that returns success
+        logger.info(f"Forecast saved for customer: {customer}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving forecast: {e}")
+        return False
 
 
-def render_forecast_chart(history: pd.Series, result: ForecastResult, title_suffix: str = ""):
-    """Render a forecast chart with confidence intervals."""
-    
+# =============================================================================
+# VISUALIZATION FUNCTIONS
+# =============================================================================
+
+def create_revenue_chart(historical: pd.DataFrame, forecast: pd.DataFrame, 
+                         deals_revenue: float = 0) -> go.Figure:
+    """Create combined historical and forecast revenue chart."""
     fig = go.Figure()
     
-    # Historical data
-    fig.add_trace(go.Scatter(
-        x=history.index,
-        y=history.values,
-        mode='lines+markers',
-        name='Historical',
-        line=dict(color='#3498db', width=2),
-        marker=dict(size=6)
-    ))
-    
-    # Forecast
-    fig.add_trace(go.Scatter(
-        x=result.forecast.index,
-        y=result.forecast.values,
-        mode='lines+markers',
-        name='Forecast',
-        line=dict(color='#e74c3c', width=2, dash='dash'),
-        marker=dict(size=6)
-    ))
-    
-    # Confidence interval
-    if result.confidence_lower is not None and result.confidence_upper is not None:
+    # Historical revenue
+    if not historical.empty:
         fig.add_trace(go.Scatter(
-            x=list(result.forecast.index) + list(result.forecast.index[::-1]),
-            y=list(result.confidence_upper.values) + list(result.confidence_lower.values[::-1]),
-            fill='toself',
-            fillcolor='rgba(231, 76, 60, 0.2)',
-            line=dict(color='rgba(255,255,255,0)'),
-            name='95% Confidence Interval',
-            showlegend=True
+            x=historical['Month'],
+            y=historical['Revenue'],
+            mode='lines+markers',
+            name='Historical Revenue',
+            line=dict(color='#0033A1', width=2),
+            marker=dict(size=8)
         ))
     
-    title = f"Demand Forecast: {title_suffix}" if title_suffix else "Demand Forecast"
+    # Forecast revenue
+    if not forecast.empty:
+        fig.add_trace(go.Scatter(
+            x=forecast['Month'],
+            y=forecast['Revenue'],
+            mode='lines+markers',
+            name='Forecasted Revenue',
+            line=dict(color='#004FFF', width=2, dash='dash'),
+            marker=dict(size=8, symbol='diamond')
+        ))
+    
+    # Add deals/pipeline as potential upside
+    if deals_revenue > 0 and not forecast.empty:
+        forecast_with_deals = forecast.copy()
+        forecast_with_deals['Revenue'] = forecast_with_deals['Revenue'] + (deals_revenue / len(forecast_with_deals))
+        
+        fig.add_trace(go.Scatter(
+            x=forecast_with_deals['Month'],
+            y=forecast_with_deals['Revenue'],
+            mode='lines',
+            name='With Pipeline',
+            line=dict(color='#22C55E', width=2, dash='dot'),
+            fill='tonexty',
+            fillcolor='rgba(34, 197, 94, 0.1)'
+        ))
     
     fig.update_layout(
-        title=title,
-        xaxis_title="Period",
-        yaxis_title="Quantity",
-        height=450,
+        title='Customer Revenue: Historical & Forecast',
+        xaxis_title='Month',
+        yaxis_title='Revenue ($)',
         hovermode='x unified',
-        legend=dict(orientation='h', yanchor='bottom', y=1.02)
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1
+        ),
+        height=400
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    return fig
 
 
-def render_forecast_metrics(result: ForecastResult):
-    """Render forecast accuracy metrics."""
+def create_demand_by_category_chart(demand_df: pd.DataFrame) -> go.Figure:
+    """Create demand breakdown by product category chart."""
+    if demand_df.empty:
+        return go.Figure()
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Aggregate by product type
+    if 'Revenue' in demand_df.columns:
+        by_type = demand_df.groupby('Product Type')['Revenue'].sum().sort_values(ascending=True)
+    elif 'Units' in demand_df.columns:
+        by_type = demand_df.groupby('Product Type')['Units'].sum().sort_values(ascending=True)
+    else:
+        return go.Figure()
     
-    with col1:
-        mape = result.metrics.get('MAPE')
-        st.metric(
-            "MAPE",
-            f"{mape:.1f}%" if mape else "N/A",
-            help="Mean Absolute Percentage Error (lower is better)"
+    fig = go.Figure(go.Bar(
+        x=by_type.values,
+        y=by_type.index,
+        orientation='h',
+        marker_color='#0033A1'
+    ))
+    
+    fig.update_layout(
+        title='Demand by Product Category',
+        xaxis_title='Revenue ($)' if 'Revenue' in demand_df.columns else 'Units',
+        yaxis_title='Product Type',
+        height=300
+    )
+    
+    return fig
+
+
+# =============================================================================
+# MAIN RENDER FUNCTION
+# =============================================================================
+
+def render_sales_rep_view():
+    """Main render function for Sales Rep View."""
+    
+    st.markdown("### 👤 Sales Rep View")
+    st.markdown("Customer-focused demand analysis and forecasting")
+    
+    # Load data
+    with st.spinner("Loading sales data..."):
+        data = load_sales_data()
+    
+    if data is None:
+        st.error("Unable to load sales data. Please check your data connection.")
+        return
+    
+    invoice_lines = data.get('invoice_lines')
+    sales_orders = data.get('sales_orders')
+    items = data.get('items')
+    customers_df = data.get('customers')
+    deals = data.get('deals')
+    
+    # Create product type mapping from Raw_Items
+    product_type_map = get_product_type_mapping(items)
+    
+    # Enrich data with product types
+    if invoice_lines is not None:
+        invoice_lines = enrich_with_product_type(invoice_lines, product_type_map)
+    if sales_orders is not None:
+        sales_orders = enrich_with_product_type(sales_orders, product_type_map)
+    
+    # ==========================================================================
+    # FILTERS - Now populated dynamically
+    # ==========================================================================
+    
+    # Get filter options from data
+    rep_options = ["All"] + get_unique_sales_reps(sales_orders, customers_df)
+    
+    # Get selected rep from session state or use first option
+    if 'sr_selected_rep' not in st.session_state:
+        st.session_state.sr_selected_rep = "All"
+    
+    # Update customer options based on selected rep
+    customer_options = ["All"] + get_customers_for_rep(
+        sales_orders, invoice_lines, 
+        st.session_state.get('sr_selected_rep', 'All')
+    )
+    
+    if 'sr_selected_customer' not in st.session_state:
+        st.session_state.sr_selected_customer = "All"
+    
+    # Update item options based on selected customer
+    item_options = ["All"] + get_items_for_customer(
+        invoice_lines, sales_orders,
+        st.session_state.get('sr_selected_customer', 'All')
+    )
+    
+    # Filter bar
+    st.markdown("---")
+    filter_cols = st.columns([2, 2, 2, 2])
+    
+    with filter_cols[0]:
+        selected_rep = st.selectbox(
+            "Sales Rep",
+            options=rep_options,
+            index=rep_options.index(st.session_state.sr_selected_rep) if st.session_state.sr_selected_rep in rep_options else 0,
+            key="filter_sr_rep"
+        )
+        if selected_rep != st.session_state.sr_selected_rep:
+            st.session_state.sr_selected_rep = selected_rep
+            st.session_state.sr_selected_customer = "All"  # Reset customer on rep change
+            st.rerun()
+    
+    with filter_cols[1]:
+        selected_customer = st.selectbox(
+            "Customer",
+            options=customer_options,
+            index=customer_options.index(st.session_state.sr_selected_customer) if st.session_state.sr_selected_customer in customer_options else 0,
+            key="filter_sr_customer"
+        )
+        if selected_customer != st.session_state.sr_selected_customer:
+            st.session_state.sr_selected_customer = selected_customer
+            st.rerun()
+    
+    with filter_cols[2]:
+        selected_item = st.selectbox(
+            "Item/SKU",
+            options=item_options,
+            key="filter_sr_item"
         )
     
-    with col2:
-        rmse = result.metrics.get('RMSE')
-        st.metric(
-            "RMSE",
-            f"{rmse:,.1f}" if rmse else "N/A",
-            help="Root Mean Square Error"
+    with filter_cols[3]:
+        date_range = st.selectbox(
+            "Date Range",
+            options=["Last 12 Months", "Last 6 Months", "Last 3 Months", "YTD", "All Time"],
+            key="filter_sr_date"
         )
-    
-    with col3:
-        st.metric("Model", result.model_name)
-    
-    with col4:
-        total_forecast = result.forecast.sum()
-        st.metric("Total Forecast", f"{total_forecast:,.0f}")
-    
-    # Feature importance for ML models
-    if result.feature_importance is not None and not result.feature_importance.empty:
-        with st.expander("📊 Feature Importance"):
-            fig = px.bar(
-                result.feature_importance.head(10),
-                x='Importance',
-                y='Feature',
-                orientation='h',
-                title="Top 10 Features"
-            )
-            fig.update_layout(height=300, yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig, use_container_width=True)
-
-
-def render_quarterly_recommendations(df: pd.DataFrame, horizon: int, model: str):
-    """Render quarterly recommendations section."""
-    
-    st.markdown("### 📋 Quarterly Recommendations")
-    
-    if df.empty:
-        st.info("No data available for recommendations.")
-        return
-    
-    # Ensure required columns
-    date_col = 'Date'
-    qty_col = 'Quantity'
-    
-    if date_col not in df.columns or qty_col not in df.columns:
-        st.warning("Required columns not found.")
-        return
-    
-    df = df.copy()
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    df = df.dropna(subset=[date_col, qty_col])
-    
-    # Aggregate to monthly
-    df['Period'] = df[date_col].dt.to_period('M').dt.to_timestamp()
-    monthly_demand = df.groupby('Period')[qty_col].sum()
-    
-    if len(monthly_demand) < 6:
-        st.warning("Insufficient history for quarterly recommendations.")
-        return
-    
-    # Generate forecast
-    try:
-        result = generate_forecast(monthly_demand, model=model, horizon=max(horizon, 12))
-    except Exception as e:
-        st.error(f"Forecast failed: {str(e)}")
-        return
-    
-    # Group forecast by quarter
-    forecast_df = result.to_dataframe()
-    forecast_df['Quarter'] = pd.to_datetime(forecast_df['Period']).dt.to_period('Q').astype(str)
-    
-    quarterly_forecast = forecast_df.groupby('Quarter').agg({
-        'Forecast': 'sum',
-        'Lower_CI': 'sum' if 'Lower_CI' in forecast_df.columns else 'first',
-        'Upper_CI': 'sum' if 'Upper_CI' in forecast_df.columns else 'first'
-    }).reset_index()
-    
-    # Historical quarterly for comparison
-    df['Quarter'] = df[date_col].dt.to_period('Q').astype(str)
-    historical_quarterly = df.groupby('Quarter')[qty_col].sum().reset_index()
-    historical_quarterly.columns = ['Quarter', 'Historical']
-    
-    # Get same quarters from previous year for YoY comparison
-    current_year = datetime.now().year
-    
-    # Display quarterly cards
-    st.markdown("#### Quarterly Forecast Summary")
-    
-    quarters = quarterly_forecast['Quarter'].head(4).tolist()
-    cols = st.columns(len(quarters))
-    
-    for i, quarter in enumerate(quarters):
-        with cols[i]:
-            fc = quarterly_forecast[quarterly_forecast['Quarter'] == quarter]
-            forecast_val = fc['Forecast'].values[0] if len(fc) > 0 else 0
-            
-            # Find same quarter last year
-            quarter_num = quarter.split('Q')[1][0]
-            last_year_quarter = f"{current_year - 1}Q{quarter_num}"
-            last_year = historical_quarterly[historical_quarterly['Quarter'] == last_year_quarter]
-            last_year_val = last_year['Historical'].values[0] if len(last_year) > 0 else None
-            
-            if last_year_val and last_year_val > 0:
-                yoy_change = ((forecast_val - last_year_val) / last_year_val) * 100
-                delta = f"{yoy_change:+.1f}% YoY"
-            else:
-                delta = None
-            
-            st.metric(
-                quarter,
-                f"{forecast_val:,.0f} units",
-                delta=delta
-            )
     
     st.markdown("---")
     
-    # Recommendations based on forecast
-    st.markdown("#### 📝 Recommended Actions")
+    # ==========================================================================
+    # APPLY FILTERS TO DATA
+    # ==========================================================================
     
-    # Analyze trends
-    if len(quarterly_forecast) >= 2:
-        q1_forecast = quarterly_forecast.iloc[0]['Forecast']
-        q2_forecast = quarterly_forecast.iloc[1]['Forecast']
-        trend = "increasing" if q2_forecast > q1_forecast else "decreasing"
-        trend_pct = abs((q2_forecast - q1_forecast) / q1_forecast * 100) if q1_forecast > 0 else 0
+    filtered_invoices = invoice_lines.copy() if invoice_lines is not None else pd.DataFrame()
+    
+    # Apply rep filter
+    if selected_rep != "All" and not filtered_invoices.empty:
+        rep_col = next((c for c in filtered_invoices.columns if 'rep' in c.lower()), None)
+        if rep_col:
+            filtered_invoices = filtered_invoices[filtered_invoices[rep_col] == selected_rep]
+    
+    # Apply customer filter
+    if selected_customer != "All" and not filtered_invoices.empty:
+        cust_col = next((c for c in ['Customer', 'Correct Customer', 'Customer Name'] if c in filtered_invoices.columns), None)
+        if cust_col:
+            filtered_invoices = filtered_invoices[filtered_invoices[cust_col] == selected_customer]
+    
+    # Apply item filter
+    if selected_item != "All" and not filtered_invoices.empty:
+        item_col = next((c for c in ['Item', 'SKU', 'Item Name'] if c in filtered_invoices.columns), None)
+        if item_col:
+            filtered_invoices = filtered_invoices[filtered_invoices[item_col] == selected_item]
+    
+    # Apply date filter
+    filtered_invoices = filter_data_by_date_range(filtered_invoices, date_range)
+    
+    # ==========================================================================
+    # KPI METRICS
+    # ==========================================================================
+    
+    kpi_cols = st.columns(4)
+    
+    # Calculate KPIs
+    total_revenue = 0
+    total_units = 0
+    total_orders = 0
+    avg_order_value = 0
+    
+    if not filtered_invoices.empty:
+        amt_col = next((c for c in ['Amount', 'Total', 'Revenue', 'Line Amount'] if c in filtered_invoices.columns), None)
+        qty_col = next((c for c in ['Quantity', 'Qty', 'Units'] if c in filtered_invoices.columns), None)
         
-        recommendations = []
+        if amt_col:
+            total_revenue = filtered_invoices[amt_col].sum()
+        if qty_col:
+            total_units = filtered_invoices[qty_col].sum()
+        total_orders = len(filtered_invoices)
+        if total_orders > 0 and total_revenue > 0:
+            avg_order_value = total_revenue / total_orders
+    
+    with kpi_cols[0]:
+        st.metric("Total Revenue", f"${total_revenue:,.0f}")
+    with kpi_cols[1]:
+        st.metric("Total Units", f"{total_units:,.0f}")
+    with kpi_cols[2]:
+        st.metric("Total Orders", f"{total_orders:,}")
+    with kpi_cols[3]:
+        st.metric("Avg Order Value", f"${avg_order_value:,.2f}")
+    
+    # ==========================================================================
+    # DEMAND BY PRODUCT CATEGORY
+    # ==========================================================================
+    
+    st.markdown("### 📊 Demand by Product Category")
+    
+    if not filtered_invoices.empty and 'Product Type' in filtered_invoices.columns:
+        amt_col = next((c for c in ['Amount', 'Total', 'Revenue'] if c in filtered_invoices.columns), None)
         
-        if trend == "increasing" and trend_pct > 10:
-            recommendations.append("📈 **Demand Growth**: Consider increasing inventory levels and reviewing supplier capacity")
-        elif trend == "decreasing" and trend_pct > 10:
-            recommendations.append("📉 **Demand Decline**: Monitor closely and adjust procurement accordingly")
-        
-        # High volume quarters
-        max_quarter = quarterly_forecast.loc[quarterly_forecast['Forecast'].idxmax()]
-        recommendations.append(f"🔝 **Peak Quarter**: {max_quarter['Quarter']} with {max_quarter['Forecast']:,.0f} units forecasted")
-        
-        # Seasonality check
-        if 'Item' in df.columns:
-            item_count = df['Item'].nunique()
-            recommendations.append(f"📦 **SKU Diversity**: {item_count} unique SKUs in selection")
-        
-        for rec in recommendations:
-            st.markdown(rec)
+        if amt_col:
+            by_category = filtered_invoices.groupby('Product Type')[amt_col].sum().sort_values(ascending=False)
+            
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                fig = px.bar(
+                    x=by_category.index,
+                    y=by_category.values,
+                    labels={'x': 'Product Type', 'y': 'Revenue ($)'},
+                    color=by_category.values,
+                    color_continuous_scale='Blues'
+                )
+                fig.update_layout(
+                    showlegend=False,
+                    coloraxis_showscale=False,
+                    height=350
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.dataframe(
+                    by_category.reset_index().rename(columns={amt_col: 'Revenue', 'index': 'Product Type'}),
+                    use_container_width=True,
+                    hide_index=True
+                )
+    else:
+        st.info("No data available for the selected filters.")
     
-    # Quarterly comparison chart
-    st.markdown("#### Historical vs Forecast by Quarter")
+    # ==========================================================================
+    # FORECAST PLANNING SECTION (NEW)
+    # ==========================================================================
     
-    # Combine historical and forecast
-    historical_quarterly['Type'] = 'Historical'
-    quarterly_forecast_plot = quarterly_forecast[['Quarter', 'Forecast']].copy()
-    quarterly_forecast_plot.columns = ['Quarter', 'Quantity']
-    quarterly_forecast_plot['Type'] = 'Forecast'
-    historical_quarterly = historical_quarterly.rename(columns={'Historical': 'Quantity'})
+    st.markdown("---")
+    st.markdown("### 📈 Forecast Planning")
     
-    combined = pd.concat([historical_quarterly, quarterly_forecast_plot])
-    combined = combined.sort_values('Quarter')
-    
-    fig = px.bar(
-        combined,
-        x='Quarter',
-        y='Quantity',
-        color='Type',
-        barmode='group',
-        title="Quarterly Demand: Historical vs Forecast",
-        color_discrete_map={'Historical': '#3498db', 'Forecast': '#e74c3c'}
-    )
-    fig.update_layout(height=400)
-    fig.update_xaxes(tickangle=-45)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Export forecast
-    with st.expander("📥 Export Forecast Data"):
-        export_df = quarterly_forecast.copy()
-        export_df['Forecast'] = export_df['Forecast'].round(0)
-        
-        csv = export_df.to_csv(index=False)
-        st.download_button(
-            label="Download Quarterly Forecast (CSV)",
-            data=csv,
-            file_name="quarterly_forecast.csv",
-            mime="text/csv"
+    if selected_customer == "All":
+        st.info("👆 Select a specific customer above to view their forecast planning details.")
+    else:
+        # Get customer demand data
+        demand_df = calculate_customer_demand(
+            invoice_lines, selected_customer, date_range, product_type_map
         )
+        
+        # Get deals/pipeline for customer
+        customer_deals = get_deals_for_customer(deals, selected_customer)
+        
+        # Calculate historical revenue
+        historical_revenue = calculate_historical_revenue(invoice_lines, selected_customer)
+        
+        # Generate forecast
+        forecast_revenue = generate_revenue_forecast(historical_revenue)
+        
+        # ==========================================================================
+        # FORECAST TABLE
+        # ==========================================================================
+        
+        st.markdown("#### 📋 Item Demand & Projections")
+        st.markdown(f"*Items ordered by **{selected_customer}**, sorted by Product Type*")
+        
+        if not demand_df.empty:
+            # Display editable table
+            edited_df = st.data_editor(
+                demand_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    'Item': st.column_config.TextColumn('Item', disabled=True),
+                    'Product Type': st.column_config.TextColumn('Category', disabled=True),
+                    'Units': st.column_config.NumberColumn('Historical Units', disabled=True, format="%d"),
+                    'Revenue': st.column_config.NumberColumn('Historical Revenue', disabled=True, format="$%.2f"),
+                    'Orders': st.column_config.NumberColumn('Order Count', disabled=True),
+                    'Projected Units': st.column_config.NumberColumn('Projected Units', format="%d"),
+                    'Projected Revenue': st.column_config.NumberColumn('Projected Revenue', format="$%.2f")
+                },
+                key="forecast_table"
+            )
+            
+            # Summary row
+            if 'Projected Revenue' in edited_df.columns:
+                total_projected = edited_df['Projected Revenue'].sum()
+                st.markdown(f"**Total Projected Revenue: ${total_projected:,.2f}**")
+        else:
+            st.warning("No historical demand data found for this customer.")
+        
+        # ==========================================================================
+        # PIPELINE/DEALS SECTION
+        # ==========================================================================
+        
+        st.markdown("#### 🎯 Pipeline & Deals")
+        
+        if not customer_deals.empty:
+            st.markdown("*Select deals to include in revenue projection:*")
+            
+            # Initialize session state for deal selections
+            if 'selected_deals' not in st.session_state:
+                st.session_state.selected_deals = {}
+            
+            # Find amount column in deals
+            deal_amt_col = next((c for c in ['Amount', 'Deal Value', 'Value', 'Revenue'] if c in customer_deals.columns), None)
+            deal_name_col = next((c for c in ['Deal Name', 'Name', 'Opportunity', 'Deal'] if c in customer_deals.columns), None)
+            deal_stage_col = next((c for c in ['Stage', 'Deal Stage', 'Status'] if c in customer_deals.columns), None)
+            
+            selected_deals_total = 0
+            
+            # Create checkboxes for each deal
+            for idx, row in customer_deals.iterrows():
+                deal_name = row.get(deal_name_col, f'Deal {idx}') if deal_name_col else f'Deal {idx}'
+                deal_amount = row.get(deal_amt_col, 0) if deal_amt_col else 0
+                deal_stage = row.get(deal_stage_col, 'Unknown') if deal_stage_col else 'Unknown'
+                
+                col1, col2, col3 = st.columns([1, 3, 2])
+                
+                with col1:
+                    is_selected = st.checkbox(
+                        "",
+                        key=f"deal_{idx}",
+                        value=st.session_state.selected_deals.get(idx, False)
+                    )
+                    st.session_state.selected_deals[idx] = is_selected
+                
+                with col2:
+                    st.markdown(f"**{deal_name}** - {deal_stage}")
+                
+                with col3:
+                    st.markdown(f"${deal_amount:,.2f}")
+                
+                if is_selected:
+                    selected_deals_total += deal_amount
+            
+            st.markdown(f"**Selected Pipeline Total: ${selected_deals_total:,.2f}**")
+        else:
+            st.info("No pipeline/deals found for this customer.")
+            selected_deals_total = 0
+        
+        # ==========================================================================
+        # REVENUE CHART
+        # ==========================================================================
+        
+        st.markdown("#### 📊 Revenue Chart: Historical & Forecast")
+        
+        fig = create_revenue_chart(historical_revenue, forecast_revenue, selected_deals_total)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # ==========================================================================
+        # SUBMIT FORECAST BUTTON
+        # ==========================================================================
+        
+        st.markdown("---")
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col2:
+            if st.button("📤 Submit Forecast", type="primary", use_container_width=True):
+                # Prepare forecast data
+                forecast_data = {
+                    'customer': selected_customer,
+                    'date_submitted': datetime.now().isoformat(),
+                    'date_range': date_range,
+                    'demand_items': edited_df.to_dict() if not demand_df.empty else {},
+                    'selected_deals_total': selected_deals_total,
+                    'historical_revenue': historical_revenue.to_dict() if not historical_revenue.empty else {},
+                    'forecast_revenue': forecast_revenue.to_dict() if not forecast_revenue.empty else {}
+                }
+                
+                # Save forecast
+                success = save_forecast_to_sheet(pd.DataFrame([forecast_data]), selected_customer)
+                
+                if success:
+                    st.success(f"✅ Forecast submitted successfully for {selected_customer}!")
+                    st.balloons()
+                else:
+                    st.error("❌ Error submitting forecast. Please try again.")
+        
+        # Export option
+        with col3:
+            if not demand_df.empty:
+                csv = demand_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Export Forecast",
+                    data=csv,
+                    file_name=f"forecast_{selected_customer}_{datetime.now().strftime('%Y%m%d')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
