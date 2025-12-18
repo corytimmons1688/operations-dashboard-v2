@@ -76,7 +76,7 @@ def inject_custom_css():
     """Inject custom CSS for Calyx brand styling."""
     st.markdown(f"""
     <style>
-        @import url('calyx-sop-dashboard-v2/calyx_logo.png');
+        @import url('https://github.com/corytimmons1688/operations-dashboard-v2/blob/a70c27ee8fd496011b353a46dc0c89692ca3ff33/calyx-sop-dashboard-v2/calyx_logo.png');
         
         :root {{
             --calyx-blue: {CALYX_COLORS['calyx_blue']};
