@@ -362,12 +362,17 @@ def render_shipment_list(filtered: pd.DataFrame):
     
     display_df = filtered[display_cols].copy()
     
+    # Convert all object columns to strings to avoid Arrow serialization errors
+    for col in display_df.columns:
+        if display_df[col].dtype == 'object':
+            display_df[col] = display_df[col].astype(str)
+    
     if 'Expected_Delivery' in display_df.columns:
-        display_df['Expected_Delivery'] = display_df['Expected_Delivery'].dt.strftime('%Y-%m-%d')
+        display_df['Expected_Delivery'] = pd.to_datetime(filtered['Expected_Delivery'], errors='coerce').dt.strftime('%Y-%m-%d')
     if 'Is_Delayed' in display_df.columns:
-        display_df['Is_Delayed'] = display_df['Is_Delayed'].apply(lambda x: '⚠️ Yes' if x else '✅ No')
+        display_df['Is_Delayed'] = filtered['Is_Delayed'].apply(lambda x: '⚠️ Yes' if x else '✅ No')
     if 'Status_Category' in display_df.columns:
-        display_df['Status_Category'] = display_df['Status_Category'].apply(
+        display_df['Status_Category'] = filtered['Status_Category'].apply(
             lambda x: f"{STATUS_ICONS.get(x, '')} {x}"
         )
     
