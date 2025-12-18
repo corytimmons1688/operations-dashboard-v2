@@ -410,6 +410,10 @@ def create_pipeline_forecast(
     if deals is None or deals.empty:
         return None
     
+    # Check if required columns exist
+    if 'Close Date' not in deals.columns or 'Amount' not in deals.columns:
+        return None
+    
     df = deals.copy()
     df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
     df = df.dropna(subset=['Close Date', 'Amount'])
