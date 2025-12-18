@@ -1,585 +1,565 @@
 """
 S&OP Data Loader Module
-Handles all Google Sheets data ingestion for the S&OP Dashboard
+Handles loading and processing data from Google Sheets for S&OP Dashboard
 
-Data Sources:
-- _NS_Invoices_Data: Invoice header data
-- Invoice Line Item: Invoice line details
-- Sales Order Line Item: SO line details
-- _NS_SalesOrders_Data: Sales order header data
-- _NS_Customer_List: Customer master data
-- Raw_Items: Item/SKU master data
-- Raw_Vendors: Vendor master data
-- Raw_Inventory: Current inventory levels
-- SO & invoice Data merged: Combined SO/Invoice data
-- Deals: HubSpot pipeline data
+Features:
+- Loads Invoice Lines, Sales Orders, Items, Customers, Deals
+- Properly maps 'Calyx || Product Type' column from Raw_Items
+- Handles duplicate column names
+- Provides data preparation functions
 
 Author: Xander @ Calyx Containers
+Version: 3.1.0
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Tuple
+import logging
 import gspread
 from google.oauth2.service_account import Credentials
-from typing import Optional, Dict, Any
-import logging
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Google Sheets API Scopes
+# =============================================================================
+# GOOGLE SHEETS CONNECTION
+# =============================================================================
+
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
     'https://www.googleapis.com/auth/drive.readonly'
 ]
 
-# Sheet Configuration
-SHEET_CONFIG = {
-    'invoices': '_NS_Invoices_Data',
-    'invoice_lines': 'Invoice Line Item',
-    'so_lines': 'Sales Order Line Item',
-    'sales_orders': '_NS_SalesOrders_Data',
-    'customers': '_NS_Customer_List',
-    'items': 'Raw_Items',
-    'vendors': 'Raw_Vendors',
-    'inventory': 'Raw_Inventory',
-    'so_invoice_merged': 'SO & invoice Data merged',
-    'deals': 'Deals',
-    'nc_details': 'Non-Conformance Details'
-}
-
-# Column type configurations for each sheet
-COLUMN_TYPES = {
-    'invoices': {
-        'date_columns': ['Date', 'Due Date', 'Date Closed'],
-        'numeric_columns': ['Amount (Transaction Total)', 'Amount Remaining', 
-                          'Amount (Shipping)', 'Amount (Transaction Tax Total)']
-    },
-    'invoice_lines': {
-        'date_columns': ['Date', 'Due Date', 'Date Closed'],
-        'numeric_columns': ['Quantity', 'Amount', 'Amount (Transaction Total)', 
-                          'Amount Remaining', 'Amount (Shipping)', 'Amount (Transaction Tax Total)']
-    },
-    'so_lines': {
-        'date_columns': ['Pending Fulfillment Date', 'Actual Ship Date', 'Date Created', 
-                        'Date Billed', 'Date Closed'],
-        'numeric_columns': ['Amount', 'Item Rate', 'Quantity Ordered', 'Quantity Fulfilled',
-                          'Transaction Discount']
-    },
-    'sales_orders': {
-        'date_columns': ['Order Start Date', 'Pending Fulfillment Date', 'Actual Ship Date',
-                        'Customer Promise Last Date to Ship', 'Projected Date', 
-                        'Do Not Ship Before', 'Sales Management Approved Date',
-                        'Sales Approved Date', 'Pending Approval Date'],
-        'numeric_columns': ['Amount (Transaction Total)', 'Amount (Shipping)', 
-                          'Amount (Transaction Tax Total)']
-    },
-    'customers': {
-        'date_columns': [],
-        'numeric_columns': []
-    },
-    'items': {
-        'date_columns': [],
-        'numeric_columns': ['Purchase Price', 'Purchase Lead Time']
-    },
-    'vendors': {
-        'date_columns': [],
-        'numeric_columns': []
-    },
-    'inventory': {
-        'date_columns': [],
-        'numeric_columns': ['On Hand', 'Average Cost']
-    },
-    'deals': {
-        'date_columns': ['Close Date', 'Create Date', 'Pending Approval Date'],
-        'numeric_columns': ['Amount', 'Average Leadtime']
-    }
-}
-
-
-def get_google_credentials() -> Optional[Credentials]:
-    """
-    Retrieve Google credentials from Streamlit secrets.
-    
-    Returns:
-        Credentials object or None if not configured
-    """
+@st.cache_resource
+def get_google_sheets_client():
+    """Get authenticated Google Sheets client."""
     try:
-        # Check for service_account format
-        if "service_account" in st.secrets:
-            credentials_dict = dict(st.secrets["service_account"])
-        elif "gcp_service_account" in st.secrets:
-            credentials_dict = dict(st.secrets["gcp_service_account"])
+        # Try different secret formats
+        if 'service_account' in st.secrets:
+            creds_dict = dict(st.secrets['service_account'])
+        elif 'gcp_service_account' in st.secrets:
+            creds_dict = dict(st.secrets['gcp_service_account'])
         else:
-            logger.warning("Service account not found in secrets")
-            return None
+            # Try top-level secrets
+            creds_dict = {
+                'type': st.secrets.get('type', 'service_account'),
+                'project_id': st.secrets.get('project_id'),
+                'private_key_id': st.secrets.get('private_key_id'),
+                'private_key': st.secrets.get('private_key'),
+                'client_email': st.secrets.get('client_email'),
+                'client_id': st.secrets.get('client_id'),
+                'auth_uri': st.secrets.get('auth_uri'),
+                'token_uri': st.secrets.get('token_uri'),
+            }
         
-        credentials = Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=SCOPES
-        )
-        return credentials
-        
-    except Exception as e:
-        logger.error(f"Error getting credentials: {e}")
-        return None
-
-
-def get_gspread_client() -> Optional[gspread.Client]:
-    """
-    Get authenticated gspread client.
-    
-    Returns:
-        gspread Client or None if authentication fails
-    """
-    credentials = get_google_credentials()
-    if credentials is None:
-        return None
-    
-    try:
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         client = gspread.authorize(credentials)
         return client
     except Exception as e:
-        logger.error(f"Error creating gspread client: {e}")
+        logger.error(f"Failed to authenticate with Google Sheets: {e}")
         return None
 
 
-def get_spreadsheet_id() -> Optional[str]:
+def get_spreadsheet_id():
     """Get spreadsheet ID from secrets."""
-    if "SPREADSHEET_ID" in st.secrets:
-        return st.secrets["SPREADSHEET_ID"]
-    elif "google_sheets" in st.secrets:
-        return st.secrets["google_sheets"].get("spreadsheet_id")
-    return None
+    return st.secrets.get('SPREADSHEET_ID', st.secrets.get('spreadsheet_id', ''))
 
 
-def clean_numeric_column(series: pd.Series) -> pd.Series:
-    """Clean and convert a series to numeric."""
-    if series.dtype == 'object':
-        # Remove currency symbols, commas, etc.
-        series = series.astype(str).str.replace(r'[\$,]', '', regex=True)
-        series = series.str.replace(r'^\s*$', 'nan', regex=True)
-    return pd.to_numeric(series, errors='coerce')
+# =============================================================================
+# SHEET LOADING FUNCTIONS
+# =============================================================================
 
-
-def clean_date_column(series: pd.Series) -> pd.Series:
-    """Clean and convert a series to datetime."""
-    return pd.to_datetime(series, errors='coerce')
-
-
-def process_dataframe(df: pd.DataFrame, sheet_key: str) -> pd.DataFrame:
+def load_sheet_to_dataframe(sheet_name: str, handle_duplicates: bool = True) -> Optional[pd.DataFrame]:
     """
-    Process a dataframe by converting columns to appropriate types.
+    Load a Google Sheet into a pandas DataFrame.
     
     Args:
-        df: Raw dataframe
-        sheet_key: Key to look up column types
-        
+        sheet_name: Name of the sheet to load
+        handle_duplicates: Whether to handle duplicate column names
+    
     Returns:
-        Processed dataframe
-    """
-    if sheet_key not in COLUMN_TYPES:
-        return df
-    
-    config = COLUMN_TYPES[sheet_key]
-    
-    # Convert date columns
-    for col in config.get('date_columns', []):
-        if col in df.columns:
-            df[col] = clean_date_column(df[col])
-    
-    # Convert numeric columns
-    for col in config.get('numeric_columns', []):
-        if col in df.columns:
-            df[col] = clean_numeric_column(df[col])
-    
-    return df
-
-
-@st.cache_data(ttl=300, show_spinner="Loading data...")
-def load_sheet_data(sheet_name: str, sheet_key: str = None) -> Optional[pd.DataFrame]:
-    """
-    Load data from a specific Google Sheet tab.
-    
-    Args:
-        sheet_name: Name of the sheet tab
-        sheet_key: Key for column type processing
-        
-    Returns:
-        DataFrame with sheet data or None if loading fails
+        DataFrame or None if loading fails
     """
     try:
-        spreadsheet_id = get_spreadsheet_id()
-        if not spreadsheet_id:
-            logger.error("Spreadsheet ID not found in secrets")
+        client = get_google_sheets_client()
+        if client is None:
             return None
         
-        client = get_gspread_client()
-        if client is None:
+        spreadsheet_id = get_spreadsheet_id()
+        if not spreadsheet_id:
+            logger.error("No spreadsheet ID configured")
             return None
         
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_values()
         
-        # Get all values first to handle duplicate headers
-        all_values = worksheet.get_all_values()
-        
-        if not all_values or len(all_values) < 2:
-            logger.warning(f"No data found in worksheet: {sheet_name}")
+        if not data:
             return pd.DataFrame()
         
-        # Get headers and deduplicate them
-        headers = all_values[0]
-        seen = {}
-        unique_headers = []
-        for h in headers:
-            h_str = str(h).strip() if h else 'Unnamed'
-            if not h_str:
-                h_str = 'Unnamed'
-            if h_str in seen:
-                seen[h_str] += 1
-                unique_headers.append(f"{h_str}_{seen[h_str]}")
-            else:
-                seen[h_str] = 0
-                unique_headers.append(h_str)
+        # Handle duplicate column names
+        headers = data[0]
+        if handle_duplicates:
+            seen = {}
+            new_headers = []
+            for h in headers:
+                if h in seen:
+                    seen[h] += 1
+                    new_headers.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    new_headers.append(h)
+            headers = new_headers
         
-        # Create DataFrame with unique headers
-        df = pd.DataFrame(all_values[1:], columns=unique_headers)
+        df = pd.DataFrame(data[1:], columns=headers)
         
-        # Remove completely empty/unnamed columns
-        cols_to_keep = [c for c in df.columns if not c.startswith('Unnamed')]
-        df = df[cols_to_keep]
+        # Convert numeric columns
+        for col in df.columns:
+            # Try to convert to numeric
+            try:
+                numeric_vals = pd.to_numeric(df[col], errors='coerce')
+                if numeric_vals.notna().sum() > len(df) * 0.5:  # More than 50% numeric
+                    df[col] = numeric_vals
+            except:
+                pass
         
-        # Process column types if sheet_key provided
-        if sheet_key:
-            df = process_dataframe(df, sheet_key)
-        
-        logger.info(f"Loaded {len(df)} records from {sheet_name}")
         return df
         
-    except gspread.exceptions.WorksheetNotFound:
-        logger.error(f"Worksheet '{sheet_name}' not found")
-        return None
     except Exception as e:
-        logger.error(f"Error loading {sheet_name}: {e}")
+        logger.error(f"Error loading sheet '{sheet_name}': {e}")
         return None
 
 
-# Specific loader functions for each data source
-@st.cache_data(ttl=300, show_spinner="Loading invoices...")
-def load_invoices() -> Optional[pd.DataFrame]:
-    """Load invoice header data."""
-    return load_sheet_data(SHEET_CONFIG['invoices'], 'invoices')
+# =============================================================================
+# DATA LOADING FUNCTIONS
+# =============================================================================
 
-
-@st.cache_data(ttl=300, show_spinner="Loading invoice lines...")
+@st.cache_data(ttl=300)
 def load_invoice_lines() -> Optional[pd.DataFrame]:
-    """Load invoice line item data."""
-    return load_sheet_data(SHEET_CONFIG['invoice_lines'], 'invoice_lines')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading sales order lines...")
-def load_so_lines() -> Optional[pd.DataFrame]:
-    """Load sales order line item data."""
-    return load_sheet_data(SHEET_CONFIG['so_lines'], 'so_lines')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading sales orders...")
-def load_sales_orders() -> Optional[pd.DataFrame]:
-    """Load sales order header data."""
-    return load_sheet_data(SHEET_CONFIG['sales_orders'], 'sales_orders')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading customers...")
-def load_customers() -> Optional[pd.DataFrame]:
-    """Load customer master data."""
-    return load_sheet_data(SHEET_CONFIG['customers'], 'customers')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading items...")
-def load_items() -> Optional[pd.DataFrame]:
-    """Load item/SKU master data."""
-    return load_sheet_data(SHEET_CONFIG['items'], 'items')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading vendors...")
-def load_vendors() -> Optional[pd.DataFrame]:
-    """Load vendor master data."""
-    return load_sheet_data(SHEET_CONFIG['vendors'], 'vendors')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading inventory...")
-def load_inventory() -> Optional[pd.DataFrame]:
-    """Load current inventory data."""
-    return load_sheet_data(SHEET_CONFIG['inventory'], 'inventory')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading pipeline deals...")
-def load_deals() -> Optional[pd.DataFrame]:
-    """Load HubSpot pipeline/deals data."""
-    return load_sheet_data(SHEET_CONFIG['deals'], 'deals')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading merged SO/Invoice data...")
-def load_so_invoice_merged() -> Optional[pd.DataFrame]:
-    """Load merged SO and Invoice data."""
-    return load_sheet_data(SHEET_CONFIG['so_invoice_merged'])
-
-
-@st.cache_data(ttl=300, show_spinner="Loading NC data...")
-def load_nc_data() -> Optional[pd.DataFrame]:
-    """Load Non-Conformance data for Quality tab."""
-    return load_sheet_data(SHEET_CONFIG['nc_details'])
-
-
-@st.cache_data(ttl=600)
-def load_all_sop_data() -> Dict[str, Optional[pd.DataFrame]]:
-    """
-    Load all S&OP data sources at once.
+    """Load Invoice Line Item data."""
+    df = load_sheet_to_dataframe('Invoice Line Item')
     
-    Returns:
-        Dictionary with all dataframes
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'customer' in col_lower and 'correct' in col_lower:
+            col_mapping[col] = 'Customer'
+        elif col_lower == 'customer' or 'customer name' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'item' in col_lower and 'name' not in col_lower:
+            col_mapping[col] = 'Item'
+        elif 'amount' in col_lower or 'line amount' in col_lower:
+            col_mapping[col] = 'Amount'
+        elif 'qty' in col_lower or 'quantity' in col_lower:
+            col_mapping[col] = 'Quantity'
+        elif 'date' in col_lower and ('invoice' in col_lower or 'tran' in col_lower):
+            col_mapping[col] = 'Date'
+        elif 'rep' in col_lower and 'master' in col_lower:
+            col_mapping[col] = 'Rep'
+        elif 'calyx' in col_lower and 'product type' in col_lower:
+            col_mapping[col] = 'Product Type'
+        elif 'product type' in col_lower and 'Product Type' not in col_mapping.values():
+            col_mapping[col] = 'Product Type'
+    
+    df = df.rename(columns=col_mapping)
+    
+    # Clean Product Type
+    if 'Product Type' in df.columns:
+        df['Product Type'] = df['Product Type'].fillna('Unknown').replace('', 'Unknown')
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_sales_orders() -> Optional[pd.DataFrame]:
+    """Load Sales Orders Main data."""
+    df = load_sheet_to_dataframe('_NS_SalesOrders_Data')
+    
+    if df is None or df.empty:
+        # Try alternate name
+        df = load_sheet_to_dataframe('Sales Order Line Item')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'customer' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'rep' in col_lower:
+            if 'Rep' not in col_mapping.values():
+                col_mapping[col] = 'Rep'
+        elif 'item' in col_lower:
+            if 'Item' not in col_mapping.values():
+                col_mapping[col] = 'Item'
+        elif 'amount' in col_lower:
+            if 'Amount' not in col_mapping.values():
+                col_mapping[col] = 'Amount'
+        elif 'status' in col_lower:
+            if 'Status' not in col_mapping.values():
+                col_mapping[col] = 'Status'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_items() -> Optional[pd.DataFrame]:
     """
+    Load Raw_Items data with 'Calyx || Product Type' column.
+    """
+    df = load_sheet_to_dataframe('Raw_Items')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Find and standardize the Calyx Product Type column
+    product_type_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'calyx' in col_lower and 'product type' in col_lower:
+            product_type_col = col
+            break
+    
+    if product_type_col:
+        df['Calyx Product Type'] = df[product_type_col].fillna('Unknown').replace('', 'Unknown')
+    
+    # Also keep original column mapping
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in ['item', 'item name', 'name', 'sku']:
+            col_mapping[col] = 'Item'
+        elif 'description' in col_lower:
+            if 'Description' not in col_mapping.values():
+                col_mapping[col] = 'Description'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_customers() -> Optional[pd.DataFrame]:
+    """Load Customer List data."""
+    df = load_sheet_to_dataframe('_NS_Customer_List')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'company' in col_lower or 'customer' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'rep' in col_lower or 'salesperson' in col_lower:
+            if 'Rep' not in col_mapping.values():
+                col_mapping[col] = 'Rep'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_deals() -> Optional[pd.DataFrame]:
+    """Load HubSpot Deals/Pipeline data."""
+    df = load_sheet_to_dataframe('Deals')
+    
+    if df is None or df.empty:
+        # Try alternate names
+        for sheet_name in ['All Reps All Pipelines', 'HubSpot Deals', 'Pipeline']:
+            df = load_sheet_to_dataframe(sheet_name)
+            if df is not None and not df.empty:
+                break
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'deal' in col_lower and 'name' in col_lower:
+            col_mapping[col] = 'Deal Name'
+        elif 'company' in col_lower or 'customer' in col_lower:
+            if 'Company' not in col_mapping.values():
+                col_mapping[col] = 'Company'
+        elif 'amount' in col_lower or 'value' in col_lower:
+            if 'Amount' not in col_mapping.values():
+                col_mapping[col] = 'Amount'
+        elif 'stage' in col_lower:
+            if 'Stage' not in col_mapping.values():
+                col_mapping[col] = 'Stage'
+        elif 'close' in col_lower and 'date' in col_lower:
+            col_mapping[col] = 'Close Date'
+        elif 'product' in col_lower:
+            if 'Product' not in col_mapping.values():
+                col_mapping[col] = 'Product'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_inventory() -> Optional[pd.DataFrame]:
+    """Load Raw_Inventory data."""
+    df = load_sheet_to_dataframe('Raw_Inventory')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_vendors() -> Optional[pd.DataFrame]:
+    """Load Raw_Vendors data."""
+    df = load_sheet_to_dataframe('Raw_Vendors')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_invoices() -> Optional[pd.DataFrame]:
+    """Load Invoices Main data."""
+    df = load_sheet_to_dataframe('_NS_Invoices_Data')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_so_lines() -> Optional[pd.DataFrame]:
+    """Load Sales Order Line Items."""
+    df = load_sheet_to_dataframe('Sales Order Line Item')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+# =============================================================================
+# AGGREGATE LOADING
+# =============================================================================
+
+@st.cache_data(ttl=300)
+def load_all_sop_data() -> Dict[str, pd.DataFrame]:
+    """Load all S&OP data at once."""
     return {
-        'invoices': load_invoices(),
         'invoice_lines': load_invoice_lines(),
-        'so_lines': load_so_lines(),
         'sales_orders': load_sales_orders(),
-        'customers': load_customers(),
         'items': load_items(),
-        'vendors': load_vendors(),
-        'inventory': load_inventory(),
+        'customers': load_customers(),
         'deals': load_deals(),
-        'so_invoice_merged': load_so_invoice_merged()
+        'inventory': load_inventory(),
+        'vendors': load_vendors()
     }
 
 
-def get_unique_sales_reps(sales_orders: pd.DataFrame) -> list:
-    """Get unique sales rep names from sales orders."""
-    if sales_orders is None or 'Rep Master' not in sales_orders.columns:
-        return []
-    return sorted(sales_orders['Rep Master'].dropna().unique().tolist())
+# =============================================================================
+# DATA PREPARATION FUNCTIONS
+# =============================================================================
 
-
-def get_unique_customers(sales_orders: pd.DataFrame) -> list:
-    """Get unique customer names from sales orders."""
+def get_unique_sales_reps(sales_orders: pd.DataFrame = None, customers: pd.DataFrame = None) -> List[str]:
+    """Get list of unique sales reps."""
+    reps = set()
+    
     if sales_orders is None:
+        sales_orders = load_sales_orders()
+    if customers is None:
+        customers = load_customers()
+    
+    for df in [sales_orders, customers]:
+        if df is not None and not df.empty:
+            if 'Rep' in df.columns:
+                reps.update(df['Rep'].dropna().unique())
+    
+    return sorted([str(r).strip() for r in reps if r and str(r).strip()])
+
+
+def get_customers_for_rep(rep: str = None) -> List[str]:
+    """Get customers for a specific rep (or all if rep is None)."""
+    sales_orders = load_sales_orders()
+    
+    if sales_orders is None or sales_orders.empty:
         return []
     
-    # Try different customer column names
-    for col in ['Customer', 'Corrected Customer Name', 'Customer Companyname']:
-        if col in sales_orders.columns:
-            return sorted(sales_orders[col].dropna().unique().tolist())
+    if rep and rep != "All" and 'Rep' in sales_orders.columns:
+        filtered = sales_orders[sales_orders['Rep'] == rep]
+    else:
+        filtered = sales_orders
+    
+    if 'Customer' in filtered.columns:
+        customers = filtered['Customer'].dropna().unique()
+        return sorted([str(c).strip() for c in customers if c and str(c).strip()])
+    
     return []
 
 
-def get_unique_product_types(items: pd.DataFrame) -> list:
-    """Get unique product types from items."""
-    if items is None or 'Calyx || Product Type' not in items.columns:
-        return []
-    return sorted(items['Calyx || Product Type'].dropna().unique().tolist())
-
-
-def get_unique_skus(items: pd.DataFrame) -> list:
-    """Get unique SKUs from items."""
-    if items is None or 'SKU' not in items.columns:
-        return []
-    return sorted(items['SKU'].dropna().unique().tolist())
-
-
-def get_customers_for_rep(sales_orders: pd.DataFrame, rep: str) -> list:
-    """Get customers associated with a specific sales rep."""
-    if sales_orders is None or 'Rep Master' not in sales_orders.columns:
+def get_skus_for_customer(customer: str = None) -> List[str]:
+    """Get SKUs/Items for a specific customer (or all if customer is None)."""
+    invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
         return []
     
-    filtered = sales_orders[sales_orders['Rep Master'] == rep]
-    
-    for col in ['Customer', 'Corrected Customer Name', 'Customer Companyname']:
-        if col in filtered.columns:
-            return sorted(filtered[col].dropna().unique().tolist())
-    return []
-
-
-def get_skus_for_customer(invoice_lines: pd.DataFrame, customer: str) -> list:
-    """Get SKUs historically ordered by a specific customer."""
-    if invoice_lines is None:
-        return []
-    
-    # Find the customer column
-    customer_col = None
-    for col in ['Correct Customer', 'Customer']:
-        if col in invoice_lines.columns:
-            customer_col = col
-            break
-    
-    if customer_col is None:
-        return []
-    
-    filtered = invoice_lines[invoice_lines[customer_col] == customer]
+    if customer and customer != "All" and 'Customer' in invoice_lines.columns:
+        filtered = invoice_lines[invoice_lines['Customer'] == customer]
+    else:
+        filtered = invoice_lines
     
     if 'Item' in filtered.columns:
-        return sorted(filtered['Item'].dropna().unique().tolist())
+        items = filtered['Item'].dropna().unique()
+        return sorted([str(i).strip() for i in items if i and str(i).strip()])
+    
     return []
 
 
-def prepare_demand_history(invoice_lines: pd.DataFrame, 
-                           groupby_cols: list = ['Item'],
-                           date_col: str = 'Date',
-                           qty_col: str = 'Quantity',
-                           freq: str = 'M') -> pd.DataFrame:
-    """
-    Prepare demand history for forecasting.
+def get_unique_product_types() -> List[str]:
+    """Get unique product types from items."""
+    items = load_items()
     
-    Args:
-        invoice_lines: Invoice line data
-        groupby_cols: Columns to group by (e.g., ['Item'], ['Item', 'Customer'])
-        date_col: Name of date column
-        qty_col: Name of quantity column
-        freq: Frequency for resampling ('D', 'W', 'M', 'Q')
-        
-    Returns:
-        DataFrame with demand history aggregated by time period
-    """
+    if items is None or items.empty:
+        return []
+    
+    if 'Calyx Product Type' in items.columns:
+        types = items['Calyx Product Type'].dropna().unique()
+    elif 'Product Type' in items.columns:
+        types = items['Product Type'].dropna().unique()
+    else:
+        return []
+    
+    return sorted([str(t).strip() for t in types if t and str(t).strip() and str(t) != 'Unknown'])
+
+
+def get_unique_skus() -> List[str]:
+    """Get unique SKUs/Items."""
+    items = load_items()
+    
+    if items is None or items.empty:
+        return []
+    
+    if 'Item' in items.columns:
+        skus = items['Item'].dropna().unique()
+        return sorted([str(s).strip() for s in skus if s and str(s).strip()])
+    
+    return []
+
+
+def prepare_demand_history(invoice_lines: pd.DataFrame = None, 
+                           period: str = 'M') -> pd.DataFrame:
+    """Prepare historical demand data aggregated by period."""
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
     if invoice_lines is None or invoice_lines.empty:
         return pd.DataFrame()
     
     df = invoice_lines.copy()
     
-    # Ensure date column is datetime
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    
-    # Drop rows with invalid dates
-    df = df.dropna(subset=[date_col])
-    
-    # Set date as index
-    df = df.set_index(date_col)
-    
-    # Group and resample
-    if groupby_cols:
-        demand = df.groupby(groupby_cols)[qty_col].resample(freq).sum().reset_index()
+    # Convert date
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df['Period'] = df['Date'].dt.to_period(period)
     else:
-        demand = df[qty_col].resample(freq).sum().reset_index()
+        return pd.DataFrame()
     
-    demand.columns = groupby_cols + ['Period', 'Demand'] if groupby_cols else ['Period', 'Demand']
+    # Aggregate
+    agg_cols = {}
+    if 'Amount' in df.columns:
+        agg_cols['Revenue'] = ('Amount', 'sum')
+    if 'Quantity' in df.columns:
+        agg_cols['Units'] = ('Quantity', 'sum')
     
-    return demand
+    if not agg_cols:
+        return pd.DataFrame()
+    
+    grouped = df.groupby('Period').agg(**agg_cols).reset_index()
+    grouped['Period'] = grouped['Period'].astype(str)
+    
+    return grouped
 
 
-def prepare_revenue_history(invoice_lines: pd.DataFrame,
-                           groupby_cols: list = None,
-                           date_col: str = 'Date',
-                           amount_col: str = 'Amount',
-                           freq: str = 'M') -> pd.DataFrame:
-    """
-    Prepare revenue history for forecasting.
+def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
+                            group_by: str = None) -> pd.DataFrame:
+    """Prepare revenue history, optionally grouped."""
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
     
-    Args:
-        invoice_lines: Invoice line data
-        groupby_cols: Columns to group by
-        date_col: Name of date column
-        amount_col: Name of amount column
-        freq: Frequency for resampling
-        
-    Returns:
-        DataFrame with revenue history aggregated by time period
-    """
     if invoice_lines is None or invoice_lines.empty:
         return pd.DataFrame()
     
     df = invoice_lines.copy()
     
-    # Ensure date column is datetime
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    
-    # Drop rows with invalid dates
-    df = df.dropna(subset=[date_col])
-    
-    # Set date as index
-    df = df.set_index(date_col)
-    
-    # Group and resample
-    if groupby_cols:
-        revenue = df.groupby(groupby_cols)[amount_col].resample(freq).sum().reset_index()
-        revenue.columns = groupby_cols + ['Period', 'Revenue']
+    # Convert date
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df['Month'] = df['Date'].dt.to_period('M')
     else:
-        revenue = df[amount_col].resample(freq).sum().reset_index()
-        revenue.columns = ['Period', 'Revenue']
+        return pd.DataFrame()
     
-    return revenue
+    # Group by
+    group_cols = ['Month']
+    if group_by and group_by in df.columns:
+        group_cols.append(group_by)
+    
+    if 'Amount' in df.columns:
+        grouped = df.groupby(group_cols)['Amount'].sum().reset_index()
+        grouped.columns = group_cols + ['Revenue']
+        grouped['Month'] = grouped['Month'].astype(str)
+        return grouped
+    
+    return pd.DataFrame()
 
 
-def get_pipeline_by_period(deals: pd.DataFrame, freq: str = 'M') -> pd.DataFrame:
-    """
-    Aggregate pipeline deals by close date period.
+def get_pipeline_by_period(deals: pd.DataFrame = None,
+                           period: str = 'M') -> pd.DataFrame:
+    """Get pipeline/deals aggregated by expected close period."""
+    if deals is None:
+        deals = load_deals()
     
-    Args:
-        deals: Deals/pipeline data
-        freq: Frequency for aggregation
-        
-    Returns:
-        DataFrame with pipeline aggregated by period
-    """
     if deals is None or deals.empty:
         return pd.DataFrame()
     
     df = deals.copy()
     
-    # Check if required columns exist
-    if 'Close Date' not in df.columns:
-        logger.warning("'Close Date' column not found in Deals data")
+    # Convert close date
+    if 'Close Date' in df.columns:
+        df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
+        df = df.dropna(subset=['Close Date'])
+        df['Period'] = df['Close Date'].dt.to_period(period)
+    else:
         return pd.DataFrame()
     
-    if 'Amount' not in df.columns:
-        logger.warning("'Amount' column not found in Deals data")
-        return pd.DataFrame()
+    # Aggregate
+    if 'Amount' in df.columns:
+        grouped = df.groupby('Period')['Amount'].sum().reset_index()
+        grouped.columns = ['Period', 'Pipeline Value']
+        grouped['Period'] = grouped['Period'].astype(str)
+        return grouped
     
-    # Ensure close date is datetime
-    df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
-    
-    # Filter for open deals (not closed lost)
-    if 'Close Status' in df.columns:
-        df = df[df['Close Status'] != 'lost']
-    
-    # Drop rows with invalid dates
-    df = df.dropna(subset=['Close Date'])
-    
-    if df.empty:
-        return pd.DataFrame()
-    
-    # Set date as index and resample
-    df = df.set_index('Close Date')
-    
-    pipeline = df['Amount'].resample(freq).sum().reset_index()
-    pipeline.columns = ['Period', 'Pipeline_Amount']
-    
-    return pipeline
+    return pd.DataFrame()
 
-
-def calculate_lead_times(items: pd.DataFrame, vendors: pd.DataFrame = None) -> pd.DataFrame:
-    """
-    Calculate lead times for items, incorporating vendor terms if available.
-    
-    Args:
-        items: Item master data
-        vendors: Vendor master data
-        
-    Returns:
-        DataFrame with item lead times
-    """
-    if items is None or items.empty:
-        return pd.DataFrame()
-    
-    df = items[['SKU', 'Name', 'Purchase Lead Time', 'Calyx || Product Type']].copy()
-    df = df.rename(columns={'Purchase Lead Time': 'Lead_Time_Days'})
-    
-    # Fill missing lead times with category average or default
-    if df['Lead_Time_Days'].isna().any():
-        # Calculate average by product type
-        avg_by_type = df.groupby('Calyx || Product Type')['Lead_Time_Days'].transform('mean')
-        df['Lead_Time_Days'] = df['Lead_Time_Days'].fillna(avg_by_type)
-        
-        # Fill remaining with overall average or default of 30 days
-        overall_avg = df['Lead_Time_Days'].mean()
-        df['Lead_Time_Days'] = df['Lead_Time_Days'].fillna(overall_avg if pd.notna(overall_avg) else 30)
-    
-    return df
