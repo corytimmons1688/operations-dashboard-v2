@@ -1,18 +1,6 @@
 """
-S&OP Data Loader Module
-Handles all Google Sheets data ingestion for the S&OP Dashboard
-
-Data Sources:
-- _NS_Invoices_Data: Invoice header data
-- Invoice Line Item: Invoice line details
-- Sales Order Line Item: SO line details
-- _NS_SalesOrders_Data: Sales order header data
-- _NS_Customer_List: Customer master data
-- Raw_Items: Item/SKU master data
-- Raw_Vendors: Vendor master data
-- Raw_Inventory: Current inventory levels
-- SO & invoice Data merged: Combined SO/Invoice data
-- Deals: HubSpot pipeline data
+Data Loader Module for NC Dashboard
+Handles Google Sheets API connection and data retrieval
 
 Author: Xander @ Calyx Containers
 """
@@ -21,93 +9,45 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from typing import Optional, Dict, Any
 import logging
+from typing import Optional, Dict, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Google Sheets API Scopes
+# Google Sheets API scopes
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
     'https://www.googleapis.com/auth/drive.readonly'
 ]
 
-# Sheet Configuration
-SHEET_CONFIG = {
-    'invoices': '_NS_Invoices_Data',
-    'invoice_lines': 'Invoice Line Item',
-    'so_lines': 'Sales Order Line Item',
-    'sales_orders': '_NS_SalesOrders_Data',
-    'customers': '_NS_Customer_List',
-    'items': 'Raw_Items',
-    'vendors': 'Raw_Vendors',
-    'inventory': 'Raw_Inventory',
-    'so_invoice_merged': 'SO & invoice Data merged',
-    'deals': 'Deals',
-    'nc_details': 'Non-Conformance Details'
-}
-
-# Column type configurations for each sheet
-COLUMN_TYPES = {
-    'invoices': {
-        'date_columns': ['Date', 'Due Date', 'Date Closed'],
-        'numeric_columns': ['Amount (Transaction Total)', 'Amount Remaining', 
-                          'Amount (Shipping)', 'Amount (Transaction Tax Total)']
-    },
-    'invoice_lines': {
-        'date_columns': ['Date', 'Due Date', 'Date Closed'],
-        'numeric_columns': ['Quantity', 'Amount', 'Amount (Transaction Total)', 
-                          'Amount Remaining', 'Amount (Shipping)', 'Amount (Transaction Tax Total)']
-    },
-    'so_lines': {
-        'date_columns': ['Pending Fulfillment Date', 'Actual Ship Date', 'Date Created', 
-                        'Date Billed', 'Date Closed'],
-        'numeric_columns': ['Amount', 'Item Rate', 'Quantity Ordered', 'Quantity Fulfilled',
-                          'Transaction Discount']
-    },
-    'sales_orders': {
-        'date_columns': ['Order Start Date', 'Pending Fulfillment Date', 'Actual Ship Date',
-                        'Customer Promise Last Date to Ship', 'Projected Date', 
-                        'Do Not Ship Before', 'Sales Management Approved Date',
-                        'Sales Approved Date', 'Pending Approval Date'],
-        'numeric_columns': ['Amount (Transaction Total)', 'Amount (Shipping)', 
-                          'Amount (Transaction Tax Total)']
-    },
-    'customers': {
-        'date_columns': [],
-        'numeric_columns': []
-    },
-    'items': {
-        'date_columns': [],
-        'numeric_columns': ['Purchase Price', 'Purchase Lead Time']
-    },
-    'vendors': {
-        'date_columns': [],
-        'numeric_columns': []
-    },
-    'inventory': {
-        'date_columns': [],
-        'numeric_columns': ['On Hand', 'Average Cost']
-    },
-    'deals': {
-        'date_columns': ['Close Date', 'Create Date', 'Pending Approval Date'],
-        'numeric_columns': ['Amount', 'Average Leadtime']
-    }
-}
+# Column definitions for the NC sheet
+NC_COLUMNS = [
+    'Year', 'Week', 'External Or Internal', 'NC Number', 'Priority',
+    'Sales Order', 'Related Ticket Numbers', 'Customer', 'Issue Type',
+    'Employee Responsible', 'Defect Summary', 'Status', 'Affected Items',
+    'On Time Ship Date', 'Total Quantity Affected', 'Cost of Rework',
+    'Cost Avoided', 'Date Submitted', 'Equipment', 'First Article Completed',
+    'First Article Inspector'
+]
 
 
 def get_google_credentials() -> Optional[Credentials]:
     """
     Retrieve Google credentials from Streamlit secrets.
     
+    Supports two secret formats:
+    1. [service_account] - flat structure
+    2. [gcp_service_account] - nested structure
+    
     Returns:
         Credentials object or None if not configured
     """
     try:
-        # Check for service_account format
+        # Check for service_account format (user's format)
         if "service_account" in st.secrets:
             credentials_dict = dict(st.secrets["service_account"])
+        # Check for gcp_service_account format (original format)
         elif "gcp_service_account" in st.secrets:
             credentials_dict = dict(st.secrets["gcp_service_account"])
         else:
@@ -127,10 +67,10 @@ def get_google_credentials() -> Optional[Credentials]:
 
 def get_gspread_client() -> Optional[gspread.Client]:
     """
-    Get authenticated gspread client.
+    Create and return a gspread client with proper authentication.
     
     Returns:
-        gspread Client or None if authentication fails
+        gspread Client object or None if authentication fails
     """
     credentials = get_google_credentials()
     if credentials is None:
@@ -144,430 +84,253 @@ def get_gspread_client() -> Optional[gspread.Client]:
         return None
 
 
-def get_spreadsheet_id() -> Optional[str]:
-    """Get spreadsheet ID from secrets."""
-    if "SPREADSHEET_ID" in st.secrets:
-        return st.secrets["SPREADSHEET_ID"]
-    elif "google_sheets" in st.secrets:
-        return st.secrets["google_sheets"].get("spreadsheet_id")
-    return None
-
-
-def clean_numeric_column(series: pd.Series) -> pd.Series:
-    """Clean and convert a series to numeric."""
-    if series.dtype == 'object':
-        # Remove currency symbols, commas, etc.
-        series = series.astype(str).str.replace(r'[\$,]', '', regex=True)
-        series = series.str.replace(r'^\s*$', 'nan', regex=True)
-    return pd.to_numeric(series, errors='coerce')
-
-
-def clean_date_column(series: pd.Series) -> pd.Series:
-    """Clean and convert a series to datetime."""
-    return pd.to_datetime(series, errors='coerce')
-
-
-def process_dataframe(df: pd.DataFrame, sheet_key: str) -> pd.DataFrame:
+@st.cache_data(ttl=300, show_spinner="Loading NC data from Google Sheets...")
+def load_nc_data() -> Optional[pd.DataFrame]:
     """
-    Process a dataframe by converting columns to appropriate types.
+    Load Non-Conformance data from Google Sheets.
     
-    Args:
-        df: Raw dataframe
-        sheet_key: Key to look up column types
-        
+    Data is cached for 5 minutes (300 seconds) to improve performance.
+    
+    Supports two secret formats:
+    1. SPREADSHEET_ID at root level + [service_account]
+    2. [google_sheets] with spreadsheet_id + [gcp_service_account]
+    
     Returns:
-        Processed dataframe
-    """
-    if sheet_key not in COLUMN_TYPES:
-        return df
-    
-    config = COLUMN_TYPES[sheet_key]
-    
-    # Convert date columns
-    for col in config.get('date_columns', []):
-        if col in df.columns:
-            df[col] = clean_date_column(df[col])
-    
-    # Convert numeric columns
-    for col in config.get('numeric_columns', []):
-        if col in df.columns:
-            df[col] = clean_numeric_column(df[col])
-    
-    return df
-
-
-@st.cache_data(ttl=300, show_spinner="Loading data...")
-def load_sheet_data(sheet_name: str, sheet_key: str = None) -> Optional[pd.DataFrame]:
-    """
-    Load data from a specific Google Sheet tab.
-    
-    Args:
-        sheet_name: Name of the sheet tab
-        sheet_key: Key for column type processing
-        
-    Returns:
-        DataFrame with sheet data or None if loading fails
+        DataFrame with NC data or None if loading fails
     """
     try:
-        spreadsheet_id = get_spreadsheet_id()
-        if not spreadsheet_id:
+        # Get spreadsheet configuration from secrets (support both formats)
+        if "SPREADSHEET_ID" in st.secrets:
+            # User's format: SPREADSHEET_ID at root level
+            spreadsheet_id = st.secrets["SPREADSHEET_ID"]
+            sheet_name = st.secrets.get("SHEET_NAME", "Non-Conformance Details")
+        elif "google_sheets" in st.secrets:
+            # Original format: nested under google_sheets
+            spreadsheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
+            sheet_name = st.secrets["google_sheets"].get("sheet_name", "Non-Conformance Details")
+        else:
             logger.error("Spreadsheet ID not found in secrets")
+            st.error("Spreadsheet ID not configured. Add SPREADSHEET_ID to your secrets.")
             return None
         
+        # Get gspread client
         client = get_gspread_client()
         if client is None:
+            st.error("Failed to authenticate with Google Sheets API")
             return None
         
+        # Open spreadsheet and worksheet
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(sheet_name)
         
-        # Get all values first to handle duplicate headers
-        all_values = worksheet.get_all_values()
+        # Get all data
+        data = worksheet.get_all_records()
         
-        if not all_values or len(all_values) < 2:
-            logger.warning(f"No data found in worksheet: {sheet_name}")
-            return pd.DataFrame()
+        if not data:
+            logger.warning("No data found in worksheet")
+            return pd.DataFrame(columns=NC_COLUMNS)
         
-        # Get headers and deduplicate them
-        headers = all_values[0]
-        seen = {}
-        unique_headers = []
-        for h in headers:
-            h_str = str(h).strip() if h else 'Unnamed'
-            if not h_str:
-                h_str = 'Unnamed'
-            if h_str in seen:
-                seen[h_str] += 1
-                unique_headers.append(f"{h_str}_{seen[h_str]}")
-            else:
-                seen[h_str] = 0
-                unique_headers.append(h_str)
+        # Convert to DataFrame
+        df = pd.DataFrame(data)
         
-        # Create DataFrame with unique headers
-        df = pd.DataFrame(all_values[1:], columns=unique_headers)
+        # Data type conversions
+        df = clean_and_transform_data(df)
         
-        # Remove completely empty/unnamed columns
-        cols_to_keep = [c for c in df.columns if not c.startswith('Unnamed')]
-        df = df[cols_to_keep]
-        
-        # Process column types if sheet_key provided
-        if sheet_key:
-            df = process_dataframe(df, sheet_key)
-        
-        logger.info(f"Loaded {len(df)} records from {sheet_name}")
+        logger.info(f"Loaded {len(df)} records from Google Sheets")
         return df
         
+    except gspread.exceptions.SpreadsheetNotFound:
+        logger.error("Spreadsheet not found. Check the spreadsheet ID.")
+        st.error("Spreadsheet not found. Please verify the spreadsheet ID in secrets.")
+        return None
+        
     except gspread.exceptions.WorksheetNotFound:
-        logger.error(f"Worksheet '{sheet_name}' not found")
+        logger.error(f"Worksheet '{sheet_name}' not found.")
+        st.error(f"Worksheet '{sheet_name}' not found. Please verify the sheet name.")
         return None
+        
+    except gspread.exceptions.APIError as e:
+        logger.error(f"Google Sheets API error: {e}")
+        st.error(f"API Error: {str(e)}")
+        return None
+        
     except Exception as e:
-        logger.error(f"Error loading {sheet_name}: {e}")
+        logger.error(f"Unexpected error loading data: {e}")
+        st.error(f"Error loading data: {str(e)}")
         return None
 
 
-# Specific loader functions for each data source
-@st.cache_data(ttl=300, show_spinner="Loading invoices...")
-def load_invoices() -> Optional[pd.DataFrame]:
-    """Load invoice header data."""
-    return load_sheet_data(SHEET_CONFIG['invoices'], 'invoices')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading invoice lines...")
-def load_invoice_lines() -> Optional[pd.DataFrame]:
-    """Load invoice line item data."""
-    return load_sheet_data(SHEET_CONFIG['invoice_lines'], 'invoice_lines')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading sales order lines...")
-def load_so_lines() -> Optional[pd.DataFrame]:
-    """Load sales order line item data."""
-    return load_sheet_data(SHEET_CONFIG['so_lines'], 'so_lines')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading sales orders...")
-def load_sales_orders() -> Optional[pd.DataFrame]:
-    """Load sales order header data."""
-    return load_sheet_data(SHEET_CONFIG['sales_orders'], 'sales_orders')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading customers...")
-def load_customers() -> Optional[pd.DataFrame]:
-    """Load customer master data."""
-    return load_sheet_data(SHEET_CONFIG['customers'], 'customers')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading items...")
-def load_items() -> Optional[pd.DataFrame]:
-    """Load item/SKU master data."""
-    return load_sheet_data(SHEET_CONFIG['items'], 'items')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading vendors...")
-def load_vendors() -> Optional[pd.DataFrame]:
-    """Load vendor master data."""
-    return load_sheet_data(SHEET_CONFIG['vendors'], 'vendors')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading inventory...")
-def load_inventory() -> Optional[pd.DataFrame]:
-    """Load current inventory data."""
-    return load_sheet_data(SHEET_CONFIG['inventory'], 'inventory')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading pipeline deals...")
-def load_deals() -> Optional[pd.DataFrame]:
-    """Load HubSpot pipeline/deals data."""
-    return load_sheet_data(SHEET_CONFIG['deals'], 'deals')
-
-
-@st.cache_data(ttl=300, show_spinner="Loading merged SO/Invoice data...")
-def load_so_invoice_merged() -> Optional[pd.DataFrame]:
-    """Load merged SO and Invoice data."""
-    return load_sheet_data(SHEET_CONFIG['so_invoice_merged'])
-
-
-@st.cache_data(ttl=300, show_spinner="Loading NC data...")
-def load_nc_data() -> Optional[pd.DataFrame]:
-    """Load Non-Conformance data for Quality tab."""
-    return load_sheet_data(SHEET_CONFIG['nc_details'])
-
-
-@st.cache_data(ttl=600)
-def load_all_sop_data() -> Dict[str, Optional[pd.DataFrame]]:
+def clean_and_transform_data(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Load all S&OP data sources at once.
-    
-    Returns:
-        Dictionary with all dataframes
-    """
-    return {
-        'invoices': load_invoices(),
-        'invoice_lines': load_invoice_lines(),
-        'so_lines': load_so_lines(),
-        'sales_orders': load_sales_orders(),
-        'customers': load_customers(),
-        'items': load_items(),
-        'vendors': load_vendors(),
-        'inventory': load_inventory(),
-        'deals': load_deals(),
-        'so_invoice_merged': load_so_invoice_merged()
-    }
-
-
-def get_unique_sales_reps(sales_orders: pd.DataFrame) -> list:
-    """Get unique sales rep names from sales orders."""
-    if sales_orders is None or 'Rep Master' not in sales_orders.columns:
-        return []
-    return sorted(sales_orders['Rep Master'].dropna().unique().tolist())
-
-
-def get_unique_customers(sales_orders: pd.DataFrame) -> list:
-    """Get unique customer names from sales orders."""
-    if sales_orders is None:
-        return []
-    
-    # Try different customer column names
-    for col in ['Customer', 'Corrected Customer Name', 'Customer Companyname']:
-        if col in sales_orders.columns:
-            return sorted(sales_orders[col].dropna().unique().tolist())
-    return []
-
-
-def get_unique_product_types(items: pd.DataFrame) -> list:
-    """Get unique product types from items."""
-    if items is None or 'Calyx || Product Type' not in items.columns:
-        return []
-    return sorted(items['Calyx || Product Type'].dropna().unique().tolist())
-
-
-def get_unique_skus(items: pd.DataFrame) -> list:
-    """Get unique SKUs from items."""
-    if items is None or 'SKU' not in items.columns:
-        return []
-    return sorted(items['SKU'].dropna().unique().tolist())
-
-
-def get_customers_for_rep(sales_orders: pd.DataFrame, rep: str) -> list:
-    """Get customers associated with a specific sales rep."""
-    if sales_orders is None or 'Rep Master' not in sales_orders.columns:
-        return []
-    
-    filtered = sales_orders[sales_orders['Rep Master'] == rep]
-    
-    for col in ['Customer', 'Corrected Customer Name', 'Customer Companyname']:
-        if col in filtered.columns:
-            return sorted(filtered[col].dropna().unique().tolist())
-    return []
-
-
-def get_skus_for_customer(invoice_lines: pd.DataFrame, customer: str) -> list:
-    """Get SKUs historically ordered by a specific customer."""
-    if invoice_lines is None:
-        return []
-    
-    # Find the customer column
-    customer_col = None
-    for col in ['Correct Customer', 'Customer']:
-        if col in invoice_lines.columns:
-            customer_col = col
-            break
-    
-    if customer_col is None:
-        return []
-    
-    filtered = invoice_lines[invoice_lines[customer_col] == customer]
-    
-    if 'Item' in filtered.columns:
-        return sorted(filtered['Item'].dropna().unique().tolist())
-    return []
-
-
-def prepare_demand_history(invoice_lines: pd.DataFrame, 
-                           groupby_cols: list = ['Item'],
-                           date_col: str = 'Date',
-                           qty_col: str = 'Quantity',
-                           freq: str = 'M') -> pd.DataFrame:
-    """
-    Prepare demand history for forecasting.
+    Clean and transform the raw data from Google Sheets.
     
     Args:
-        invoice_lines: Invoice line data
-        groupby_cols: Columns to group by (e.g., ['Item'], ['Item', 'Customer'])
-        date_col: Name of date column
-        qty_col: Name of quantity column
-        freq: Frequency for resampling ('D', 'W', 'M', 'Q')
+        df: Raw DataFrame from Google Sheets
         
     Returns:
-        DataFrame with demand history aggregated by time period
+        Cleaned and transformed DataFrame
     """
-    if invoice_lines is None or invoice_lines.empty:
-        return pd.DataFrame()
+    # Make a copy to avoid modifying original
+    df = df.copy()
     
-    df = invoice_lines.copy()
+    # Convert date columns
+    date_columns = ['Date Submitted', 'On Time Ship Date']
+    for col in date_columns:
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors='coerce')
     
-    # Ensure date column is datetime
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+    # Convert numeric columns
+    numeric_columns = [
+        'Year', 'Week', 'Total Quantity Affected', 
+        'Cost of Rework', 'Cost Avoided'
+    ]
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Drop rows with invalid dates
-    df = df.dropna(subset=[date_col])
+    # Fill NaN values for cost columns with 0
+    cost_columns = ['Cost of Rework', 'Cost Avoided']
+    for col in cost_columns:
+        if col in df.columns:
+            df[col] = df[col].fillna(0)
     
-    # Set date as index
-    df = df.set_index(date_col)
+    # Clean string columns - strip whitespace
+    string_columns = [
+        'External Or Internal', 'NC Number', 'Priority', 'Sales Order',
+        'Customer', 'Issue Type', 'Employee Responsible', 'Status',
+        'Defect Summary', 'Affected Items', 'Equipment',
+        'First Article Completed', 'First Article Inspector'
+    ]
+    for col in string_columns:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            # Replace 'nan' string with empty string
+            df[col] = df[col].replace('nan', '')
     
-    # Group and resample
-    if groupby_cols:
-        demand = df.groupby(groupby_cols)[qty_col].resample(freq).sum().reset_index()
-    else:
-        demand = df[qty_col].resample(freq).sum().reset_index()
-    
-    demand.columns = groupby_cols + ['Period', 'Demand'] if groupby_cols else ['Period', 'Demand']
-    
-    return demand
-
-
-def prepare_revenue_history(invoice_lines: pd.DataFrame,
-                           groupby_cols: list = None,
-                           date_col: str = 'Date',
-                           amount_col: str = 'Amount',
-                           freq: str = 'M') -> pd.DataFrame:
-    """
-    Prepare revenue history for forecasting.
-    
-    Args:
-        invoice_lines: Invoice line data
-        groupby_cols: Columns to group by
-        date_col: Name of date column
-        amount_col: Name of amount column
-        freq: Frequency for resampling
+    # Add calculated columns
+    if 'Date Submitted' in df.columns:
+        # Calculate age in days
+        df['Age_Days'] = (datetime.now() - df['Date Submitted']).dt.days
+        df['Age_Days'] = df['Age_Days'].fillna(0).astype(int)
         
-    Returns:
-        DataFrame with revenue history aggregated by time period
-    """
-    if invoice_lines is None or invoice_lines.empty:
-        return pd.DataFrame()
-    
-    df = invoice_lines.copy()
-    
-    # Ensure date column is datetime
-    df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-    
-    # Drop rows with invalid dates
-    df = df.dropna(subset=[date_col])
-    
-    # Set date as index
-    df = df.set_index(date_col)
-    
-    # Group and resample
-    if groupby_cols:
-        revenue = df.groupby(groupby_cols)[amount_col].resample(freq).sum().reset_index()
-        revenue.columns = groupby_cols + ['Period', 'Revenue']
-    else:
-        revenue = df[amount_col].resample(freq).sum().reset_index()
-        revenue.columns = ['Period', 'Revenue']
-    
-    return revenue
-
-
-def get_pipeline_by_period(deals: pd.DataFrame, freq: str = 'M') -> pd.DataFrame:
-    """
-    Aggregate pipeline deals by close date period.
-    
-    Args:
-        deals: Deals/pipeline data
-        freq: Frequency for aggregation
+        # Calculate aging bucket
+        df['Aging_Bucket'] = df['Age_Days'].apply(categorize_aging)
         
-    Returns:
-        DataFrame with pipeline aggregated by period
-    """
-    if deals is None or deals.empty:
-        return pd.DataFrame()
-    
-    df = deals.copy()
-    
-    # Ensure close date is datetime
-    df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
-    
-    # Filter for open deals (not closed lost)
-    if 'Close Status' in df.columns:
-        df = df[df['Close Status'] != 'lost']
-    
-    # Drop rows with invalid dates
-    df = df.dropna(subset=['Close Date'])
-    
-    # Set date as index and resample
-    df = df.set_index('Close Date')
-    
-    pipeline = df['Amount'].resample(freq).sum().reset_index()
-    pipeline.columns = ['Period', 'Pipeline_Amount']
-    
-    return pipeline
-
-
-def calculate_lead_times(items: pd.DataFrame, vendors: pd.DataFrame = None) -> pd.DataFrame:
-    """
-    Calculate lead times for items, incorporating vendor terms if available.
-    
-    Args:
-        items: Item master data
-        vendors: Vendor master data
-        
-    Returns:
-        DataFrame with item lead times
-    """
-    if items is None or items.empty:
-        return pd.DataFrame()
-    
-    df = items[['SKU', 'Name', 'Purchase Lead Time', 'Calyx || Product Type']].copy()
-    df = df.rename(columns={'Purchase Lead Time': 'Lead_Time_Days'})
-    
-    # Fill missing lead times with category average or default
-    if df['Lead_Time_Days'].isna().any():
-        # Calculate average by product type
-        avg_by_type = df.groupby('Calyx || Product Type')['Lead_Time_Days'].transform('mean')
-        df['Lead_Time_Days'] = df['Lead_Time_Days'].fillna(avg_by_type)
-        
-        # Fill remaining with overall average or default of 30 days
-        overall_avg = df['Lead_Time_Days'].mean()
-        df['Lead_Time_Days'] = df['Lead_Time_Days'].fillna(overall_avg if pd.notna(overall_avg) else 30)
+        # Extract month and year for aggregations
+        df['Month'] = df['Date Submitted'].dt.to_period('M')
+        df['Quarter'] = df['Date Submitted'].dt.to_period('Q')
+        df['Year_Submitted'] = df['Date Submitted'].dt.year
+        df['Week_Submitted'] = df['Date Submitted'].dt.isocalendar().week
     
     return df
+
+
+def categorize_aging(days: int) -> str:
+    """
+    Categorize age in days into aging buckets.
+    
+    Args:
+        days: Number of days since submission
+        
+    Returns:
+        Aging bucket category string
+    """
+    if pd.isna(days) or days < 0:
+        return "Unknown"
+    elif days <= 30:
+        return "0-30 days"
+    elif days <= 60:
+        return "31-60 days"
+    elif days <= 90:
+        return "61-90 days"
+    else:
+        return "90+ days"
+
+
+def refresh_data() -> None:
+    """
+    Clear the data cache to force a refresh from Google Sheets.
+    """
+    load_nc_data.clear()
+    logger.info("Data cache cleared - will refresh on next load")
+
+
+def get_data_summary(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Generate summary statistics for the NC data.
+    
+    Args:
+        df: NC DataFrame
+        
+    Returns:
+        Dictionary with summary statistics
+    """
+    if df is None or df.empty:
+        return {}
+    
+    summary = {
+        'total_records': len(df),
+        'date_range': {
+            'min': df['Date Submitted'].min() if 'Date Submitted' in df.columns else None,
+            'max': df['Date Submitted'].max() if 'Date Submitted' in df.columns else None
+        },
+        'total_cost_of_rework': df['Cost of Rework'].sum() if 'Cost of Rework' in df.columns else 0,
+        'total_cost_avoided': df['Cost Avoided'].sum() if 'Cost Avoided' in df.columns else 0,
+        'unique_customers': df['Customer'].nunique() if 'Customer' in df.columns else 0,
+        'unique_issue_types': df['Issue Type'].nunique() if 'Issue Type' in df.columns else 0,
+        'status_breakdown': df['Status'].value_counts().to_dict() if 'Status' in df.columns else {}
+    }
+    
+    return summary
+
+
+# For testing/demo purposes - load sample data if sheets not configured
+def load_sample_data() -> pd.DataFrame:
+    """
+    Load sample NC data for testing/demo purposes.
+    
+    Returns:
+        DataFrame with sample NC data
+    """
+    import numpy as np
+    
+    np.random.seed(42)
+    n_records = 100
+    
+    sample_data = {
+        'Year': np.random.choice([2023, 2024, 2025], n_records),
+        'Week': np.random.randint(1, 53, n_records),
+        'External Or Internal': np.random.choice(['External', 'Internal'], n_records),
+        'NC Number': [f'NC-{i:04d}' for i in range(1, n_records + 1)],
+        'Priority': np.random.choice(['High', 'Medium', 'Low'], n_records),
+        'Sales Order': [f'SO-{np.random.randint(10000, 99999)}' for _ in range(n_records)],
+        'Related Ticket Numbers': [f'TKT-{np.random.randint(1000, 9999)}' for _ in range(n_records)],
+        'Customer': np.random.choice([
+            'Customer A', 'Customer B', 'Customer C', 'Customer D',
+            'Customer E', 'Customer F', 'Customer G', 'Customer H'
+        ], n_records),
+        'Issue Type': np.random.choice([
+            'Packaging Defect', 'Print Quality', 'Dimension Error',
+            'Material Issue', 'Shipping Damage', 'Labeling Error',
+            'Color Mismatch', 'Seal Failure'
+        ], n_records),
+        'Employee Responsible': np.random.choice([
+            'John Smith', 'Jane Doe', 'Bob Wilson', 'Alice Brown'
+        ], n_records),
+        'Defect Summary': ['Sample defect description'] * n_records,
+        'Status': np.random.choice([
+            'Open', 'In Progress', 'Pending Review', 'Closed', 'On Hold'
+        ], n_records, p=[0.3, 0.25, 0.15, 0.25, 0.05]),
+        'Affected Items': np.random.choice(['Item A', 'Item B', 'Item C'], n_records),
+        'On Time Ship Date': pd.date_range(end=datetime.now(), periods=n_records, freq='D'),
+        'Total Quantity Affected': np.random.randint(10, 5000, n_records),
+        'Cost of Rework': np.random.uniform(50, 5000, n_records).round(2),
+        'Cost Avoided': np.random.uniform(100, 10000, n_records).round(2),
+        'Date Submitted': pd.date_range(end=datetime.now(), periods=n_records, freq='D'),
+        'Equipment': np.random.choice(['Printer 1', 'Printer 2', 'Cutter A', 'Sealer B'], n_records),
+        'First Article Completed': np.random.choice(['Yes', 'No'], n_records),
+        'First Article Inspector': np.random.choice(['Inspector 1', 'Inspector 2', 'Inspector 3'], n_records)
+    }
+    
+    df = pd.DataFrame(sample_data)
+    return clean_and_transform_data(df)
