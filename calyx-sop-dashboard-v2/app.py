@@ -76,7 +76,7 @@ def inject_custom_css():
     """Inject custom CSS for Calyx brand styling."""
     st.markdown(f"""
     <style>
-        @import url('https://github.com/corytimmons1688/operations-dashboard-v2/blob/a70c27ee8fd496011b353a46dc0c89692ca3ff33/calyx-sop-dashboard-v2/calyx_logo.png');
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap');
         
         :root {{
             --calyx-blue: {CALYX_COLORS['calyx_blue']};
@@ -330,29 +330,22 @@ def render_sop_section():
 
 
 def render_sales_rep_tab():
-    """Render Sales Rep View tab with its specific filters."""
-    st.markdown('<div class="filter-section">', unsafe_allow_html=True)
-    cols = st.columns([2, 2, 2, 2, 1])
-    with cols[0]:
-        st.selectbox("Sales Rep", ["All", "Dave Borkowski", "Jake Lynch", "Brad Sherman", "Lance Mitton", "Alex Gonzalez"], key="sr_rep")
-    with cols[1]:
-        st.selectbox("Customer", ["All"], key="sr_customer")
-    with cols[2]:
-        st.selectbox("SKU", ["All"], key="sr_sku")
-    with cols[3]:
-        st.selectbox("Date Range", ["Last 12 Months", "Last 6 Months", "Last 3 Months", "YTD", "All Time"], key="sr_date")
-    with cols[4]:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.button("Apply", key="sr_apply", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
+    """Render Sales Rep View tab - filters are handled within the view itself."""
     if MODULES_LOADED:
         try:
             render_sales_rep_view()
         except Exception as e:
             st.error(f"Error loading Sales Rep View: {str(e)}")
             with st.expander("🔧 Troubleshooting"):
-                st.markdown("This view requires: Invoice Line Item, _NS_SalesOrders_Data, Raw_Items sheets.")
+                st.markdown("""
+                This view requires the following data sources:
+                - Invoice Line Item (historical demand)
+                - _NS_SalesOrders_Data (customer/rep mapping)
+                - Raw_Items (SKU details with 'Calyx || Product Type')
+                - Deals (pipeline data)
+                
+                Please ensure these sheets exist and are accessible.
+                """)
     else:
         st.warning(f"Module not loaded: {IMPORT_ERROR}")
 
