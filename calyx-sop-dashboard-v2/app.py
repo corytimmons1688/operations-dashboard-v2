@@ -106,20 +106,31 @@ def inject_custom_css():
         section[data-testid="stSidebar"] .stSelectbox label {{ color: rgba(255, 255, 255, 0.9) !important; }}
         
         section[data-testid="stSidebar"] .stRadio > div {{
-            background: rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.08);
             border-radius: 8px;
-            padding: 8px;
+            padding: 12px;
         }}
         
         section[data-testid="stSidebar"] .stRadio > div > label {{
             color: white !important;
-            padding: 10px 15px;
+            padding: 12px 16px;
             border-radius: 6px;
             transition: all 0.2s ease;
+            font-size: 1rem !important;
+            font-weight: 500 !important;
         }}
         
         section[data-testid="stSidebar"] .stRadio > div > label:hover {{
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.15);
+        }}
+        
+        section[data-testid="stSidebar"] .stRadio > div > label > div {{
+            color: white !important;
+            font-weight: 500 !important;
+        }}
+        
+        section[data-testid="stSidebar"] .stRadio > div > label span {{
+            color: white !important;
         }}
         
         .main-header {{
@@ -228,17 +239,20 @@ def render_sidebar():
     """Render the sidebar with Calyx branding and navigation."""
     with st.sidebar:
         st.markdown("""
-        <div style="text-align: center; padding: 1rem 0 2rem 0;">
-            <div style="width: 60px; height: 60px; margin: 0 auto 1rem auto; border: 2px solid rgba(255,255,255,0.3); border-radius: 12px; display: flex; align-items: center; justify-content: center; transform: rotate(45deg);">
-                <div style="transform: rotate(-45deg); font-size: 1.5rem;">📦</div>
+        <div style="text-align: center; padding: 1.5rem 1rem 2rem 1rem;">
+            <img src="https://raw.githubusercontent.com/xxxward/operations-dashboard-v2/main/calyx_logo.png" 
+                 alt="Calyx Containers" 
+                 style="max-width: 160px; margin-bottom: 0.5rem; filter: brightness(0) invert(1);"
+                 onerror="this.style.display='none'; document.getElementById('logo-fallback').style.display='block';">
+            <div id="logo-fallback" style="display: none; text-align: center;">
+                <h1 style="color: white; font-size: 1.5rem; font-weight: 600; margin: 0;">CALYX</h1>
+                <p style="color: rgba(255,255,255,0.7); font-size: 0.75rem; letter-spacing: 3px; margin: 0;">CONTAINERS</p>
             </div>
-            <h1 style="color: white; font-size: 1.5rem; font-weight: 600; margin: 0;">CALYX</h1>
-            <p style="color: rgba(255,255,255,0.6); font-size: 0.75rem; letter-spacing: 3px; margin: 0;">CONTAINERS</p>
         </div>
         """, unsafe_allow_html=True)
         
         st.markdown("---")
-        st.markdown('<p style="color: rgba(255,255,255,0.5); font-size: 0.7rem; letter-spacing: 1px; margin-bottom: 0.5rem;">MAIN MENU</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color: rgba(255,255,255,0.7); font-size: 0.75rem; font-weight: 600; letter-spacing: 2px; margin-bottom: 0.75rem;">MAIN MENU</p>', unsafe_allow_html=True)
         
         section = st.radio(
             "Navigation",
@@ -253,9 +267,9 @@ def render_sidebar():
             st.rerun()
         
         st.markdown("---")
-        st.markdown('<p style="color: rgba(255,255,255,0.5); font-size: 0.7rem; letter-spacing: 1px; margin-bottom: 0.5rem;">DASHBOARD INFO</p>', unsafe_allow_html=True)
-        st.markdown(f'<p style="color: white; font-size: 0.8rem;">Last Refresh: {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>', unsafe_allow_html=True)
-        st.markdown('<p style="color: white; font-size: 0.8rem;">Version: 3.0.0</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color: rgba(255,255,255,0.7); font-size: 0.75rem; font-weight: 600; letter-spacing: 2px; margin-bottom: 0.75rem;">DASHBOARD INFO</p>', unsafe_allow_html=True)
+        st.markdown(f'<p style="color: rgba(255,255,255,0.9); font-size: 0.85rem;">Last Refresh: {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color: rgba(255,255,255,0.9); font-size: 0.85rem;">Version: 3.0.0</p>', unsafe_allow_html=True)
         
         st.markdown("---")
         with st.expander("📚 Help & Documentation"):
