@@ -94,7 +94,9 @@ def render_deliveries_tracking():
     
     # Customer filter
     if 'Customer' in shipments.columns:
-        customers = ['All'] + sorted(shipments['Customer'].dropna().unique().tolist())
+        # Convert to string to handle mixed types
+        customer_list = shipments['Customer'].dropna().astype(str).unique().tolist()
+        customers = ['All'] + sorted(customer_list)
         selected_customer = st.sidebar.selectbox(
             "Customer",
             options=customers,
@@ -457,3 +459,4 @@ def render_delivery_analytics(all_shipments: pd.DataFrame):
         )
         fig.update_layout(height=350)
         st.plotly_chart(fig, use_container_width=True)
+
