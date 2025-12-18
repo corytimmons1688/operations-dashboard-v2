@@ -563,3 +563,4 @@ def get_pipeline_by_period(deals: pd.DataFrame = None,
     
     return pd.DataFrame()
 
+
