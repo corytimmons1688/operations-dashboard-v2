@@ -434,15 +434,147 @@ def generate_revenue_forecast(historical: pd.DataFrame, periods: int = 6) -> pd.
     return pd.DataFrame(forecast_data)
 
 
-def save_forecast_to_sheet(forecast_data: pd.DataFrame, customer: str) -> bool:
-    """Save forecast data to Google Sheets (placeholder for actual implementation)."""
+def save_forecast_to_sheet(forecast_data: Dict, customer: str, rep: str = None) -> bool:
+    """
+    Save forecast data to 'Rep Submitted Forecasts' Google Sheet.
+    
+    Args:
+        forecast_data: Dictionary containing forecast details
+        customer: Customer name
+        rep: Sales rep name (optional)
+    
+    Returns:
+        True if saved successfully, False otherwise
+    """
     try:
-        # This would connect to your Google Sheets API and save the forecast
-        # For now, this is a placeholder that returns success
-        logger.info(f"Forecast saved for customer: {customer}")
+        import gspread
+        from google.oauth2.service_account import Credentials
+        
+        SCOPES = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        # Get credentials
+        if 'service_account' in st.secrets:
+            creds_dict = dict(st.secrets['service_account'])
+        elif 'gcp_service_account' in st.secrets:
+            creds_dict = dict(st.secrets['gcp_service_account'])
+        else:
+            creds_dict = {
+                'type': st.secrets.get('type', 'service_account'),
+                'project_id': st.secrets.get('project_id'),
+                'private_key_id': st.secrets.get('private_key_id'),
+                'private_key': st.secrets.get('private_key'),
+                'client_email': st.secrets.get('client_email'),
+                'client_id': st.secrets.get('client_id'),
+                'auth_uri': st.secrets.get('auth_uri'),
+                'token_uri': st.secrets.get('token_uri'),
+            }
+        
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        client = gspread.authorize(credentials)
+        
+        # Get spreadsheet
+        spreadsheet_id = st.secrets.get('SPREADSHEET_ID', st.secrets.get('spreadsheet_id', ''))
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        
+        # Get or create the forecast sheet
+        try:
+            worksheet = spreadsheet.worksheet('Rep Submitted Forecasts')
+        except gspread.exceptions.WorksheetNotFound:
+            # Create the sheet with headers if it doesn't exist
+            worksheet = spreadsheet.add_worksheet(title='Rep Submitted Forecasts', rows=1000, cols=20)
+            headers = [
+                'Submission Date',
+                'Submission Time', 
+                'Sales Rep',
+                'Customer',
+                'Date Range',
+                'Item',
+                'Product Type',
+                'Historical Units',
+                'Historical Revenue',
+                'Projected Units',
+                'Projected Revenue',
+                'Pipeline Deals Included',
+                'Pipeline Total',
+                'Notes'
+            ]
+            worksheet.update('A1:N1', [headers])
+            # Format header row
+            worksheet.format('A1:N1', {
+                'backgroundColor': {'red': 0, 'green': 0.2, 'blue': 0.63},
+                'textFormat': {'bold': True, 'foregroundColor': {'red': 1, 'green': 1, 'blue': 1}}
+            })
+        
+        # Prepare rows to append
+        submission_date = datetime.now().strftime('%Y-%m-%d')
+        submission_time = datetime.now().strftime('%H:%M:%S')
+        
+        rows_to_add = []
+        
+        # Get demand items from forecast data
+        demand_items = forecast_data.get('demand_items', {})
+        
+        if demand_items and isinstance(demand_items, dict):
+            # Convert dict back to dataframe if needed
+            if 'Item' in demand_items:
+                items = demand_items.get('Item', {})
+                product_types = demand_items.get('Product Type', {})
+                units = demand_items.get('Units', {})
+                revenue = demand_items.get('Revenue', {})
+                proj_units = demand_items.get('Projected Units', {})
+                proj_revenue = demand_items.get('Projected Revenue', {})
+                
+                for idx in items.keys():
+                    row = [
+                        submission_date,
+                        submission_time,
+                        rep or forecast_data.get('rep', 'Unknown'),
+                        customer,
+                        forecast_data.get('date_range', 'Unknown'),
+                        items.get(idx, ''),
+                        product_types.get(idx, ''),
+                        units.get(idx, 0),
+                        revenue.get(idx, 0),
+                        proj_units.get(idx, 0),
+                        proj_revenue.get(idx, 0),
+                        forecast_data.get('selected_deals_count', 0),
+                        forecast_data.get('selected_deals_total', 0),
+                        ''
+                    ]
+                    rows_to_add.append(row)
+        
+        # If no items, add a summary row
+        if not rows_to_add:
+            rows_to_add.append([
+                submission_date,
+                submission_time,
+                rep or forecast_data.get('rep', 'Unknown'),
+                customer,
+                forecast_data.get('date_range', 'Unknown'),
+                'SUMMARY',
+                '',
+                '',
+                forecast_data.get('total_historical_revenue', 0),
+                '',
+                forecast_data.get('total_projected_revenue', 0),
+                forecast_data.get('selected_deals_count', 0),
+                forecast_data.get('selected_deals_total', 0),
+                'Summary row - no item details'
+            ])
+        
+        # Append rows to sheet
+        if rows_to_add:
+            worksheet.append_rows(rows_to_add, value_input_option='USER_ENTERED')
+        
+        logger.info(f"Forecast saved for customer: {customer} - {len(rows_to_add)} rows added")
         return True
+        
     except Exception as e:
-        logger.error(f"Error saving forecast: {e}")
+        logger.error(f"Error saving forecast to sheet: {e}")
+        st.error(f"Error saving: {str(e)}")
         return False
 
 
@@ -865,19 +997,39 @@ def render_sales_rep_view():
         
         with col2:
             if st.button("📤 Submit Forecast", type="primary", use_container_width=True):
+                # Count selected deals
+                selected_deals_count = sum(1 for v in st.session_state.selected_deals.values() if v)
+                
+                # Calculate totals
+                total_historical = 0
+                total_projected = 0
+                if not demand_df.empty:
+                    if 'Revenue' in demand_df.columns:
+                        total_historical = demand_df['Revenue'].sum()
+                    if 'Projected Revenue' in edited_df.columns:
+                        total_projected = edited_df['Projected Revenue'].sum()
+                
                 # Prepare forecast data
                 forecast_data = {
                     'customer': selected_customer,
+                    'rep': selected_rep if selected_rep != "All" else "Unassigned",
                     'date_submitted': datetime.now().isoformat(),
                     'date_range': date_range,
                     'demand_items': edited_df.to_dict() if not demand_df.empty else {},
+                    'selected_deals_count': selected_deals_count,
                     'selected_deals_total': selected_deals_total,
+                    'total_historical_revenue': total_historical,
+                    'total_projected_revenue': total_projected,
                     'historical_revenue': historical_revenue.to_dict() if not historical_revenue.empty else {},
                     'forecast_revenue': forecast_revenue.to_dict() if not forecast_revenue.empty else {}
                 }
                 
                 # Save forecast
-                success = save_forecast_to_sheet(pd.DataFrame([forecast_data]), selected_customer)
+                success = save_forecast_to_sheet(
+                    forecast_data, 
+                    selected_customer,
+                    rep=selected_rep if selected_rep != "All" else None
+                )
                 
                 if success:
                     st.success(f"✅ Forecast submitted successfully for {selected_customer}!")
@@ -896,4 +1048,5 @@ def render_sales_rep_view():
                     mime="text/csv",
                     use_container_width=True
                 )
+
 
