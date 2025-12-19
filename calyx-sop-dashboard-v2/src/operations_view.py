@@ -744,3 +744,4 @@ def render_sku_deep_dive(filtered, item_col, amount_col, qty_col, date_col, prod
                 
         except Exception as e:
             st.error(f"SKU analysis error: {e}")
+
