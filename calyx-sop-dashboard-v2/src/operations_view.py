@@ -209,32 +209,54 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
     """Render Demand vs Pipeline overlay chart with 4 lines."""
     
     st.markdown("### 📈 Demand Forecast vs Pipeline Overlay")
-    st.markdown("Compare historical demand, forecasted demand, deals pipeline, and revenue forecast")
+    st.markdown("Compare historical demand, demand forecast, deals pipeline, and revenue forecast plan")
     
     if filtered.empty:
         st.warning("No data available for the selected filters.")
         return
     
-    # Load Revenue Forecast from Google Sheet
+    # Load Top-Down Revenue Forecast from Google Sheet
     try:
         from .sop_data_loader import (
-            get_item_level_forecast, get_forecast_by_period, load_revenue_forecast
+            get_topdown_item_forecast, get_revenue_forecast_by_period, 
+            load_revenue_forecast, calculate_item_unit_mix_rolling12,
+            calculate_item_asp_rolling12
         )
+        
         revenue_forecast_raw = load_revenue_forecast()
-        revenue_forecast_by_period = get_forecast_by_period(category=category, freq=freq)
+        revenue_forecast_by_period = get_revenue_forecast_by_period(category=category)
+        item_forecast = get_topdown_item_forecast()
+        
     except Exception as e:
         st.warning(f"Could not load Revenue Forecast: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         revenue_forecast_raw = None
         revenue_forecast_by_period = pd.DataFrame()
+        item_forecast = pd.DataFrame()
     
     # Show Revenue Forecast debug info
-    with st.expander("📊 Revenue Forecast Data"):
+    with st.expander("📊 Top-Down Forecast Data"):
         if revenue_forecast_raw is not None and not revenue_forecast_raw.empty:
-            st.write(f"Loaded {len(revenue_forecast_raw)} rows from Revenue Forecast sheet")
-            st.write("Columns:", list(revenue_forecast_raw.columns))
+            st.write("**Revenue Forecast (Category Level)**")
+            st.write(f"Loaded {len(revenue_forecast_raw)} categories from 'Revenue forecast' sheet")
             st.dataframe(revenue_forecast_raw.head(10), use_container_width=True)
         else:
             st.info("No Revenue Forecast data loaded. Add a 'Revenue forecast' tab to your Google Sheet.")
+        
+        if not item_forecast.empty:
+            st.write("---")
+            st.write("**Item-Level Allocation (Top-Down)**")
+            st.write(f"Allocated to {len(item_forecast)} item-period combinations")
+            
+            # Show summary by category
+            cat_summary = item_forecast.groupby('Category').agg({
+                'Forecast_Revenue': 'sum',
+                'Forecast_Units': 'sum',
+                'Item': 'nunique'
+            }).reset_index()
+            cat_summary.columns = ['Category', 'Total Forecast Revenue', 'Total Forecast Units', 'Items']
+            st.dataframe(cat_summary, use_container_width=True, hide_index=True)
     
     # Prepare historical demand by period
     if date_col and amount_col:
@@ -294,7 +316,7 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
                     st.metric("Revenue Forecast", f"${total_revenue_forecast:,.0f}")
                 
                 # Show item-level breakdown
-                render_item_level_forecast(category)
+                render_item_level_forecast(category, item_forecast)
                 
         except Exception as e:
             st.error(f"Error creating demand chart: {e}")
@@ -304,12 +326,12 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
         st.warning("Required columns (Date, Amount) not found.")
 
 
-def render_item_level_forecast(category):
-    """Show item-level forecast breakdown."""
+def render_item_level_forecast(category, item_forecast=None):
+    """Show item-level forecast breakdown from top-down allocation."""
     try:
-        from .sop_data_loader import get_item_level_forecast
-        
-        item_forecast = get_item_level_forecast()
+        if item_forecast is None or item_forecast.empty:
+            from .sop_data_loader import get_topdown_item_forecast
+            item_forecast = get_topdown_item_forecast()
         
         if item_forecast.empty:
             return
@@ -322,30 +344,42 @@ def render_item_level_forecast(category):
             return
         
         st.markdown("---")
-        st.markdown("### 📋 Item-Level Forecast Breakdown")
-        st.markdown("*Category forecast allocated to items based on historical mix and ASP*")
+        st.markdown("### 📋 Top-Down Item Forecast Allocation")
+        st.markdown("*Category revenue forecast allocated to items based on rolling 12-month unit mix and ASP*")
         
-        # Aggregate by item
+        # Aggregate by item (sum across periods)
         by_item = item_forecast.groupby(['Item', 'Category']).agg({
             'Forecast_Revenue': 'sum',
             'Forecast_Units': 'sum',
-            'Mix_Pct': 'first'
+            'Mix_Pct': 'first',
+            'ASP': 'first'
         }).reset_index()
         
-        by_item = by_item.sort_values('Forecast_Revenue', ascending=False).head(20)
+        by_item = by_item.sort_values('Forecast_Revenue', ascending=False).head(25)
         
         # Format for display
         display_df = by_item.copy()
         display_df['Forecast_Revenue'] = display_df['Forecast_Revenue'].apply(lambda x: f"${x:,.0f}")
         display_df['Forecast_Units'] = display_df['Forecast_Units'].apply(lambda x: f"{x:,.0f}")
         display_df['Mix_Pct'] = display_df['Mix_Pct'].apply(lambda x: f"{x:.1f}%")
+        display_df['ASP'] = display_df['ASP'].apply(lambda x: f"${x:.2f}")
         
-        display_df.columns = ['Item', 'Category', 'Forecast Revenue', 'Forecast Units', 'Mix %']
+        display_df.columns = ['Item', 'Category', 'Forecast Revenue', 'Forecast Units', 'Unit Mix %', 'ASP']
         
         st.dataframe(display_df, use_container_width=True, hide_index=True)
         
+        # Summary totals
+        total_rev = by_item['Forecast_Revenue'].sum() if 'Forecast_Revenue' in by_item.columns else 0
+        total_units = by_item['Forecast_Units'].sum() if 'Forecast_Units' in by_item.columns else 0
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Forecast Revenue", f"${total_rev:,.0f}")
+        with col2:
+            st.metric("Total Forecast Units", f"{total_units:,.0f}")
+        
     except Exception as e:
-        pass  # Silently fail if item-level forecast not available
+        st.warning(f"Could not display item forecast: {e}")
 
 
 def generate_advanced_forecast(history_df, horizon, freq):
