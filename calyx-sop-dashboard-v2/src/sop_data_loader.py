@@ -818,6 +818,7 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
     """
     Calculate historical percentage mix of items by UNITS within each category.
     Uses Sales Order Lines data with Quantity Ordered and Sales Manager Approval Date.
+    Joins with Items table to get Product Type (Category).
     Rolling 12 months only.
     
     Returns DataFrame with columns: Category, Item, Total_Units, Mix_Pct
@@ -826,7 +827,8 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
         sales_orders = load_sales_orders()
     
     if sales_orders is None or sales_orders.empty:
-        return pd.DataFrame()
+        # Fall back to Invoice Lines if Sales Orders not available
+        return calculate_item_unit_mix_from_invoices()
     
     df = sales_orders.copy()
     
@@ -834,11 +836,39 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
     if df.columns.duplicated().any():
         df = df.loc[:, ~df.columns.duplicated()]
     
-    # Find required columns
+    # Load Items to get Product Type mapping
+    items_df = load_items()
+    item_to_category = {}
+    
+    if items_df is not None and not items_df.empty:
+        # Handle duplicate columns in items
+        if items_df.columns.duplicated().any():
+            items_df = items_df.loc[:, ~items_df.columns.duplicated()]
+        
+        # Find item and category columns in Items table
+        item_col_items = None
+        cat_col_items = None
+        
+        for col in items_df.columns:
+            col_lower = str(col).lower()
+            if item_col_items is None and col_lower in ['item', 'sku', 'item name', 'name']:
+                item_col_items = col
+            if cat_col_items is None:
+                if 'product type' in col_lower or 'calyx' in col_lower or 'category' in col_lower:
+                    cat_col_items = col
+        
+        if item_col_items and cat_col_items:
+            # Create mapping
+            for _, row in items_df.iterrows():
+                item = row[item_col_items]
+                cat = row[cat_col_items]
+                if pd.notna(item) and pd.notna(cat):
+                    item_to_category[str(item).strip()] = str(cat).strip()
+    
+    # Find required columns in Sales Orders
     date_col = None
     qty_col = None
     item_col = None
-    cat_col = None
     
     for col in df.columns:
         col_lower = str(col).lower()
@@ -863,14 +893,10 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
         # Item column
         if item_col is None and col_lower in ['item', 'sku', 'item name']:
             item_col = col
-        
-        # Category column
-        if cat_col is None:
-            if 'product type' in col_lower or 'calyx' in col_lower or 'category' in col_lower:
-                cat_col = col
     
     if item_col is None or qty_col is None:
-        return pd.DataFrame()
+        # Fall back to Invoice Lines
+        return calculate_item_unit_mix_from_invoices()
     
     # Get series safely
     def safe_get_series(dataframe, column):
@@ -883,21 +909,115 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
     
     item_series = safe_get_series(df, item_col)
     qty_series = safe_get_series(df, qty_col)
-    cat_series = safe_get_series(df, cat_col) if cat_col else None
     date_series = safe_get_series(df, date_col) if date_col else None
     
     if item_series is None or qty_series is None:
+        return calculate_item_unit_mix_from_invoices()
+    
+    temp_df = pd.DataFrame({
+        'Item': item_series.astype(str).str.strip(),
+        'Quantity': pd.to_numeric(qty_series, errors='coerce').fillna(0)
+    })
+    
+    # Map items to categories using Items table
+    temp_df['Category'] = temp_df['Item'].map(item_to_category)
+    temp_df['Category'] = temp_df['Category'].fillna('Unknown')
+    
+    # Filter to rolling 12 months
+    if date_series is not None:
+        temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
+        cutoff_date = datetime.now() - timedelta(days=365)
+        temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+    
+    if temp_df.empty:
+        return calculate_item_unit_mix_from_invoices()
+    
+    # Remove Unknown categories (items without mapping)
+    temp_df = temp_df[temp_df['Category'] != 'Unknown']
+    
+    if temp_df.empty:
+        return calculate_item_unit_mix_from_invoices()
+    
+    # Calculate units by category and item
+    by_cat_item = temp_df.groupby(['Category', 'Item'])['Quantity'].sum().reset_index()
+    by_cat_item.columns = ['Category', 'Item', 'Total_Units']
+    
+    # Calculate category totals
+    cat_totals = temp_df.groupby('Category')['Quantity'].sum().reset_index()
+    cat_totals.columns = ['Category', 'Category_Total_Units']
+    
+    # Merge and calculate percentage
+    by_cat_item = by_cat_item.merge(cat_totals, on='Category')
+    by_cat_item['Mix_Pct'] = np.where(
+        by_cat_item['Category_Total_Units'] > 0,
+        (by_cat_item['Total_Units'] / by_cat_item['Category_Total_Units'] * 100),
+        0
+    )
+    
+    return by_cat_item[['Category', 'Item', 'Total_Units', 'Mix_Pct']]
+
+
+def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
+    """
+    Fallback: Calculate item unit mix from Invoice Lines if Sales Orders don't work.
+    """
+    invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find columns
+    item_col = None
+    qty_col = None
+    cat_col = None
+    date_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if item_col is None and col_lower in ['item', 'sku']:
+            item_col = col
+        if qty_col is None and ('qty' in col_lower or 'quantity' in col_lower):
+            qty_col = col
+        if cat_col is None and ('product type' in col_lower or 'calyx' in col_lower):
+            cat_col = col
+        if date_col is None and 'date' in col_lower:
+            date_col = col
+    
+    if item_col is None or cat_col is None:
+        return pd.DataFrame()
+    
+    # Get series safely
+    def safe_get_series(dataframe, column):
+        if column not in dataframe.columns:
+            return None
+        result = dataframe.loc[:, column]
+        if isinstance(result, pd.DataFrame):
+            return result.iloc[:, 0]
+        return result
+    
+    item_series = safe_get_series(df, item_col)
+    cat_series = safe_get_series(df, cat_col)
+    qty_series = safe_get_series(df, qty_col) if qty_col else None
+    date_series = safe_get_series(df, date_col) if date_col else None
+    
+    if item_series is None or cat_series is None:
         return pd.DataFrame()
     
     temp_df = pd.DataFrame({
         'Item': item_series,
-        'Quantity': pd.to_numeric(qty_series, errors='coerce').fillna(0)
+        'Category': cat_series
     })
     
-    if cat_series is not None:
-        temp_df['Category'] = cat_series
+    if qty_series is not None:
+        temp_df['Quantity'] = pd.to_numeric(qty_series, errors='coerce').fillna(1)
     else:
-        temp_df['Category'] = 'Unknown'
+        temp_df['Quantity'] = 1  # Count rows as units if no quantity
     
     # Filter to rolling 12 months
     if date_series is not None:
@@ -1022,9 +1142,9 @@ def calculate_item_asp_rolling12(invoice_lines: pd.DataFrame = None) -> pd.DataF
     return by_item
 
 
-def allocate_topdown_forecast(revenue_forecast: pd.DataFrame,
-                              item_mix: pd.DataFrame,
-                              item_asp: pd.DataFrame) -> pd.DataFrame:
+def allocate_topdown_forecast(revenue_forecast: pd.DataFrame = None,
+                              item_mix: pd.DataFrame = None,
+                              item_asp: pd.DataFrame = None) -> pd.DataFrame:
     """
     Top-down allocation of category-level revenue forecast to item level.
     
@@ -1061,14 +1181,14 @@ def allocate_topdown_forecast(revenue_forecast: pd.DataFrame,
         if cat_items.empty:
             category_lower = category.lower()
             for avail_cat in available_categories:
-                if avail_cat.lower() == category_lower:
+                if str(avail_cat).lower() == category_lower:
                     cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
                     break
         
         # If still no match, try partial match
         if cat_items.empty:
             for avail_cat in available_categories:
-                if category_lower in avail_cat.lower() or avail_cat.lower() in category_lower:
+                if category_lower in str(avail_cat).lower() or str(avail_cat).lower() in category_lower:
                     cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
                     break
         
@@ -1129,7 +1249,7 @@ def get_topdown_item_forecast() -> pd.DataFrame:
     Main function to create top-down item-level forecast.
     
     1. Load Revenue Forecast (category level by month)
-    2. Calculate rolling 12-month item unit mix from Sales Orders
+    2. Calculate rolling 12-month item unit mix from Sales Orders (joined with Items for category)
     3. Calculate rolling 12-month ASP from Invoice Lines
     4. Allocate category forecast → items
     
@@ -1145,6 +1265,7 @@ def get_topdown_item_forecast() -> pd.DataFrame:
         return pd.DataFrame()
     
     # Calculate item mix from Sales Orders (by units, rolling 12 months)
+    # This will try Sales Orders first, then fall back to Invoice Lines
     item_mix = calculate_item_unit_mix_rolling12()
     
     # Calculate ASP from Invoice Lines (rolling 12 months)
@@ -1155,15 +1276,23 @@ def get_topdown_item_forecast() -> pd.DataFrame:
     mix_categories = item_mix['Category'].unique().tolist() if not item_mix.empty and 'Category' in item_mix.columns else []
     
     # Store debug info for display
-    if 'forecast_debug' not in st.session_state:
-        st.session_state.forecast_debug = {}
-    st.session_state.forecast_debug['forecast_categories'] = forecast_categories
-    st.session_state.forecast_debug['mix_categories'] = mix_categories
-    st.session_state.forecast_debug['item_mix_rows'] = len(item_mix) if not item_mix.empty else 0
-    st.session_state.forecast_debug['item_asp_rows'] = len(item_asp) if not item_asp.empty else 0
+    try:
+        if 'forecast_debug' not in st.session_state:
+            st.session_state.forecast_debug = {}
+        st.session_state.forecast_debug['forecast_categories'] = forecast_categories
+        st.session_state.forecast_debug['mix_categories'] = mix_categories
+        st.session_state.forecast_debug['item_mix_rows'] = len(item_mix) if not item_mix.empty else 0
+        st.session_state.forecast_debug['item_asp_rows'] = len(item_asp) if not item_asp.empty else 0
+        st.session_state.forecast_debug['revenue_forecast_rows'] = len(revenue_forecast)
+    except:
+        pass  # Ignore session state errors
     
     # Allocate forecast to items
-    item_forecast = allocate_topdown_forecast(revenue_forecast, item_mix, item_asp)
+    item_forecast = allocate_topdown_forecast(
+        revenue_forecast=revenue_forecast, 
+        item_mix=item_mix, 
+        item_asp=item_asp
+    )
     
     return item_forecast
 
