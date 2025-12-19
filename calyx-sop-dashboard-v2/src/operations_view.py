@@ -206,14 +206,35 @@ def render_operations_view():
 
 
 def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, category):
-    """Render Demand vs Pipeline overlay chart."""
+    """Render Demand vs Pipeline overlay chart with 4 lines."""
     
     st.markdown("### 📈 Demand Forecast vs Pipeline Overlay")
-    st.markdown("Compare historical demand, forecasted demand, and sales pipeline")
+    st.markdown("Compare historical demand, forecasted demand, deals pipeline, and revenue forecast")
     
     if filtered.empty:
         st.warning("No data available for the selected filters.")
         return
+    
+    # Load Revenue Forecast from Google Sheet
+    try:
+        from .sop_data_loader import (
+            get_item_level_forecast, get_forecast_by_period, load_revenue_forecast
+        )
+        revenue_forecast_raw = load_revenue_forecast()
+        revenue_forecast_by_period = get_forecast_by_period(category=category, freq=freq)
+    except Exception as e:
+        st.warning(f"Could not load Revenue Forecast: {e}")
+        revenue_forecast_raw = None
+        revenue_forecast_by_period = pd.DataFrame()
+    
+    # Show Revenue Forecast debug info
+    with st.expander("📊 Revenue Forecast Data"):
+        if revenue_forecast_raw is not None and not revenue_forecast_raw.empty:
+            st.write(f"Loaded {len(revenue_forecast_raw)} rows from Revenue Forecast sheet")
+            st.write("Columns:", list(revenue_forecast_raw.columns))
+            st.dataframe(revenue_forecast_raw.head(10), use_container_width=True)
+        else:
+            st.info("No Revenue Forecast data loaded. Add a 'Revenue forecast' tab to your Google Sheet.")
     
     # Prepare historical demand by period
     if date_col and amount_col:
@@ -233,10 +254,10 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
                 demand_history['Period'] = demand_history['Period'].astype(str)
                 demand_history = demand_history.sort_values('Period')
                 
-                # Generate simple forecast
-                forecast_df = generate_simple_forecast(demand_history, horizon, freq)
+                # Generate demand forecast (statistical/ML based)
+                demand_forecast_df = generate_advanced_forecast(demand_history, horizon, freq)
                 
-                # Get pipeline data
+                # Get pipeline/deals data
                 pipeline_df = pd.DataFrame()
                 if deals is not None and not deals.empty:
                     try:
@@ -245,26 +266,35 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
                     except Exception as e:
                         st.warning(f"Pipeline data error: {e}")
                 
-                # Create overlay chart
-                fig = create_overlay_chart(demand_history, forecast_df, pipeline_df, category)
+                # Create overlay chart with 4 lines
+                fig = create_four_line_chart(
+                    demand_history, 
+                    demand_forecast_df, 
+                    pipeline_df, 
+                    revenue_forecast_by_period,
+                    category
+                )
                 st.plotly_chart(fig, use_container_width=True)
                 
                 # Summary metrics
                 col1, col2, col3, col4 = st.columns(4)
                 
                 total_historical = demand_history['Amount'].sum()
-                total_forecast = forecast_df['Forecast'].sum() if not forecast_df.empty else 0
+                total_demand_forecast = demand_forecast_df['Forecast'].sum() if not demand_forecast_df.empty else 0
                 total_pipeline = pipeline_df['Pipeline Value'].sum() if not pipeline_df.empty else 0
-                coverage = (total_pipeline / total_forecast * 100) if total_forecast > 0 else 0
+                total_revenue_forecast = revenue_forecast_by_period['Forecast_Revenue'].sum() if not revenue_forecast_by_period.empty else 0
                 
                 with col1:
-                    st.metric("Historical Demand (LTM)", f"${total_historical:,.0f}")
+                    st.metric("Historical Demand", f"${total_historical:,.0f}")
                 with col2:
-                    st.metric(f"Forecast ({horizon}mo)", f"${total_forecast:,.0f}")
+                    st.metric("Demand Forecast", f"${total_demand_forecast:,.0f}")
                 with col3:
-                    st.metric("Pipeline Value", f"${total_pipeline:,.0f}")
+                    st.metric("Pipeline/Deals", f"${total_pipeline:,.0f}")
                 with col4:
-                    st.metric("Pipeline Coverage", f"{coverage:.1f}%")
+                    st.metric("Revenue Forecast", f"${total_revenue_forecast:,.0f}")
+                
+                # Show item-level breakdown
+                render_item_level_forecast(category)
                 
         except Exception as e:
             st.error(f"Error creating demand chart: {e}")
@@ -274,29 +304,88 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
         st.warning("Required columns (Date, Amount) not found.")
 
 
-def generate_simple_forecast(history_df, horizon, freq):
-    """Generate simple forecast based on historical average."""
+def render_item_level_forecast(category):
+    """Show item-level forecast breakdown."""
+    try:
+        from .sop_data_loader import get_item_level_forecast
+        
+        item_forecast = get_item_level_forecast()
+        
+        if item_forecast.empty:
+            return
+        
+        # Filter by category if specified
+        if category and category != 'All':
+            item_forecast = item_forecast[item_forecast['Category'] == category]
+        
+        if item_forecast.empty:
+            return
+        
+        st.markdown("---")
+        st.markdown("### 📋 Item-Level Forecast Breakdown")
+        st.markdown("*Category forecast allocated to items based on historical mix and ASP*")
+        
+        # Aggregate by item
+        by_item = item_forecast.groupby(['Item', 'Category']).agg({
+            'Forecast_Revenue': 'sum',
+            'Forecast_Units': 'sum',
+            'Mix_Pct': 'first'
+        }).reset_index()
+        
+        by_item = by_item.sort_values('Forecast_Revenue', ascending=False).head(20)
+        
+        # Format for display
+        display_df = by_item.copy()
+        display_df['Forecast_Revenue'] = display_df['Forecast_Revenue'].apply(lambda x: f"${x:,.0f}")
+        display_df['Forecast_Units'] = display_df['Forecast_Units'].apply(lambda x: f"{x:,.0f}")
+        display_df['Mix_Pct'] = display_df['Mix_Pct'].apply(lambda x: f"{x:.1f}%")
+        
+        display_df.columns = ['Item', 'Category', 'Forecast Revenue', 'Forecast Units', 'Mix %']
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        
+    except Exception as e:
+        pass  # Silently fail if item-level forecast not available
+
+
+def generate_advanced_forecast(history_df, horizon, freq):
+    """Generate demand forecast using moving average with trend."""
     if history_df.empty:
         return pd.DataFrame()
     
     try:
-        # Use last 6 periods average with growth
+        # Use weighted moving average of last 6 periods
         recent = history_df.tail(6)
-        avg_value = recent['Amount'].mean()
-        growth_rate = 0.02  # 2% monthly growth assumption
+        
+        if len(recent) < 2:
+            avg_value = recent['Amount'].mean() if not recent.empty else 0
+            growth_rate = 0.02
+        else:
+            # Calculate trend from recent data
+            values = recent['Amount'].values
+            weights = np.array([1, 2, 3, 4, 5, 6])[:len(values)]
+            weights = weights / weights.sum()
+            
+            weighted_avg = np.sum(values * weights)
+            
+            # Calculate growth rate from trend
+            if len(values) >= 2 and values[0] > 0:
+                growth_rate = (values[-1] / values[0]) ** (1/len(values)) - 1
+                growth_rate = max(min(growth_rate, 0.15), -0.10)  # Cap between -10% and +15%
+            else:
+                growth_rate = 0.02
+            
+            avg_value = weighted_avg
         
         # Get last period and generate future periods
         last_period_str = history_df['Period'].iloc[-1]
         
-        # Parse the period string to get a date
         try:
-            # Try parsing as period (e.g., "2025-07")
             last_date = pd.to_datetime(last_period_str)
         except:
-            # If that fails, try to parse differently
             last_date = datetime.now()
         
-        # Generate future periods based on frequency
+        # Generate future periods
         forecast_data = []
         for i in range(1, horizon + 1):
             if freq == 'M':
@@ -327,54 +416,66 @@ def generate_simple_forecast(history_df, horizon, freq):
         return pd.DataFrame()
 
 
-def create_overlay_chart(demand_df, forecast_df, pipeline_df, category):
-    """Create the demand vs pipeline overlay chart."""
+def create_four_line_chart(demand_df, demand_forecast_df, pipeline_df, revenue_forecast_df, category):
+    """Create overlay chart with Historical, Demand Forecast, Pipeline, and Revenue Forecast."""
     
     fig = go.Figure()
     
     title_suffix = f" - {category}" if category != "All" else " - All Categories"
     
-    # Historical demand bars
+    # 1. Historical demand (blue bars)
     if not demand_df.empty:
         fig.add_trace(go.Bar(
             x=demand_df['Period'],
             y=demand_df['Amount'],
             name='Historical Demand',
-            marker_color='#0033A1'
+            marker_color='#0033A1',
+            opacity=0.7
         ))
     
-    # Forecast line
-    if not forecast_df.empty:
-        # Extend x-axis with forecast periods
+    # 2. Demand Forecast (green dashed line) - Statistical/ML forecast
+    if not demand_forecast_df.empty:
         fig.add_trace(go.Scatter(
-            x=forecast_df['Period'],
-            y=forecast_df['Forecast'],
+            x=demand_forecast_df['Period'],
+            y=demand_forecast_df['Forecast'],
             mode='lines+markers',
             name='Demand Forecast',
-            line=dict(color='#22C55E', width=2, dash='dash'),
-            marker=dict(size=8)
+            line=dict(color='#22C55E', width=3, dash='dash'),
+            marker=dict(size=8, symbol='circle')
         ))
         
         # Confidence interval
         fig.add_trace(go.Scatter(
-            x=forecast_df['Period'].tolist() + forecast_df['Period'].tolist()[::-1],
-            y=forecast_df['Upper'].tolist() + forecast_df['Lower'].tolist()[::-1],
+            x=demand_forecast_df['Period'].tolist() + demand_forecast_df['Period'].tolist()[::-1],
+            y=demand_forecast_df['Upper'].tolist() + demand_forecast_df['Lower'].tolist()[::-1],
             fill='toself',
-            fillcolor='rgba(34, 197, 94, 0.2)',
+            fillcolor='rgba(34, 197, 94, 0.15)',
             line=dict(color='rgba(255,255,255,0)'),
-            name='Forecast CI (95%)',
-            showlegend=True
+            name='Forecast CI (85%)',
+            showlegend=True,
+            hoverinfo='skip'
         ))
     
-    # Pipeline overlay
+    # 3. Pipeline/Deals (orange line)
     if not pipeline_df.empty:
         fig.add_trace(go.Scatter(
             x=pipeline_df['Period'],
             y=pipeline_df['Pipeline Value'],
             mode='lines+markers',
-            name='Sales Pipeline',
-            line=dict(color='#F59E0B', width=2),
+            name='Deals Pipeline',
+            line=dict(color='#F59E0B', width=3),
             marker=dict(size=8, symbol='diamond')
+        ))
+    
+    # 4. Revenue Forecast (purple line) - From Google Sheet
+    if not revenue_forecast_df.empty:
+        fig.add_trace(go.Scatter(
+            x=revenue_forecast_df['Period'],
+            y=revenue_forecast_df['Forecast_Revenue'],
+            mode='lines+markers',
+            name='Revenue Forecast (Plan)',
+            line=dict(color='#8B5CF6', width=3),
+            marker=dict(size=10, symbol='star')
         ))
     
     fig.update_layout(
@@ -382,10 +483,19 @@ def create_overlay_chart(demand_df, forecast_df, pipeline_df, category):
         xaxis_title='Period',
         yaxis_title='Revenue ($)',
         hovermode='x unified',
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-        height=500,
+        legend=dict(
+            orientation='h', 
+            yanchor='bottom', 
+            y=1.02, 
+            xanchor='right', 
+            x=1
+        ),
+        height=550,
         barmode='group'
     )
+    
+    # Format y-axis with dollar amounts
+    fig.update_yaxes(tickformat='$,.0f')
     
     return fig
 
