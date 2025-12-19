@@ -565,6 +565,14 @@ def prepare_demand_history(invoice_lines: pd.DataFrame = None,
     # Handle freq as alias for period
     if freq is not None:
         period = freq
+    
+    # Map common frequency strings to pandas period strings
+    freq_map = {
+        'MS': 'M', 'ME': 'M', 'QS': 'Q', 'QE': 'Q', 
+        'YS': 'Y', 'YE': 'Y', 'W': 'W', 'D': 'D',
+        'M': 'M', 'Q': 'Q', 'Y': 'Y',
+    }
+    period = freq_map.get(period, 'M')
         
     if invoice_lines is None:
         invoice_lines = load_invoice_lines()
@@ -621,6 +629,14 @@ def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
     # Handle freq as alias for period
     if freq is not None:
         period = freq
+    
+    # Map common frequency strings to pandas period strings
+    freq_map = {
+        'MS': 'M', 'ME': 'M', 'QS': 'Q', 'QE': 'Q', 
+        'YS': 'Y', 'YE': 'Y', 'W': 'W', 'D': 'D',
+        'M': 'M', 'Q': 'Q', 'Y': 'Y',
+    }
+    period = freq_map.get(period, 'M')
         
     if invoice_lines is None:
         invoice_lines = load_invoice_lines()
@@ -694,6 +710,22 @@ def get_pipeline_by_period(deals: pd.DataFrame = None,
     # Handle freq as alias for period
     if freq is not None:
         period = freq
+    
+    # Map common frequency strings to pandas period strings
+    freq_map = {
+        'MS': 'M',   # Month Start -> Month
+        'ME': 'M',   # Month End -> Month
+        'QS': 'Q',   # Quarter Start -> Quarter
+        'QE': 'Q',   # Quarter End -> Quarter
+        'YS': 'Y',   # Year Start -> Year
+        'YE': 'Y',   # Year End -> Year
+        'W': 'W',
+        'D': 'D',
+        'M': 'M',
+        'Q': 'Q',
+        'Y': 'Y',
+    }
+    period = freq_map.get(period, 'M')  # Default to 'M' if not found
     
     if deals is None:
         deals = load_deals()
