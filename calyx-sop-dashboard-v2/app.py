@@ -336,6 +336,8 @@ def render_sales_rep_tab():
             render_sales_rep_view()
         except Exception as e:
             st.error(f"Error loading Sales Rep View: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
             with st.expander("🔧 Troubleshooting"):
                 st.markdown("""
                 This view requires the following data sources:
