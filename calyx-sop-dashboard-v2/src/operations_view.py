@@ -281,6 +281,14 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
             st.write(f"Sales Order Product Types: {debug.get('mix_categories', [])}")
             st.write(f"Item Mix rows: {debug.get('item_mix_rows', 0)}")
             st.write(f"Item ASP rows: {debug.get('item_asp_rows', 0)}")
+        
+        # Show detailed item mix debug
+        if 'item_mix_debug' in st.session_state:
+            debug = st.session_state.item_mix_debug
+            st.write("---")
+            st.write("**Item Mix Calculation Debug**")
+            for key, value in debug.items():
+                st.write(f"- {key}: {value}")
     
     # Prepare historical demand by period
     if date_col and amount_col:
