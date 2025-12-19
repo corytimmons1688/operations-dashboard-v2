@@ -237,6 +237,11 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
     
     # Show Revenue Forecast debug info
     with st.expander("📊 Top-Down Forecast Data", expanded=True):
+        # Show available sheets for debugging
+        if 'available_sheets' in st.session_state:
+            st.write("**Available Google Sheets:**")
+            st.write(st.session_state.available_sheets)
+        
         if revenue_forecast_raw is not None and not revenue_forecast_raw.empty:
             st.write("**Revenue Forecast (Category Level from Sheet)**")
             st.write(f"Loaded {len(revenue_forecast_raw)} categories")
