@@ -56,6 +56,9 @@ def render_operations_view():
     st.markdown("## 📦 Operations & Supply Chain View")
     st.markdown("Demand planning, pipeline analysis, and coverage tracking")
     
+    # Debug: Show we got here
+    st.info("Loading data...")
+    
     # Load data
     try:
         from .sop_data_loader import (
@@ -64,11 +67,22 @@ def render_operations_view():
             get_pipeline_by_period
         )
         
+        st.info("Imports successful, loading datasets...")
+        
         invoice_lines = clean_dataframe(load_invoice_lines())
+        st.write(f"✓ Invoice lines: {len(invoice_lines) if invoice_lines is not None else 'None'}")
+        
         sales_orders = clean_dataframe(load_sales_orders())
+        st.write(f"✓ Sales orders: {len(sales_orders) if sales_orders is not None else 'None'}")
+        
         items = clean_dataframe(load_items())
+        st.write(f"✓ Items: {len(items) if items is not None else 'None'}")
+        
         inventory = clean_dataframe(load_inventory())
+        st.write(f"✓ Inventory: {len(inventory) if inventory is not None else 'None'}")
+        
         deals = clean_dataframe(load_deals())
+        st.write(f"✓ Deals: {len(deals) if deals is not None else 'None'}")
         
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
@@ -211,29 +225,41 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
     st.markdown("### 📈 Demand Forecast vs Pipeline Overlay")
     st.markdown("Compare historical demand, demand forecast, deals pipeline, and revenue forecast plan")
     
+    st.write(f"DEBUG: filtered has {len(filtered)} rows, date_col={date_col}, amount_col={amount_col}")
+    
     if filtered.empty:
         st.warning("No data available for the selected filters.")
         return
     
     # Load Top-Down Revenue Forecast from Google Sheet
+    revenue_forecast_raw = None
+    revenue_forecast_by_period = pd.DataFrame()
+    item_forecast = pd.DataFrame()
+    
     try:
+        st.write("DEBUG: Importing forecast functions...")
         from .sop_data_loader import (
             get_topdown_item_forecast, get_revenue_forecast_by_period, 
             load_revenue_forecast, calculate_item_unit_mix_rolling12,
             calculate_item_asp_rolling12
         )
         
+        st.write("DEBUG: Loading revenue forecast raw...")
         revenue_forecast_raw = load_revenue_forecast()
+        st.write(f"DEBUG: revenue_forecast_raw = {type(revenue_forecast_raw)}, empty={revenue_forecast_raw is None or (hasattr(revenue_forecast_raw, 'empty') and revenue_forecast_raw.empty)}")
+        
+        st.write("DEBUG: Getting forecast by period...")
         revenue_forecast_by_period = get_revenue_forecast_by_period(category=category)
+        st.write(f"DEBUG: revenue_forecast_by_period has {len(revenue_forecast_by_period)} rows")
+        
+        st.write("DEBUG: Getting item forecast...")
         item_forecast = get_topdown_item_forecast()
+        st.write(f"DEBUG: item_forecast has {len(item_forecast)} rows")
         
     except Exception as e:
-        st.warning(f"Could not load Revenue Forecast: {e}")
+        st.error(f"Could not load Revenue Forecast: {e}")
         import traceback
         st.code(traceback.format_exc())
-        revenue_forecast_raw = None
-        revenue_forecast_by_period = pd.DataFrame()
-        item_forecast = pd.DataFrame()
     
     # Show Revenue Forecast debug info
     with st.expander("📊 Top-Down Forecast Data", expanded=True):
