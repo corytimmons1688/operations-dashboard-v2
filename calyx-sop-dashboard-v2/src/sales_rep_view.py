@@ -67,29 +67,49 @@ def render_sales_rep_view():
     
     st.markdown("---")
     
-    # Filter data
+    # Filter data - use .copy() to avoid SettingWithCopyWarning
     filtered = invoice_lines.copy()
+    
+    # Check for duplicate columns
+    if filtered.columns.duplicated().any():
+        st.warning("Warning: Duplicate column names detected. Using first occurrence.")
+        filtered = filtered.loc[:, ~filtered.columns.duplicated()]
     
     if selected_customer != "All":
         for col in filtered.columns:
             if 'customer' in col.lower():
-                filtered = filtered[filtered[col] == selected_customer]
+                filtered = filtered[filtered[col] == selected_customer].copy()
                 break
     
     # Show basic stats
     st.write(f"**Filtered rows:** {len(filtered)}")
     
-    # Find amount column
+    # Find amount column - be explicit about getting first match only
     amount_col = None
     for col in filtered.columns:
-        if 'amount' in col.lower():
+        col_lower = str(col).lower()
+        if 'amount' in col_lower and amount_col is None:
             amount_col = col
             break
     
-    if amount_col:
-        filtered[amount_col] = pd.to_numeric(filtered[amount_col], errors='coerce')
-        total = filtered[amount_col].sum()
-        st.metric("Total Revenue", f"${total:,.0f}")
+    if amount_col is not None:
+        try:
+            # Get the column as a Series explicitly using .iloc or .loc
+            amount_data = filtered.loc[:, amount_col].copy()
+            
+            # Convert to numeric
+            amount_numeric = pd.to_numeric(amount_data, errors='coerce')
+            filtered.loc[:, amount_col] = amount_numeric
+            
+            total = amount_numeric.sum()
+            if pd.notna(total):
+                st.metric("Total Revenue", f"${total:,.0f}")
+            else:
+                st.metric("Total Revenue", "$0")
+        except Exception as e:
+            st.warning(f"Could not process amount column '{amount_col}': {e}")
+            import traceback
+            st.code(traceback.format_exc())
     
     # Show sample data
     st.write("**Sample Data (first 10 rows):**")
