@@ -236,13 +236,25 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
         item_forecast = pd.DataFrame()
     
     # Show Revenue Forecast debug info
-    with st.expander("📊 Top-Down Forecast Data"):
+    with st.expander("📊 Top-Down Forecast Data", expanded=True):
         if revenue_forecast_raw is not None and not revenue_forecast_raw.empty:
-            st.write("**Revenue Forecast (Category Level)**")
-            st.write(f"Loaded {len(revenue_forecast_raw)} categories from 'Revenue forecast' sheet")
+            st.write("**Revenue Forecast (Category Level from Sheet)**")
+            st.write(f"Loaded {len(revenue_forecast_raw)} categories")
+            st.write("Columns:", list(revenue_forecast_raw.columns))
             st.dataframe(revenue_forecast_raw.head(10), use_container_width=True)
         else:
-            st.info("No Revenue Forecast data loaded. Add a 'Revenue forecast' tab to your Google Sheet.")
+            st.warning("⚠️ No Revenue Forecast data loaded. Add a 'Revenue forecast' tab to your Google Sheet.")
+        
+        if not revenue_forecast_by_period.empty:
+            st.write("---")
+            st.write("**Revenue Forecast by Period (for chart)**")
+            st.write(f"Periods: {revenue_forecast_by_period['Period'].tolist()}")
+            st.dataframe(revenue_forecast_by_period, use_container_width=True)
+        else:
+            st.warning("⚠️ Revenue forecast by period is empty - check category name matching")
+            if not item_forecast.empty:
+                st.write("Available categories in item forecast:", item_forecast['Category'].unique().tolist())
+                st.write(f"Selected category filter: '{category}'")
         
         if not item_forecast.empty:
             st.write("---")
@@ -257,6 +269,18 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
             }).reset_index()
             cat_summary.columns = ['Category', 'Total Forecast Revenue', 'Total Forecast Units', 'Items']
             st.dataframe(cat_summary, use_container_width=True, hide_index=True)
+        else:
+            st.warning("⚠️ Item forecast is empty")
+        
+        # Show category matching debug info
+        if 'forecast_debug' in st.session_state:
+            debug = st.session_state.forecast_debug
+            st.write("---")
+            st.write("**Category Matching Debug**")
+            st.write(f"Revenue Forecast categories: {debug.get('forecast_categories', [])}")
+            st.write(f"Sales Order Product Types: {debug.get('mix_categories', [])}")
+            st.write(f"Item Mix rows: {debug.get('item_mix_rows', 0)}")
+            st.write(f"Item ASP rows: {debug.get('item_asp_rows', 0)}")
     
     # Prepare historical demand by period
     if date_col and amount_col:
@@ -297,6 +321,10 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
                     category
                 )
                 st.plotly_chart(fig, use_container_width=True)
+                
+                # Debug: Show what data is being charted
+                if revenue_forecast_by_period.empty:
+                    st.info("ℹ️ Revenue Forecast line not shown - no matching data for selected category")
                 
                 # Summary metrics
                 col1, col2, col3, col4 = st.columns(4)
@@ -501,13 +529,13 @@ def create_four_line_chart(demand_df, demand_forecast_df, pipeline_df, revenue_f
             marker=dict(size=8, symbol='diamond')
         ))
     
-    # 4. Revenue Forecast (purple line) - From Google Sheet
-    if not revenue_forecast_df.empty:
+    # 4. Revenue Forecast (purple line) - From Google Sheet (Top-Down)
+    if revenue_forecast_df is not None and not revenue_forecast_df.empty and 'Forecast_Revenue' in revenue_forecast_df.columns:
         fig.add_trace(go.Scatter(
             x=revenue_forecast_df['Period'],
             y=revenue_forecast_df['Forecast_Revenue'],
             mode='lines+markers',
-            name='Revenue Forecast (Plan)',
+            name='Revenue Plan (Top-Down)',
             line=dict(color='#8B5CF6', width=3),
             marker=dict(size=10, symbol='star')
         ))
