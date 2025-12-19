@@ -1,336 +1,691 @@
 """
-Data Loader Module for NC Dashboard
-Handles Google Sheets API connection and data retrieval
+S&OP Data Loader Module
+Handles loading and processing data from Google Sheets for S&OP Dashboard
+
+Features:
+- Loads Invoice Lines, Sales Orders, Items, Customers, Deals
+- Properly maps 'Calyx || Product Type' column from Raw_Items
+- Handles duplicate column names
+- Provides data preparation functions
 
 Author: Xander @ Calyx Containers
+Version: 3.1.0
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Tuple
+import logging
 import gspread
 from google.oauth2.service_account import Credentials
-import logging
-from typing import Optional, Dict, Any
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Google Sheets API scopes
+# =============================================================================
+# GOOGLE SHEETS CONNECTION
+# =============================================================================
+
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
     'https://www.googleapis.com/auth/drive.readonly'
 ]
 
-# Column definitions for the NC sheet
-NC_COLUMNS = [
-    'Year', 'Week', 'External Or Internal', 'NC Number', 'Priority',
-    'Sales Order', 'Related Ticket Numbers', 'Customer', 'Issue Type',
-    'Employee Responsible', 'Defect Summary', 'Status', 'Affected Items',
-    'On Time Ship Date', 'Total Quantity Affected', 'Cost of Rework',
-    'Cost Avoided', 'Date Submitted', 'Equipment', 'First Article Completed',
-    'First Article Inspector'
-]
-
-
-def get_google_credentials() -> Optional[Credentials]:
-    """
-    Retrieve Google credentials from Streamlit secrets.
-    
-    Supports two secret formats:
-    1. [service_account] - flat structure
-    2. [gcp_service_account] - nested structure
-    
-    Returns:
-        Credentials object or None if not configured
-    """
+@st.cache_resource
+def get_google_sheets_client():
+    """Get authenticated Google Sheets client."""
     try:
-        # Check for service_account format (user's format)
-        if "service_account" in st.secrets:
-            credentials_dict = dict(st.secrets["service_account"])
-        # Check for gcp_service_account format (original format)
-        elif "gcp_service_account" in st.secrets:
-            credentials_dict = dict(st.secrets["gcp_service_account"])
+        # Try different secret formats
+        if 'service_account' in st.secrets:
+            creds_dict = dict(st.secrets['service_account'])
+        elif 'gcp_service_account' in st.secrets:
+            creds_dict = dict(st.secrets['gcp_service_account'])
         else:
-            logger.warning("Service account not found in secrets")
-            return None
+            # Try top-level secrets
+            creds_dict = {
+                'type': st.secrets.get('type', 'service_account'),
+                'project_id': st.secrets.get('project_id'),
+                'private_key_id': st.secrets.get('private_key_id'),
+                'private_key': st.secrets.get('private_key'),
+                'client_email': st.secrets.get('client_email'),
+                'client_id': st.secrets.get('client_id'),
+                'auth_uri': st.secrets.get('auth_uri'),
+                'token_uri': st.secrets.get('token_uri'),
+            }
         
-        credentials = Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=SCOPES
-        )
-        return credentials
-        
-    except Exception as e:
-        logger.error(f"Error getting credentials: {e}")
-        return None
-
-
-def get_gspread_client() -> Optional[gspread.Client]:
-    """
-    Create and return a gspread client with proper authentication.
-    
-    Returns:
-        gspread Client object or None if authentication fails
-    """
-    credentials = get_google_credentials()
-    if credentials is None:
-        return None
-    
-    try:
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         client = gspread.authorize(credentials)
         return client
     except Exception as e:
-        logger.error(f"Error creating gspread client: {e}")
+        logger.error(f"Failed to authenticate with Google Sheets: {e}")
         return None
 
 
-@st.cache_data(ttl=300, show_spinner="Loading NC data from Google Sheets...")
-def load_nc_data() -> Optional[pd.DataFrame]:
+def get_spreadsheet_id():
+    """Get spreadsheet ID from secrets."""
+    return st.secrets.get('SPREADSHEET_ID', st.secrets.get('spreadsheet_id', ''))
+
+
+# =============================================================================
+# SHEET LOADING FUNCTIONS
+# =============================================================================
+
+def load_sheet_to_dataframe(sheet_name: str, handle_duplicates: bool = True) -> Optional[pd.DataFrame]:
     """
-    Load Non-Conformance data from Google Sheets.
-    
-    Data is cached for 5 minutes (300 seconds) to improve performance.
-    
-    Supports two secret formats:
-    1. SPREADSHEET_ID at root level + [service_account]
-    2. [google_sheets] with spreadsheet_id + [gcp_service_account]
-    
-    Returns:
-        DataFrame with NC data or None if loading fails
-    """
-    try:
-        # Get spreadsheet configuration from secrets (support both formats)
-        if "SPREADSHEET_ID" in st.secrets:
-            # User's format: SPREADSHEET_ID at root level
-            spreadsheet_id = st.secrets["SPREADSHEET_ID"]
-            sheet_name = st.secrets.get("SHEET_NAME", "Non-Conformance Details")
-        elif "google_sheets" in st.secrets:
-            # Original format: nested under google_sheets
-            spreadsheet_id = st.secrets["google_sheets"]["spreadsheet_id"]
-            sheet_name = st.secrets["google_sheets"].get("sheet_name", "Non-Conformance Details")
-        else:
-            logger.error("Spreadsheet ID not found in secrets")
-            st.error("Spreadsheet ID not configured. Add SPREADSHEET_ID to your secrets.")
-            return None
-        
-        # Get gspread client
-        client = get_gspread_client()
-        if client is None:
-            st.error("Failed to authenticate with Google Sheets API")
-            return None
-        
-        # Open spreadsheet and worksheet
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        worksheet = spreadsheet.worksheet(sheet_name)
-        
-        # Get all data
-        data = worksheet.get_all_records()
-        
-        if not data:
-            logger.warning("No data found in worksheet")
-            return pd.DataFrame(columns=NC_COLUMNS)
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(data)
-        
-        # Data type conversions
-        df = clean_and_transform_data(df)
-        
-        logger.info(f"Loaded {len(df)} records from Google Sheets")
-        return df
-        
-    except gspread.exceptions.SpreadsheetNotFound:
-        logger.error("Spreadsheet not found. Check the spreadsheet ID.")
-        st.error("Spreadsheet not found. Please verify the spreadsheet ID in secrets.")
-        return None
-        
-    except gspread.exceptions.WorksheetNotFound:
-        logger.error(f"Worksheet '{sheet_name}' not found.")
-        st.error(f"Worksheet '{sheet_name}' not found. Please verify the sheet name.")
-        return None
-        
-    except gspread.exceptions.APIError as e:
-        logger.error(f"Google Sheets API error: {e}")
-        st.error(f"API Error: {str(e)}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Unexpected error loading data: {e}")
-        st.error(f"Error loading data: {str(e)}")
-        return None
-
-
-def clean_and_transform_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Clean and transform the raw data from Google Sheets.
+    Load a Google Sheet into a pandas DataFrame.
     
     Args:
-        df: Raw DataFrame from Google Sheets
-        
+        sheet_name: Name of the sheet to load
+        handle_duplicates: Whether to handle duplicate column names
+    
     Returns:
-        Cleaned and transformed DataFrame
+        DataFrame or None if loading fails
     """
-    # Make a copy to avoid modifying original
-    df = df.copy()
-    
-    # Convert date columns
-    date_columns = ['Date Submitted', 'On Time Ship Date']
-    for col in date_columns:
-        if col in df.columns:
-            df[col] = pd.to_datetime(df[col], errors='coerce')
-    
-    # Convert numeric columns
-    numeric_columns = [
-        'Year', 'Week', 'Total Quantity Affected', 
-        'Cost of Rework', 'Cost Avoided'
-    ]
-    for col in numeric_columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Fill NaN values for cost columns with 0
-    cost_columns = ['Cost of Rework', 'Cost Avoided']
-    for col in cost_columns:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
-    
-    # Clean string columns - strip whitespace
-    string_columns = [
-        'External Or Internal', 'NC Number', 'Priority', 'Sales Order',
-        'Customer', 'Issue Type', 'Employee Responsible', 'Status',
-        'Defect Summary', 'Affected Items', 'Equipment',
-        'First Article Completed', 'First Article Inspector'
-    ]
-    for col in string_columns:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-            # Replace 'nan' string with empty string
-            df[col] = df[col].replace('nan', '')
-    
-    # Add calculated columns
-    if 'Date Submitted' in df.columns:
-        # Calculate age in days
-        df['Age_Days'] = (datetime.now() - df['Date Submitted']).dt.days
-        df['Age_Days'] = df['Age_Days'].fillna(0).astype(int)
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return None
         
-        # Calculate aging bucket
-        df['Aging_Bucket'] = df['Age_Days'].apply(categorize_aging)
+        spreadsheet_id = get_spreadsheet_id()
+        if not spreadsheet_id:
+            logger.error("No spreadsheet ID configured")
+            return None
         
-        # Extract month and year for aggregations
-        df['Month'] = df['Date Submitted'].dt.to_period('M')
-        df['Quarter'] = df['Date Submitted'].dt.to_period('Q')
-        df['Year_Submitted'] = df['Date Submitted'].dt.year
-        df['Week_Submitted'] = df['Date Submitted'].dt.isocalendar().week
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet(sheet_name)
+        data = worksheet.get_all_values()
+        
+        if not data:
+            return pd.DataFrame()
+        
+        # Handle duplicate column names
+        headers = data[0]
+        if handle_duplicates:
+            seen = {}
+            new_headers = []
+            for h in headers:
+                if h in seen:
+                    seen[h] += 1
+                    new_headers.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    new_headers.append(h)
+            headers = new_headers
+        
+        df = pd.DataFrame(data[1:], columns=headers)
+        
+        # Convert numeric columns
+        for col in df.columns:
+            # Try to convert to numeric
+            try:
+                numeric_vals = pd.to_numeric(df[col], errors='coerce')
+                if numeric_vals.notna().sum() > len(df) * 0.5:  # More than 50% numeric
+                    df[col] = numeric_vals
+            except:
+                pass
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error loading sheet '{sheet_name}': {e}")
+        return None
+
+
+# =============================================================================
+# DATA LOADING FUNCTIONS
+# =============================================================================
+
+@st.cache_data(ttl=300)
+def load_invoice_lines() -> Optional[pd.DataFrame]:
+    """Load Invoice Line Item data."""
+    df = load_sheet_to_dataframe('Invoice Line Item')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'customer' in col_lower and 'correct' in col_lower:
+            col_mapping[col] = 'Customer'
+        elif col_lower == 'customer' or 'customer name' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'item' in col_lower and 'name' not in col_lower:
+            col_mapping[col] = 'Item'
+        elif 'amount' in col_lower or 'line amount' in col_lower:
+            col_mapping[col] = 'Amount'
+        elif 'qty' in col_lower or 'quantity' in col_lower:
+            col_mapping[col] = 'Quantity'
+        elif 'date' in col_lower and ('invoice' in col_lower or 'tran' in col_lower):
+            col_mapping[col] = 'Date'
+        elif 'rep' in col_lower and 'master' in col_lower:
+            col_mapping[col] = 'Rep'
+        elif 'calyx' in col_lower and 'product type' in col_lower:
+            col_mapping[col] = 'Product Type'
+        elif 'product type' in col_lower and 'Product Type' not in col_mapping.values():
+            col_mapping[col] = 'Product Type'
+    
+    df = df.rename(columns=col_mapping)
+    
+    # Clean Product Type
+    if 'Product Type' in df.columns:
+        df['Product Type'] = df['Product Type'].fillna('Unknown').replace('', 'Unknown')
     
     return df
 
 
-def categorize_aging(days: int) -> str:
-    """
-    Categorize age in days into aging buckets.
+@st.cache_data(ttl=300)
+def load_sales_orders() -> Optional[pd.DataFrame]:
+    """Load Sales Orders Main data."""
+    df = load_sheet_to_dataframe('_NS_SalesOrders_Data')
     
-    Args:
-        days: Number of days since submission
-        
-    Returns:
-        Aging bucket category string
-    """
-    if pd.isna(days) or days < 0:
-        return "Unknown"
-    elif days <= 30:
-        return "0-30 days"
-    elif days <= 60:
-        return "31-60 days"
-    elif days <= 90:
-        return "61-90 days"
-    else:
-        return "90+ days"
-
-
-def refresh_data() -> None:
-    """
-    Clear the data cache to force a refresh from Google Sheets.
-    """
-    load_nc_data.clear()
-    logger.info("Data cache cleared - will refresh on next load")
-
-
-def get_data_summary(df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Generate summary statistics for the NC data.
-    
-    Args:
-        df: NC DataFrame
-        
-    Returns:
-        Dictionary with summary statistics
-    """
     if df is None or df.empty:
-        return {}
+        # Try alternate name
+        df = load_sheet_to_dataframe('Sales Order Line Item')
     
-    summary = {
-        'total_records': len(df),
-        'date_range': {
-            'min': df['Date Submitted'].min() if 'Date Submitted' in df.columns else None,
-            'max': df['Date Submitted'].max() if 'Date Submitted' in df.columns else None
-        },
-        'total_cost_of_rework': df['Cost of Rework'].sum() if 'Cost of Rework' in df.columns else 0,
-        'total_cost_avoided': df['Cost Avoided'].sum() if 'Cost Avoided' in df.columns else 0,
-        'unique_customers': df['Customer'].nunique() if 'Customer' in df.columns else 0,
-        'unique_issue_types': df['Issue Type'].nunique() if 'Issue Type' in df.columns else 0,
-        'status_breakdown': df['Status'].value_counts().to_dict() if 'Status' in df.columns else {}
-    }
+    if df is None or df.empty:
+        return None
     
-    return summary
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'customer' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'rep' in col_lower:
+            if 'Rep' not in col_mapping.values():
+                col_mapping[col] = 'Rep'
+        elif 'item' in col_lower:
+            if 'Item' not in col_mapping.values():
+                col_mapping[col] = 'Item'
+        elif 'amount' in col_lower:
+            if 'Amount' not in col_mapping.values():
+                col_mapping[col] = 'Amount'
+        elif 'status' in col_lower:
+            if 'Status' not in col_mapping.values():
+                col_mapping[col] = 'Status'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
 
 
-# For testing/demo purposes - load sample data if sheets not configured
-def load_sample_data() -> pd.DataFrame:
+@st.cache_data(ttl=300)
+def load_items() -> Optional[pd.DataFrame]:
     """
-    Load sample NC data for testing/demo purposes.
+    Load Raw_Items data with 'Calyx || Product Type' column.
+    """
+    df = load_sheet_to_dataframe('Raw_Items')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Find and standardize the Calyx Product Type column
+    product_type_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'calyx' in col_lower and 'product type' in col_lower:
+            product_type_col = col
+            break
+    
+    if product_type_col:
+        df['Calyx Product Type'] = df[product_type_col].fillna('Unknown').replace('', 'Unknown')
+    
+    # Also keep original column mapping
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in ['item', 'item name', 'name', 'sku']:
+            col_mapping[col] = 'Item'
+        elif 'description' in col_lower:
+            if 'Description' not in col_mapping.values():
+                col_mapping[col] = 'Description'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_customers() -> Optional[pd.DataFrame]:
+    """Load Customer List data."""
+    df = load_sheet_to_dataframe('_NS_Customer_List')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'company' in col_lower or 'customer' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'rep' in col_lower or 'salesperson' in col_lower:
+            if 'Rep' not in col_mapping.values():
+                col_mapping[col] = 'Rep'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_deals() -> Optional[pd.DataFrame]:
+    """Load HubSpot Deals/Pipeline data."""
+    df = load_sheet_to_dataframe('Deals')
+    
+    if df is None or df.empty:
+        # Try alternate names
+        for sheet_name in ['All Reps All Pipelines', 'HubSpot Deals', 'Pipeline']:
+            df = load_sheet_to_dataframe(sheet_name)
+            if df is not None and not df.empty:
+                break
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'deal' in col_lower and 'name' in col_lower:
+            col_mapping[col] = 'Deal Name'
+        elif 'company' in col_lower or 'customer' in col_lower:
+            if 'Company' not in col_mapping.values():
+                col_mapping[col] = 'Company'
+        elif 'amount' in col_lower or 'value' in col_lower:
+            if 'Amount' not in col_mapping.values():
+                col_mapping[col] = 'Amount'
+        elif 'stage' in col_lower:
+            if 'Stage' not in col_mapping.values():
+                col_mapping[col] = 'Stage'
+        elif 'close' in col_lower and 'date' in col_lower:
+            col_mapping[col] = 'Close Date'
+        elif 'product' in col_lower:
+            if 'Product' not in col_mapping.values():
+                col_mapping[col] = 'Product'
+    
+    df = df.rename(columns=col_mapping)
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_inventory() -> Optional[pd.DataFrame]:
+    """Load Raw_Inventory data."""
+    df = load_sheet_to_dataframe('Raw_Inventory')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_vendors() -> Optional[pd.DataFrame]:
+    """Load Raw_Vendors data."""
+    df = load_sheet_to_dataframe('Raw_Vendors')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_invoices() -> Optional[pd.DataFrame]:
+    """Load Invoices Main data."""
+    df = load_sheet_to_dataframe('_NS_Invoices_Data')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_so_lines() -> Optional[pd.DataFrame]:
+    """Load Sales Order Line Items."""
+    df = load_sheet_to_dataframe('Sales Order Line Item')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+# =============================================================================
+# AGGREGATE LOADING
+# =============================================================================
+
+@st.cache_data(ttl=300)
+def load_all_sop_data() -> Dict[str, pd.DataFrame]:
+    """Load all S&OP data at once."""
+    return {
+        'invoice_lines': load_invoice_lines(),
+        'sales_orders': load_sales_orders(),
+        'items': load_items(),
+        'customers': load_customers(),
+        'deals': load_deals(),
+        'inventory': load_inventory(),
+        'vendors': load_vendors()
+    }
+
+
+# =============================================================================
+# DATA PREPARATION FUNCTIONS
+# =============================================================================
+
+def get_unique_sales_reps(sales_orders: pd.DataFrame = None, customers: pd.DataFrame = None) -> List[str]:
+    """Get list of unique sales reps."""
+    reps = set()
+    
+    if sales_orders is None:
+        sales_orders = load_sales_orders()
+    if customers is None:
+        customers = load_customers()
+    
+    for df in [sales_orders, customers]:
+        if df is not None and not df.empty:
+            if 'Rep' in df.columns:
+                reps.update(df['Rep'].dropna().unique())
+    
+    return sorted([str(r).strip() for r in reps if r and str(r).strip()])
+
+
+def get_customers_for_rep(rep: str = None) -> List[str]:
+    """Get customers for a specific rep (or all if rep is None)."""
+    sales_orders = load_sales_orders()
+    
+    if sales_orders is None or sales_orders.empty:
+        return []
+    
+    if rep and rep != "All" and 'Rep' in sales_orders.columns:
+        filtered = sales_orders[sales_orders['Rep'] == rep]
+    else:
+        filtered = sales_orders
+    
+    if 'Customer' in filtered.columns:
+        customers = filtered['Customer'].dropna().unique()
+        return sorted([str(c).strip() for c in customers if c and str(c).strip()])
+    
+    return []
+
+
+def get_skus_for_customer(customer: str = None) -> List[str]:
+    """Get SKUs/Items for a specific customer (or all if customer is None)."""
+    invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return []
+    
+    if customer and customer != "All" and 'Customer' in invoice_lines.columns:
+        filtered = invoice_lines[invoice_lines['Customer'] == customer]
+    else:
+        filtered = invoice_lines
+    
+    if 'Item' in filtered.columns:
+        items = filtered['Item'].dropna().unique()
+        return sorted([str(i).strip() for i in items if i and str(i).strip()])
+    
+    return []
+
+
+def get_unique_product_types() -> List[str]:
+    """Get unique product types from items."""
+    items = load_items()
+    
+    if items is None or items.empty:
+        return []
+    
+    if 'Calyx Product Type' in items.columns:
+        types = items['Calyx Product Type'].dropna().unique()
+    elif 'Product Type' in items.columns:
+        types = items['Product Type'].dropna().unique()
+    else:
+        return []
+    
+    return sorted([str(t).strip() for t in types if t and str(t).strip() and str(t) != 'Unknown'])
+
+
+def get_unique_skus() -> List[str]:
+    """Get unique SKUs/Items."""
+    items = load_items()
+    
+    if items is None or items.empty:
+        return []
+    
+    if 'Item' in items.columns:
+        skus = items['Item'].dropna().unique()
+        return sorted([str(s).strip() for s in skus if s and str(s).strip()])
+    
+    return []
+
+
+def prepare_demand_history(invoice_lines: pd.DataFrame = None, 
+                           period: str = 'M') -> pd.DataFrame:
+    """Prepare historical demand data aggregated by period."""
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Convert date
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df['Period'] = df['Date'].dt.to_period(period)
+    else:
+        return pd.DataFrame()
+    
+    # Aggregate
+    agg_cols = {}
+    if 'Amount' in df.columns:
+        agg_cols['Revenue'] = ('Amount', 'sum')
+    if 'Quantity' in df.columns:
+        agg_cols['Units'] = ('Quantity', 'sum')
+    
+    if not agg_cols:
+        return pd.DataFrame()
+    
+    grouped = df.groupby('Period').agg(**agg_cols).reset_index()
+    grouped['Period'] = grouped['Period'].astype(str)
+    
+    return grouped
+
+
+def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
+                            group_by: str = None) -> pd.DataFrame:
+    """Prepare revenue history, optionally grouped."""
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Convert date
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.dropna(subset=['Date'])
+        df['Month'] = df['Date'].dt.to_period('M')
+    else:
+        return pd.DataFrame()
+    
+    # Group by
+    group_cols = ['Month']
+    if group_by and group_by in df.columns:
+        group_cols.append(group_by)
+    
+    if 'Amount' in df.columns:
+        grouped = df.groupby(group_cols)['Amount'].sum().reset_index()
+        grouped.columns = group_cols + ['Revenue']
+        grouped['Month'] = grouped['Month'].astype(str)
+        return grouped
+    
+    return pd.DataFrame()
+
+
+def get_pipeline_by_period(deals: pd.DataFrame = None,
+                           period: str = 'M') -> pd.DataFrame:
+    """Get pipeline/deals aggregated by expected close period."""
+    if deals is None:
+        deals = load_deals()
+    
+    if deals is None or deals.empty:
+        return pd.DataFrame()
+    
+    df = deals.copy()
+    
+    # Convert close date
+    if 'Close Date' in df.columns:
+        df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
+        df = df.dropna(subset=['Close Date'])
+        df['Period'] = df['Close Date'].dt.to_period(period)
+    else:
+        return pd.DataFrame()
+    
+    # Aggregate
+    if 'Amount' in df.columns:
+        grouped = df.groupby('Period')['Amount'].sum().reset_index()
+        grouped.columns = ['Period', 'Pipeline Value']
+        grouped['Period'] = grouped['Period'].astype(str)
+        return grouped
+    
+    return pd.DataFrame()
+
+
+def calculate_lead_times(items: pd.DataFrame = None, 
+                         vendors: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Calculate lead times for items based on vendor data.
+    
+    Args:
+        items: Items dataframe
+        vendors: Vendors dataframe
     
     Returns:
-        DataFrame with sample NC data
+        DataFrame with item lead time information
     """
-    import numpy as np
+    if items is None:
+        items = load_items()
+    if vendors is None:
+        vendors = load_vendors()
     
-    np.random.seed(42)
-    n_records = 100
+    if items is None or items.empty:
+        return pd.DataFrame()
     
-    sample_data = {
-        'Year': np.random.choice([2023, 2024, 2025], n_records),
-        'Week': np.random.randint(1, 53, n_records),
-        'External Or Internal': np.random.choice(['External', 'Internal'], n_records),
-        'NC Number': [f'NC-{i:04d}' for i in range(1, n_records + 1)],
-        'Priority': np.random.choice(['High', 'Medium', 'Low'], n_records),
-        'Sales Order': [f'SO-{np.random.randint(10000, 99999)}' for _ in range(n_records)],
-        'Related Ticket Numbers': [f'TKT-{np.random.randint(1000, 9999)}' for _ in range(n_records)],
-        'Customer': np.random.choice([
-            'Customer A', 'Customer B', 'Customer C', 'Customer D',
-            'Customer E', 'Customer F', 'Customer G', 'Customer H'
-        ], n_records),
-        'Issue Type': np.random.choice([
-            'Packaging Defect', 'Print Quality', 'Dimension Error',
-            'Material Issue', 'Shipping Damage', 'Labeling Error',
-            'Color Mismatch', 'Seal Failure'
-        ], n_records),
-        'Employee Responsible': np.random.choice([
-            'John Smith', 'Jane Doe', 'Bob Wilson', 'Alice Brown'
-        ], n_records),
-        'Defect Summary': ['Sample defect description'] * n_records,
-        'Status': np.random.choice([
-            'Open', 'In Progress', 'Pending Review', 'Closed', 'On Hold'
-        ], n_records, p=[0.3, 0.25, 0.15, 0.25, 0.05]),
-        'Affected Items': np.random.choice(['Item A', 'Item B', 'Item C'], n_records),
-        'On Time Ship Date': pd.date_range(end=datetime.now(), periods=n_records, freq='D'),
-        'Total Quantity Affected': np.random.randint(10, 5000, n_records),
-        'Cost of Rework': np.random.uniform(50, 5000, n_records).round(2),
-        'Cost Avoided': np.random.uniform(100, 10000, n_records).round(2),
-        'Date Submitted': pd.date_range(end=datetime.now(), periods=n_records, freq='D'),
-        'Equipment': np.random.choice(['Printer 1', 'Printer 2', 'Cutter A', 'Sealer B'], n_records),
-        'First Article Completed': np.random.choice(['Yes', 'No'], n_records),
-        'First Article Inspector': np.random.choice(['Inspector 1', 'Inspector 2', 'Inspector 3'], n_records)
-    }
+    df = items.copy()
     
-    df = pd.DataFrame(sample_data)
-    return clean_and_transform_data(df)
+    # Look for lead time column in items
+    lead_time_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'lead' in col_lower and 'time' in col_lower:
+            lead_time_col = col
+            break
+        elif 'leadtime' in col_lower:
+            lead_time_col = col
+            break
+    
+    # If no lead time column, try to get from vendors
+    if lead_time_col is None and vendors is not None and not vendors.empty:
+        # Find vendor column in items
+        vendor_col = None
+        for col in df.columns:
+            col_lower = col.lower()
+            if 'vendor' in col_lower or 'supplier' in col_lower:
+                vendor_col = col
+                break
+        
+        if vendor_col:
+            # Find lead time in vendors
+            vendor_lead_col = None
+            for col in vendors.columns:
+                col_lower = col.lower()
+                if 'lead' in col_lower and 'time' in col_lower:
+                    vendor_lead_col = col
+                    break
+            
+            if vendor_lead_col:
+                # Find vendor name column
+                vendor_name_col = None
+                for col in vendors.columns:
+                    col_lower = col.lower()
+                    if col_lower in ['vendor', 'name', 'vendor name', 'supplier']:
+                        vendor_name_col = col
+                        break
+                
+                if vendor_name_col:
+                    vendor_lead_times = vendors.set_index(vendor_name_col)[vendor_lead_col].to_dict()
+                    df['Lead Time'] = df[vendor_col].map(vendor_lead_times)
+    
+    # If we found a lead time column, standardize it
+    if lead_time_col:
+        df['Lead Time'] = pd.to_numeric(df[lead_time_col], errors='coerce').fillna(0)
+    elif 'Lead Time' not in df.columns:
+        # Default lead time
+        df['Lead Time'] = 30  # Default 30 days
+    
+    # Create summary
+    result_cols = ['Item'] if 'Item' in df.columns else [df.columns[0]]
+    if 'Calyx Product Type' in df.columns:
+        result_cols.append('Calyx Product Type')
+    elif 'Product Type' in df.columns:
+        result_cols.append('Product Type')
+    result_cols.append('Lead Time')
+    
+    # Add vendor if available
+    vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
+    if vendor_col:
+        result_cols.insert(-1, vendor_col)
+    
+    return df[[c for c in result_cols if c in df.columns]]
+
+
+def allocate_topdown_forecast(total_forecast: float, 
+                               historical_mix: pd.DataFrame) -> pd.DataFrame:
+    """
+    Allocate a top-down forecast to products based on historical mix.
+    
+    Args:
+        total_forecast: Total forecast value to allocate
+        historical_mix: DataFrame with product mix percentages
+    
+    Returns:
+        DataFrame with allocated forecast by product
+    """
+    if historical_mix is None or historical_mix.empty:
+        return pd.DataFrame()
+    
+    df = historical_mix.copy()
+    
+    # Find value column
+    value_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'revenue' in col_lower or 'amount' in col_lower or 'value' in col_lower:
+            value_col = col
+            break
+    
+    if value_col is None:
+        return pd.DataFrame()
+    
+    # Calculate mix percentages
+    total_historical = df[value_col].sum()
+    if total_historical == 0:
+        return pd.DataFrame()
+    
+    df['Mix %'] = df[value_col] / total_historical
+    df['Allocated Forecast'] = df['Mix %'] * total_forecast
+    
+    return df
