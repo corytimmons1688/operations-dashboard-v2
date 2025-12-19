@@ -729,6 +729,9 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
     """
     Parse the Revenue Forecast sheet from wide format (Category + monthly columns)
     to long format (Category, Period, Forecast_Revenue).
+    
+    Assumes forecast is for the upcoming year (next year if we're past mid-year,
+    current year if we're in early part of year).
     """
     if revenue_forecast_df is None or revenue_forecast_df.empty:
         return pd.DataFrame()
@@ -753,17 +756,25 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
     
     # Month name mapping
     month_names = {
-        'january': '01', 'february': '02', 'march': '03', 'april': '04',
-        'may': '05', 'june': '06', 'july': '07', 'august': '08',
-        'september': '09', 'october': '10', 'november': '11', 'december': '12',
-        'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
-        'jun': '06', 'jul': '07', 'aug': '08', 'sep': '09',
-        'oct': '10', 'nov': '11', 'dec': '12'
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+        'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9,
+        'oct': 10, 'nov': 11, 'dec': 12
     }
+    
+    # Determine forecast year
+    # If current month is past June, assume forecast is for next year
+    # Otherwise assume it's for current year
+    current_date = datetime.now()
+    if current_date.month >= 6:
+        forecast_year = current_date.year + 1  # Next year
+    else:
+        forecast_year = current_date.year  # Current year
     
     # Find month columns and melt to long format
     result_rows = []
-    current_year = datetime.now().year
     
     for _, row in df.iterrows():
         category = row[cat_col]
@@ -791,9 +802,8 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
                     forecast_revenue = 0
                 
                 if forecast_revenue > 0:
-                    # Determine year - if month is in future relative to current month, use current year
-                    # otherwise might be next year (for planning purposes)
-                    period = f"{current_year}-{month_num}"
+                    # Format period to match historical data format (YYYY-MM)
+                    period = f"{forecast_year}-{month_num:02d}"
                     
                     result_rows.append({
                         'Category': str(category).strip(),
@@ -1033,16 +1043,34 @@ def allocate_topdown_forecast(revenue_forecast: pd.DataFrame,
     
     result_rows = []
     
+    # Get available categories in item_mix for matching
+    available_categories = item_mix['Category'].unique().tolist() if 'Category' in item_mix.columns else []
+    
     for _, forecast_row in revenue_forecast.iterrows():
-        category = forecast_row['Category']
+        category = str(forecast_row['Category']).strip()
         period = forecast_row['Period']
         cat_forecast_revenue = forecast_row['Forecast_Revenue']
         
         if pd.isna(cat_forecast_revenue) or cat_forecast_revenue <= 0:
             continue
         
-        # Get items in this category
+        # Try to find matching category in item_mix
         cat_items = item_mix[item_mix['Category'] == category].copy()
+        
+        # If no exact match, try case-insensitive
+        if cat_items.empty:
+            category_lower = category.lower()
+            for avail_cat in available_categories:
+                if avail_cat.lower() == category_lower:
+                    cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
+                    break
+        
+        # If still no match, try partial match
+        if cat_items.empty:
+            for avail_cat in available_categories:
+                if category_lower in avail_cat.lower() or avail_cat.lower() in category_lower:
+                    cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
+                    break
         
         if cat_items.empty:
             # No historical data - keep at category level
@@ -1122,6 +1150,18 @@ def get_topdown_item_forecast() -> pd.DataFrame:
     # Calculate ASP from Invoice Lines (rolling 12 months)
     item_asp = calculate_item_asp_rolling12()
     
+    # Debug: Log category names from both sources
+    forecast_categories = revenue_forecast['Category'].unique().tolist() if 'Category' in revenue_forecast.columns else []
+    mix_categories = item_mix['Category'].unique().tolist() if not item_mix.empty and 'Category' in item_mix.columns else []
+    
+    # Store debug info for display
+    if 'forecast_debug' not in st.session_state:
+        st.session_state.forecast_debug = {}
+    st.session_state.forecast_debug['forecast_categories'] = forecast_categories
+    st.session_state.forecast_debug['mix_categories'] = mix_categories
+    st.session_state.forecast_debug['item_mix_rows'] = len(item_mix) if not item_mix.empty else 0
+    st.session_state.forecast_debug['item_asp_rows'] = len(item_asp) if not item_asp.empty else 0
+    
     # Allocate forecast to items
     item_forecast = allocate_topdown_forecast(revenue_forecast, item_mix, item_asp)
     
@@ -1140,9 +1180,21 @@ def get_revenue_forecast_by_period(category: str = None) -> pd.DataFrame:
     if item_forecast.empty:
         return pd.DataFrame()
     
-    # Filter by category if specified
+    # Filter by category if specified (with fuzzy matching)
     if category and category != 'All':
-        item_forecast = item_forecast[item_forecast['Category'] == category]
+        # Try exact match first
+        filtered = item_forecast[item_forecast['Category'] == category]
+        
+        # If no exact match, try case-insensitive
+        if filtered.empty:
+            category_lower = category.lower().strip()
+            filtered = item_forecast[item_forecast['Category'].str.lower().str.strip() == category_lower]
+        
+        # If still no match, try contains
+        if filtered.empty:
+            filtered = item_forecast[item_forecast['Category'].str.lower().str.contains(category_lower, na=False)]
+        
+        item_forecast = filtered
     
     if item_forecast.empty:
         return pd.DataFrame()
