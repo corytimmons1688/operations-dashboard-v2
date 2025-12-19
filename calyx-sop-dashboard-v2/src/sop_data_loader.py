@@ -700,29 +700,75 @@ def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
 # TOP-DOWN REVENUE FORECAST FUNCTIONS
 # =============================================================================
 
-@st.cache_data(ttl=300)
+def get_all_worksheet_names() -> list:
+    """Get all worksheet names from the spreadsheet for debugging."""
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return []
+        
+        spreadsheet_id = get_spreadsheet_id()
+        if not spreadsheet_id:
+            return []
+        
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        worksheets = spreadsheet.worksheets()
+        return [ws.title for ws in worksheets]
+    except Exception as e:
+        logger.error(f"Error getting worksheet names: {e}")
+        return []
+
+
+@st.cache_data(ttl=60)
 def load_revenue_forecast() -> Optional[pd.DataFrame]:
     """
     Load Revenue Forecast data from Google Sheet.
-    Expected format: Category column + monthly columns (January, February, etc.)
     """
-    df = load_sheet_to_dataframe('Revenue forecast')
+    # Try exact name with capital F first
+    sheet_names_to_try = [
+        'Revenue Forecast',  # Capital F - user confirmed this is correct
+        'Revenue forecast',
+        'RevenueForecast',
+        'Forecast',
+    ]
     
-    if df is None or df.empty:
-        # Try alternate names
-        for name in ['Revenue Forecast', 'RevenueForecast', 'Forecast']:
-            df = load_sheet_to_dataframe(name)
+    for sheet_name in sheet_names_to_try:
+        try:
+            logger.info(f"Trying to load sheet: '{sheet_name}'")
+            df = load_sheet_to_dataframe(sheet_name)
             if df is not None and not df.empty:
-                break
+                logger.info(f"Successfully loaded Revenue Forecast from: '{sheet_name}'")
+                if df.columns.duplicated().any():
+                    df = df.loc[:, ~df.columns.duplicated()]
+                return df
+        except Exception as e:
+            logger.debug(f"Sheet '{sheet_name}' not found: {e}")
+            continue
     
-    if df is None or df.empty:
-        return None
+    # If standard names fail, list all sheets and look for any with "forecast"
+    all_sheets = get_all_worksheet_names()
+    logger.info(f"Available worksheets: {all_sheets}")
     
-    # Handle duplicate columns
-    if df.columns.duplicated().any():
-        df = df.loc[:, ~df.columns.duplicated()]
+    try:
+        st.session_state.available_sheets = all_sheets
+    except:
+        pass
     
-    return df
+    forecast_sheets = [s for s in all_sheets if 'forecast' in s.lower() and s not in sheet_names_to_try]
+    
+    for sheet_name in forecast_sheets:
+        try:
+            df = load_sheet_to_dataframe(sheet_name)
+            if df is not None and not df.empty:
+                logger.info(f"Successfully loaded from: '{sheet_name}'")
+                if df.columns.duplicated().any():
+                    df = df.loc[:, ~df.columns.duplicated()]
+                return df
+        except Exception as e:
+            continue
+    
+    logger.warning(f"Could not find Revenue Forecast. Available: {all_sheets}")
+    return None
 
 
 def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
