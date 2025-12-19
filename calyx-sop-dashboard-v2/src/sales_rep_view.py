@@ -29,9 +29,8 @@ logger = logging.getLogger(__name__)
 # DATA LOADING FUNCTIONS
 # =============================================================================
 
-@st.cache_data(ttl=300)
 def load_sales_data():
-    """Load all required sales data with caching."""
+    """Load all required sales data."""
     try:
         from .sop_data_loader import (
             load_invoice_lines, load_sales_orders, load_items,
@@ -682,12 +681,17 @@ def render_sales_rep_view():
     st.markdown("### 👤 Sales Rep View")
     st.markdown("Customer-focused demand analysis and forecasting")
     
-    # Load data
-    with st.spinner("Loading sales data..."):
-        data = load_sales_data()
+    # Load data with error handling
+    try:
+        with st.spinner("Loading sales data..."):
+            data = load_sales_data()
+    except Exception as e:
+        st.error(f"Error loading data: {str(e)}")
+        return
     
     if data is None:
         st.error("Unable to load sales data. Please check your data connection.")
+        st.info("Make sure the following sheets exist: Invoice Line Item, _NS_SalesOrders_Data, Raw_Items")
         return
     
     invoice_lines = data.get('invoice_lines')
@@ -696,8 +700,16 @@ def render_sales_rep_view():
     customers_df = data.get('customers')
     deals = data.get('deals')
     
+    # Debug info
+    with st.expander("🔧 Data Debug Info"):
+        st.write(f"Invoice Lines: {len(invoice_lines) if invoice_lines is not None else 'None'} rows")
+        st.write(f"Sales Orders: {len(sales_orders) if sales_orders is not None else 'None'} rows")
+        st.write(f"Items: {len(items) if items is not None else 'None'} rows")
+        st.write(f"Customers: {len(customers_df) if customers_df is not None else 'None'} rows")
+        st.write(f"Deals: {len(deals) if deals is not None else 'None'} rows")
+    
     # Create product type mapping from Raw_Items
-    product_type_map = get_product_type_mapping(items)
+    product_type_map = get_product_type_mapping(items) if items is not None else {}
     
     # Enrich data with product types
     if invoice_lines is not None:
@@ -844,31 +856,47 @@ def render_sales_rep_view():
         amt_col = next((c for c in ['Amount', 'Total', 'Revenue'] if c in filtered_invoices.columns), None)
         
         if amt_col:
+            # Ensure numeric
+            filtered_invoices[amt_col] = pd.to_numeric(filtered_invoices[amt_col], errors='coerce').fillna(0)
             by_category = filtered_invoices.groupby('Product Type')[amt_col].sum().sort_values(ascending=False)
             
-            col1, col2 = st.columns([2, 1])
-            
-            with col1:
-                fig = px.bar(
-                    x=by_category.index,
-                    y=by_category.values,
-                    labels={'x': 'Product Type', 'y': 'Revenue ($)'},
-                    color=by_category.values,
-                    color_continuous_scale='Blues'
-                )
-                fig.update_layout(
-                    showlegend=False,
-                    coloraxis_showscale=False,
-                    height=350
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with col2:
-                st.dataframe(
-                    by_category.reset_index().rename(columns={amt_col: 'Revenue', 'index': 'Product Type'}),
-                    use_container_width=True,
-                    hide_index=True
-                )
+            if not by_category.empty:
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    # Create bar chart
+                    chart_df = pd.DataFrame({
+                        'Product Type': by_category.index,
+                        'Revenue': by_category.values
+                    })
+                    fig = px.bar(
+                        chart_df,
+                        x='Product Type',
+                        y='Revenue',
+                        color='Revenue',
+                        color_continuous_scale='Blues'
+                    )
+                    fig.update_layout(
+                        showlegend=False,
+                        coloraxis_showscale=False,
+                        height=350
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    display_df = pd.DataFrame({
+                        'Product Type': by_category.index,
+                        'Revenue': by_category.values
+                    })
+                    st.dataframe(
+                        display_df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+            else:
+                st.info("No category data available.")
+        else:
+            st.info("No revenue column found in data.")
     else:
         st.info("No data available for the selected filters.")
     
@@ -904,27 +932,47 @@ def render_sales_rep_view():
         st.markdown(f"*Items ordered by **{selected_customer}**, sorted by Product Type*")
         
         if not demand_df.empty:
+            # Ensure numeric columns are properly typed
+            for col in ['Units', 'Revenue', 'Orders', 'Projected Units', 'Projected Revenue']:
+                if col in demand_df.columns:
+                    demand_df[col] = pd.to_numeric(demand_df[col], errors='coerce').fillna(0)
+            
             # Display editable table
-            edited_df = st.data_editor(
+            st.dataframe(
                 demand_df,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
-                    'Item': st.column_config.TextColumn('Item', disabled=True),
-                    'Product Type': st.column_config.TextColumn('Category', disabled=True),
-                    'Units': st.column_config.NumberColumn('Historical Units', disabled=True, format="%d"),
-                    'Revenue': st.column_config.NumberColumn('Historical Revenue', disabled=True, format="$%.2f"),
-                    'Orders': st.column_config.NumberColumn('Order Count', disabled=True),
+                    'Item': st.column_config.TextColumn('Item'),
+                    'Product Type': st.column_config.TextColumn('Category'),
+                    'Units': st.column_config.NumberColumn('Historical Units', format="%d"),
+                    'Revenue': st.column_config.NumberColumn('Historical Revenue', format="$%.2f"),
+                    'Orders': st.column_config.NumberColumn('Order Count'),
                     'Projected Units': st.column_config.NumberColumn('Projected Units', format="%d"),
                     'Projected Revenue': st.column_config.NumberColumn('Projected Revenue', format="$%.2f")
-                },
-                key="forecast_table"
+                }
             )
             
+            # Editable projections section
+            st.markdown("##### ✏️ Adjust Projections")
+            edit_cols = st.columns(2)
+            with edit_cols[0]:
+                growth_rate = st.slider("Growth Rate %", min_value=-50, max_value=100, value=10, step=5)
+            with edit_cols[1]:
+                if st.button("Apply Growth Rate"):
+                    if 'Revenue' in demand_df.columns:
+                        demand_df['Projected Revenue'] = demand_df['Revenue'] * (1 + growth_rate/100)
+                    if 'Units' in demand_df.columns:
+                        demand_df['Projected Units'] = (demand_df['Units'] * (1 + growth_rate/100)).astype(int)
+                    st.rerun()
+            
             # Summary row
-            if 'Projected Revenue' in edited_df.columns:
-                total_projected = edited_df['Projected Revenue'].sum()
+            if 'Projected Revenue' in demand_df.columns:
+                total_projected = demand_df['Projected Revenue'].sum()
                 st.markdown(f"**Total Projected Revenue: ${total_projected:,.2f}**")
+            
+            # Store for later use
+            edited_df = demand_df
         else:
             st.warning("No historical demand data found for this customer.")
         
@@ -1048,5 +1096,3 @@ def render_sales_rep_view():
                     mime="text/csv",
                     use_container_width=True
                 )
-
-
