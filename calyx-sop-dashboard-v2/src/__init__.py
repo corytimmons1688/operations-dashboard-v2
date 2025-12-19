@@ -6,7 +6,17 @@ Author: Xander @ Calyx Containers
 Version: 3.1.0
 """
 
-# S&OP modules
+# NC Data Loader
+from .data_loader import (
+    load_nc_data,
+    refresh_data,
+    get_data_summary,
+    load_sample_data,
+    filter_nc_data,
+    get_unique_values
+)
+
+# S&OP Data Loader
 from .sop_data_loader import (
     load_invoices,
     load_invoice_lines,
@@ -34,7 +44,14 @@ from .sales_rep_view import render_sales_rep_view
 
 # Export all
 __all__ = [
-    # Data loaders
+    # NC Data
+    'load_nc_data',
+    'refresh_data',
+    'get_data_summary',
+    'load_sample_data',
+    'filter_nc_data',
+    'get_unique_values',
+    # S&OP Data
     'load_invoices',
     'load_invoice_lines',
     'load_so_lines',
