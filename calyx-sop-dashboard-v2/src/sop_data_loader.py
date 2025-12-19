@@ -727,11 +727,11 @@ def load_revenue_forecast() -> Optional[pd.DataFrame]:
 
 def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Parse the Revenue Forecast sheet from wide format (Category + monthly columns)
-    to long format (Category, Period, Forecast_Revenue).
+    Parse the Revenue Forecast sheet to long format (Category, Period, Forecast_Revenue).
     
-    Assumes forecast is for the upcoming year (next year if we're past mid-year,
-    current year if we're in early part of year).
+    Supports two formats:
+    1. Wide format: Category + monthly columns (January, February, etc.)
+    2. Long format with Month/Year columns: Category, Month, Year, Amount
     """
     if revenue_forecast_df is None or revenue_forecast_df.empty:
         return pd.DataFrame()
@@ -742,7 +742,137 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
     if df.columns.duplicated().any():
         df = df.loc[:, ~df.columns.duplicated()]
     
-    # Find the category column (usually first column or named 'Category')
+    # Check if this is the new long format with Month and Year columns
+    has_month_col = any('month' in str(col).lower() for col in df.columns)
+    has_year_col = any('year' in str(col).lower() for col in df.columns)
+    
+    if has_month_col and has_year_col:
+        return parse_revenue_forecast_long_format(df)
+    else:
+        return parse_revenue_forecast_wide_format(df)
+
+
+def parse_revenue_forecast_long_format(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse Revenue Forecast in long format with Month and Year columns.
+    Expected columns: Category, Month, Year, Amount/Revenue
+    """
+    # Find columns
+    cat_col = None
+    month_col = None
+    year_col = None
+    amount_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower().strip()
+        
+        if cat_col is None and ('category' in col_lower or 'product' in col_lower or col_lower == 'type'):
+            cat_col = col
+        if month_col is None and col_lower == 'month':
+            month_col = col
+        if year_col is None and col_lower == 'year':
+            year_col = col
+        if amount_col is None and ('amount' in col_lower or 'revenue' in col_lower or 'forecast' in col_lower):
+            amount_col = col
+    
+    # If no category column found, use first column
+    if cat_col is None:
+        cat_col = df.columns[0]
+    
+    # If no amount column found, try to find any numeric column
+    if amount_col is None:
+        for col in df.columns:
+            if col not in [cat_col, month_col, year_col]:
+                # Check if column has numeric data
+                try:
+                    sample = df[col].iloc[0] if len(df) > 0 else None
+                    if sample is not None:
+                        if isinstance(sample, (int, float)):
+                            amount_col = col
+                            break
+                        elif isinstance(sample, str) and sample.replace('$', '').replace(',', '').replace('.', '').isdigit():
+                            amount_col = col
+                            break
+                except:
+                    pass
+    
+    if month_col is None or year_col is None:
+        return pd.DataFrame()
+    
+    # Month name to number mapping
+    month_to_num = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+        'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9,
+        'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    result_rows = []
+    
+    for _, row in df.iterrows():
+        category = row[cat_col]
+        if pd.isna(category) or str(category).strip() == '':
+            continue
+        
+        # Get month
+        month_val = row[month_col]
+        if pd.isna(month_val):
+            continue
+        
+        # Convert month to number
+        if isinstance(month_val, str):
+            month_num = month_to_num.get(month_val.lower().strip())
+            if month_num is None:
+                # Try to parse as number
+                try:
+                    month_num = int(month_val)
+                except:
+                    continue
+        else:
+            try:
+                month_num = int(month_val)
+            except:
+                continue
+        
+        # Get year
+        year_val = row[year_col]
+        if pd.isna(year_val):
+            continue
+        try:
+            year = int(year_val)
+        except:
+            continue
+        
+        # Get amount
+        if amount_col:
+            value = row[amount_col]
+            if isinstance(value, str):
+                value = value.replace('$', '').replace(',', '').strip()
+            try:
+                forecast_revenue = float(value)
+            except:
+                forecast_revenue = 0
+        else:
+            forecast_revenue = 0
+        
+        if forecast_revenue > 0:
+            period = f"{year}-{month_num:02d}"
+            result_rows.append({
+                'Category': str(category).strip(),
+                'Period': period,
+                'Forecast_Revenue': forecast_revenue
+            })
+    
+    return pd.DataFrame(result_rows)
+
+
+def parse_revenue_forecast_wide_format(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse Revenue Forecast in wide format (Category + monthly columns).
+    """
+    # Find the category column
     cat_col = None
     for col in df.columns:
         col_lower = str(col).lower()
@@ -751,7 +881,6 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
             break
     
     if cat_col is None:
-        # Assume first column is category
         cat_col = df.columns[0]
     
     # Month name mapping
@@ -765,15 +894,12 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
     }
     
     # Determine forecast year
-    # If current month is past June, assume forecast is for next year
-    # Otherwise assume it's for current year
     current_date = datetime.now()
     if current_date.month >= 6:
-        forecast_year = current_date.year + 1  # Next year
+        forecast_year = current_date.year + 1
     else:
-        forecast_year = current_date.year  # Current year
+        forecast_year = current_date.year
     
-    # Find month columns and melt to long format
     result_rows = []
     
     for _, row in df.iterrows():
@@ -786,25 +912,20 @@ def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
                 continue
             
             col_lower = str(col).lower().strip()
-            
-            # Check if this is a month column
             month_num = month_names.get(col_lower)
             
             if month_num:
                 value = row[col]
-                # Clean currency formatting
                 if isinstance(value, str):
                     value = value.replace('$', '').replace(',', '').strip()
                 
                 try:
                     forecast_revenue = float(value)
-                except (ValueError, TypeError):
+                except:
                     forecast_revenue = 0
                 
                 if forecast_revenue > 0:
-                    # Format period to match historical data format (YYYY-MM)
                     period = f"{forecast_year}-{month_num:02d}"
-                    
                     result_rows.append({
                         'Category': str(category).strip(),
                         'Period': period,
@@ -823,14 +944,23 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
     
     Returns DataFrame with columns: Category, Item, Total_Units, Mix_Pct
     """
+    # Store debug info
+    debug_info = {}
+    
     if sales_orders is None:
         sales_orders = load_sales_orders()
     
     if sales_orders is None or sales_orders.empty:
-        # Fall back to Invoice Lines if Sales Orders not available
+        debug_info['sales_orders_status'] = 'Empty or None - falling back to invoices'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
         return calculate_item_unit_mix_from_invoices()
     
     df = sales_orders.copy()
+    debug_info['sales_orders_rows'] = len(df)
+    debug_info['sales_orders_columns'] = list(df.columns)[:20]  # First 20 columns
     
     # Handle duplicate columns
     if df.columns.duplicated().any():
@@ -841,6 +971,9 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
     item_to_category = {}
     
     if items_df is not None and not items_df.empty:
+        debug_info['items_rows'] = len(items_df)
+        debug_info['items_columns'] = list(items_df.columns)[:20]
+        
         # Handle duplicate columns in items
         if items_df.columns.duplicated().any():
             items_df = items_df.loc[:, ~items_df.columns.duplicated()]
@@ -851,11 +984,14 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
         
         for col in items_df.columns:
             col_lower = str(col).lower()
-            if item_col_items is None and col_lower in ['item', 'sku', 'item name', 'name']:
+            if item_col_items is None and col_lower in ['item', 'sku', 'item name', 'name', 'item/sku']:
                 item_col_items = col
             if cat_col_items is None:
-                if 'product type' in col_lower or 'calyx' in col_lower or 'category' in col_lower:
+                if 'product type' in col_lower or 'calyx' in col_lower:
                     cat_col_items = col
+        
+        debug_info['items_item_col'] = item_col_items
+        debug_info['items_cat_col'] = cat_col_items
         
         if item_col_items and cat_col_items:
             # Create mapping
@@ -864,6 +1000,13 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
                 cat = row[cat_col_items]
                 if pd.notna(item) and pd.notna(cat):
                     item_to_category[str(item).strip()] = str(cat).strip()
+            
+            debug_info['item_to_category_count'] = len(item_to_category)
+            # Sample of mappings
+            sample_items = list(item_to_category.items())[:5]
+            debug_info['item_to_category_sample'] = sample_items
+    else:
+        debug_info['items_status'] = 'Empty or None'
     
     # Find required columns in Sales Orders
     date_col = None
@@ -879,23 +1022,51 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
                 date_col = col
             elif 'approval' in col_lower and 'date' in col_lower:
                 date_col = col
-            elif 'date' in col_lower and date_col is None:
-                date_col = col
         
         # Quantity column - prefer "Quantity Ordered"
         if qty_col is None:
             if 'quantity ordered' in col_lower:
                 qty_col = col
-            elif 'qty' in col_lower or 'quantity' in col_lower:
-                if qty_col is None:
-                    qty_col = col
+            elif 'qty ordered' in col_lower:
+                qty_col = col
         
         # Item column
-        if item_col is None and col_lower in ['item', 'sku', 'item name']:
-            item_col = col
+        if item_col is None:
+            if col_lower in ['item', 'sku', 'item name', 'item/sku']:
+                item_col = col
+    
+    # If we didn't find specific columns, try broader search
+    if date_col is None:
+        for col in df.columns:
+            if 'date' in str(col).lower():
+                date_col = col
+                break
+    
+    if qty_col is None:
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'qty' in col_lower or 'quantity' in col_lower:
+                qty_col = col
+                break
+    
+    if item_col is None:
+        for col in df.columns:
+            if 'item' in str(col).lower():
+                item_col = col
+                break
+    
+    debug_info['so_date_col'] = date_col
+    debug_info['so_qty_col'] = qty_col
+    debug_info['so_item_col'] = item_col
+    
+    # Store debug info
+    try:
+        st.session_state.item_mix_debug = debug_info
+    except:
+        pass
     
     if item_col is None or qty_col is None:
-        # Fall back to Invoice Lines
+        debug_info['fallback_reason'] = f'Missing columns: item_col={item_col}, qty_col={qty_col}'
         return calculate_item_unit_mix_from_invoices()
     
     # Get series safely
@@ -921,21 +1092,38 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
     
     # Map items to categories using Items table
     temp_df['Category'] = temp_df['Item'].map(item_to_category)
+    
+    # Count how many mapped vs not
+    mapped_count = temp_df['Category'].notna().sum()
+    total_count = len(temp_df)
+    debug_info['mapped_items'] = mapped_count
+    debug_info['total_items'] = total_count
+    
     temp_df['Category'] = temp_df['Category'].fillna('Unknown')
     
     # Filter to rolling 12 months
     if date_series is not None:
         temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
         cutoff_date = datetime.now() - timedelta(days=365)
+        before_filter = len(temp_df)
         temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+        debug_info['rows_before_date_filter'] = before_filter
+        debug_info['rows_after_date_filter'] = len(temp_df)
     
     if temp_df.empty:
         return calculate_item_unit_mix_from_invoices()
     
     # Remove Unknown categories (items without mapping)
+    before_unknown_filter = len(temp_df)
     temp_df = temp_df[temp_df['Category'] != 'Unknown']
+    debug_info['rows_after_unknown_filter'] = len(temp_df)
     
     if temp_df.empty:
+        debug_info['fallback_reason'] = 'All items mapped to Unknown category'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
         return calculate_item_unit_mix_from_invoices()
     
     # Calculate units by category and item
@@ -954,6 +1142,14 @@ def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.D
         0
     )
     
+    debug_info['final_categories'] = by_cat_item['Category'].unique().tolist()
+    debug_info['final_rows'] = len(by_cat_item)
+    
+    try:
+        st.session_state.item_mix_debug = debug_info
+    except:
+        pass
+    
     return by_cat_item[['Category', 'Item', 'Total_Units', 'Mix_Pct']]
 
 
@@ -961,12 +1157,21 @@ def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
     """
     Fallback: Calculate item unit mix from Invoice Lines if Sales Orders don't work.
     """
+    debug_info = {'source': 'invoice_lines_fallback'}
+    
     invoice_lines = load_invoice_lines()
     
     if invoice_lines is None or invoice_lines.empty:
+        debug_info['status'] = 'Invoice lines empty or None'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
         return pd.DataFrame()
     
     df = invoice_lines.copy()
+    debug_info['invoice_rows'] = len(df)
+    debug_info['invoice_columns'] = list(df.columns)[:20]
     
     # Handle duplicate columns
     if df.columns.duplicated().any():
@@ -989,7 +1194,17 @@ def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
         if date_col is None and 'date' in col_lower:
             date_col = col
     
+    debug_info['inv_item_col'] = item_col
+    debug_info['inv_qty_col'] = qty_col
+    debug_info['inv_cat_col'] = cat_col
+    debug_info['inv_date_col'] = date_col
+    
     if item_col is None or cat_col is None:
+        debug_info['status'] = f'Missing columns: item={item_col}, category={cat_col}'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
         return pd.DataFrame()
     
     # Get series safely
@@ -1007,6 +1222,11 @@ def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
     date_series = safe_get_series(df, date_col) if date_col else None
     
     if item_series is None or cat_series is None:
+        debug_info['status'] = 'Could not extract item or category series'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
         return pd.DataFrame()
     
     temp_df = pd.DataFrame({
@@ -1023,9 +1243,17 @@ def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
     if date_series is not None:
         temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
         cutoff_date = datetime.now() - timedelta(days=365)
+        before_filter = len(temp_df)
         temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+        debug_info['rows_before_date_filter'] = before_filter
+        debug_info['rows_after_date_filter'] = len(temp_df)
     
     if temp_df.empty:
+        debug_info['status'] = 'Empty after date filter'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
         return pd.DataFrame()
     
     # Calculate units by category and item
@@ -1043,6 +1271,15 @@ def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
         (by_cat_item['Total_Units'] / by_cat_item['Category_Total_Units'] * 100),
         0
     )
+    
+    debug_info['final_categories'] = by_cat_item['Category'].unique().tolist()
+    debug_info['final_rows'] = len(by_cat_item)
+    debug_info['status'] = 'Success'
+    
+    try:
+        st.session_state.item_mix_debug = debug_info
+    except:
+        pass
     
     return by_cat_item[['Category', 'Item', 'Total_Units', 'Mix_Pct']]
 
@@ -1527,42 +1764,3 @@ def calculate_lead_times(items: pd.DataFrame = None,
         result_cols.insert(-1, vendor_col)
     
     return df[[c for c in result_cols if c in df.columns]]
-
-
-def allocate_topdown_forecast(total_forecast: float, 
-                               historical_mix: pd.DataFrame) -> pd.DataFrame:
-    """
-    Allocate a top-down forecast to products based on historical mix.
-    
-    Args:
-        total_forecast: Total forecast value to allocate
-        historical_mix: DataFrame with product mix percentages
-    
-    Returns:
-        DataFrame with allocated forecast by product
-    """
-    if historical_mix is None or historical_mix.empty:
-        return pd.DataFrame()
-    
-    df = historical_mix.copy()
-    
-    # Find value column
-    value_col = None
-    for col in df.columns:
-        col_lower = col.lower()
-        if 'revenue' in col_lower or 'amount' in col_lower or 'value' in col_lower:
-            value_col = col
-            break
-    
-    if value_col is None:
-        return pd.DataFrame()
-    
-    # Calculate mix percentages
-    total_historical = df[value_col].sum()
-    if total_historical == 0:
-        return pd.DataFrame()
-    
-    df['Mix %'] = df[value_col] / total_historical
-    df['Allocated Forecast'] = df['Mix %'] * total_forecast
-    
-    return df
