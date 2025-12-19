@@ -392,8 +392,22 @@ def get_unique_sales_reps(sales_orders: pd.DataFrame = None, customers: pd.DataF
     
     for df in [sales_orders, customers]:
         if df is not None and not df.empty:
-            if 'Rep' in df.columns:
-                reps.update(df['Rep'].dropna().unique())
+            # Handle duplicate columns
+            if df.columns.duplicated().any():
+                df = df.loc[:, ~df.columns.duplicated()]
+            
+            # Find rep column
+            rep_col = None
+            for col in df.columns:
+                if 'rep' in col.lower():
+                    rep_col = col
+                    break
+            
+            if rep_col:
+                series = df.loc[:, rep_col]
+                if isinstance(series, pd.DataFrame):
+                    series = series.iloc[:, 0]
+                reps.update(series.dropna().unique())
     
     return sorted([str(r).strip() for r in reps if r and str(r).strip()])
 
@@ -405,16 +419,37 @@ def get_customers_for_rep(rep: str = None) -> List[str]:
     if sales_orders is None or sales_orders.empty:
         return []
     
-    if rep and rep != "All" and 'Rep' in sales_orders.columns:
-        filtered = sales_orders[sales_orders['Rep'] == rep]
+    # Handle duplicate columns
+    if sales_orders.columns.duplicated().any():
+        sales_orders = sales_orders.loc[:, ~sales_orders.columns.duplicated()]
+    
+    # Find rep and customer columns
+    rep_col = None
+    cust_col = None
+    for col in sales_orders.columns:
+        col_lower = col.lower()
+        if rep_col is None and 'rep' in col_lower:
+            rep_col = col
+        if cust_col is None and 'customer' in col_lower:
+            cust_col = col
+    
+    if cust_col is None:
+        return []
+    
+    if rep and rep != "All" and rep_col:
+        rep_series = sales_orders.loc[:, rep_col]
+        if isinstance(rep_series, pd.DataFrame):
+            rep_series = rep_series.iloc[:, 0]
+        filtered = sales_orders[rep_series == rep]
     else:
         filtered = sales_orders
     
-    if 'Customer' in filtered.columns:
-        customers = filtered['Customer'].dropna().unique()
-        return sorted([str(c).strip() for c in customers if c and str(c).strip()])
+    cust_series = filtered.loc[:, cust_col]
+    if isinstance(cust_series, pd.DataFrame):
+        cust_series = cust_series.iloc[:, 0]
     
-    return []
+    customers = cust_series.dropna().unique()
+    return sorted([str(c).strip() for c in customers if c and str(c).strip()])
 
 
 def get_skus_for_customer(customer: str = None) -> List[str]:
@@ -424,47 +459,103 @@ def get_skus_for_customer(customer: str = None) -> List[str]:
     if invoice_lines is None or invoice_lines.empty:
         return []
     
-    if customer and customer != "All" and 'Customer' in invoice_lines.columns:
-        filtered = invoice_lines[invoice_lines['Customer'] == customer]
+    # Handle duplicate columns
+    if invoice_lines.columns.duplicated().any():
+        invoice_lines = invoice_lines.loc[:, ~invoice_lines.columns.duplicated()]
+    
+    # Find customer and item columns
+    cust_col = None
+    item_col = None
+    for col in invoice_lines.columns:
+        col_lower = col.lower()
+        if cust_col is None and 'customer' in col_lower:
+            cust_col = col
+        if item_col is None and col_lower in ['item', 'sku']:
+            item_col = col
+    
+    if item_col is None:
+        return []
+    
+    if customer and customer != "All" and cust_col:
+        cust_series = invoice_lines.loc[:, cust_col]
+        if isinstance(cust_series, pd.DataFrame):
+            cust_series = cust_series.iloc[:, 0]
+        filtered = invoice_lines[cust_series == customer]
     else:
         filtered = invoice_lines
     
-    if 'Item' in filtered.columns:
-        items = filtered['Item'].dropna().unique()
-        return sorted([str(i).strip() for i in items if i and str(i).strip()])
+    item_series = filtered.loc[:, item_col]
+    if isinstance(item_series, pd.DataFrame):
+        item_series = item_series.iloc[:, 0]
     
-    return []
+    items = item_series.dropna().unique()
+    return sorted([str(i).strip() for i in items if i and str(i).strip()])
 
 
-def get_unique_product_types() -> List[str]:
+def get_unique_product_types(items: pd.DataFrame = None) -> List[str]:
     """Get unique product types from items."""
-    items = load_items()
+    if items is None:
+        items = load_items()
     
     if items is None or items.empty:
         return []
     
-    if 'Calyx Product Type' in items.columns:
-        types = items['Calyx Product Type'].dropna().unique()
-    elif 'Product Type' in items.columns:
-        types = items['Product Type'].dropna().unique()
-    else:
-        return []
+    # Handle duplicate columns
+    if items.columns.duplicated().any():
+        items = items.loc[:, ~items.columns.duplicated()]
     
+    if 'Calyx Product Type' in items.columns:
+        col = 'Calyx Product Type'
+    elif 'Product Type' in items.columns:
+        col = 'Product Type'
+    else:
+        # Find any column with 'product type' in name
+        col = None
+        for c in items.columns:
+            if 'product type' in c.lower():
+                col = c
+                break
+        if col is None:
+            return []
+    
+    # Get as series safely
+    series = items.loc[:, col]
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    
+    types = series.dropna().unique().tolist()
     return sorted([str(t).strip() for t in types if t and str(t).strip() and str(t) != 'Unknown'])
 
 
-def get_unique_skus() -> List[str]:
+def get_unique_skus(items: pd.DataFrame = None) -> List[str]:
     """Get unique SKUs/Items."""
-    items = load_items()
+    if items is None:
+        items = load_items()
     
     if items is None or items.empty:
         return []
     
-    if 'Item' in items.columns:
-        skus = items['Item'].dropna().unique()
-        return sorted([str(s).strip() for s in skus if s and str(s).strip()])
+    # Handle duplicate columns
+    if items.columns.duplicated().any():
+        items = items.loc[:, ~items.columns.duplicated()]
     
-    return []
+    # Find item column
+    item_col = None
+    for col in items.columns:
+        if col.lower() in ['item', 'sku', 'item name', 'name']:
+            item_col = col
+            break
+    
+    if item_col is None:
+        return []
+    
+    # Get as series safely
+    series = items.loc[:, item_col]
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    
+    skus = series.dropna().unique().tolist()
+    return sorted([str(s).strip() for s in skus if s and str(s).strip()])
 
 
 def prepare_demand_history(invoice_lines: pd.DataFrame = None, 
