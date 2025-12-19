@@ -696,6 +696,346 @@ def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
     return grouped
 
 
+# =============================================================================
+# REVENUE FORECAST FUNCTIONS
+# =============================================================================
+
+@st.cache_data(ttl=300)
+def load_revenue_forecast() -> Optional[pd.DataFrame]:
+    """Load Revenue Forecast data from Google Sheet."""
+    df = load_sheet_to_dataframe('Revenue forecast')
+    
+    if df is None or df.empty:
+        # Try alternate names
+        for name in ['Revenue Forecast', 'RevenueForecast', 'Forecast']:
+            df = load_sheet_to_dataframe(name)
+            if df is not None and not df.empty:
+                break
+    
+    if df is None or df.empty:
+        return None
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    return df
+
+
+def calculate_item_mix(invoice_lines: pd.DataFrame, 
+                       product_type_col: str,
+                       item_col: str,
+                       amount_col: str) -> pd.DataFrame:
+    """
+    Calculate historical percentage mix of items within each category.
+    
+    Returns DataFrame with columns: Category, Item, Mix_Pct
+    """
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Get series safely
+    cat_series = df.loc[:, product_type_col] if product_type_col in df.columns else None
+    item_series = df.loc[:, item_col] if item_col in df.columns else None
+    amt_series = df.loc[:, amount_col] if amount_col in df.columns else None
+    
+    if cat_series is None or item_series is None or amt_series is None:
+        return pd.DataFrame()
+    
+    # Handle DataFrame returns from duplicate columns
+    if isinstance(cat_series, pd.DataFrame):
+        cat_series = cat_series.iloc[:, 0]
+    if isinstance(item_series, pd.DataFrame):
+        item_series = item_series.iloc[:, 0]
+    if isinstance(amt_series, pd.DataFrame):
+        amt_series = amt_series.iloc[:, 0]
+    
+    temp_df = pd.DataFrame({
+        'Category': cat_series,
+        'Item': item_series,
+        'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+    })
+    
+    # Calculate revenue by category and item
+    by_cat_item = temp_df.groupby(['Category', 'Item'])['Amount'].sum().reset_index()
+    
+    # Calculate category totals
+    cat_totals = temp_df.groupby('Category')['Amount'].sum().reset_index()
+    cat_totals.columns = ['Category', 'Category_Total']
+    
+    # Merge and calculate percentage
+    by_cat_item = by_cat_item.merge(cat_totals, on='Category')
+    by_cat_item['Mix_Pct'] = (by_cat_item['Amount'] / by_cat_item['Category_Total'] * 100).round(4)
+    
+    return by_cat_item[['Category', 'Item', 'Amount', 'Mix_Pct']]
+
+
+def calculate_item_asp(invoice_lines: pd.DataFrame,
+                       item_col: str,
+                       amount_col: str,
+                       qty_col: str) -> pd.DataFrame:
+    """
+    Calculate historical Average Selling Price (ASP) by item.
+    
+    Returns DataFrame with columns: Item, ASP, Total_Units, Total_Revenue
+    """
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Get series safely
+    item_series = df.loc[:, item_col] if item_col in df.columns else None
+    amt_series = df.loc[:, amount_col] if amount_col in df.columns else None
+    qty_series = df.loc[:, qty_col] if qty_col in df.columns else None
+    
+    if item_series is None or amt_series is None:
+        return pd.DataFrame()
+    
+    # Handle DataFrame returns
+    if isinstance(item_series, pd.DataFrame):
+        item_series = item_series.iloc[:, 0]
+    if isinstance(amt_series, pd.DataFrame):
+        amt_series = amt_series.iloc[:, 0]
+    if qty_series is not None and isinstance(qty_series, pd.DataFrame):
+        qty_series = qty_series.iloc[:, 0]
+    
+    temp_df = pd.DataFrame({
+        'Item': item_series,
+        'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+    })
+    
+    if qty_series is not None:
+        temp_df['Quantity'] = pd.to_numeric(qty_series, errors='coerce').fillna(0)
+    else:
+        temp_df['Quantity'] = 1  # Default to 1 if no quantity
+    
+    # Aggregate by item
+    by_item = temp_df.groupby('Item').agg({
+        'Amount': 'sum',
+        'Quantity': 'sum'
+    }).reset_index()
+    
+    by_item.columns = ['Item', 'Total_Revenue', 'Total_Units']
+    
+    # Calculate ASP (avoid division by zero)
+    by_item['ASP'] = np.where(
+        by_item['Total_Units'] > 0,
+        by_item['Total_Revenue'] / by_item['Total_Units'],
+        0
+    )
+    
+    return by_item
+
+
+def allocate_forecast_to_items(revenue_forecast: pd.DataFrame,
+                               item_mix: pd.DataFrame,
+                               item_asp: pd.DataFrame) -> pd.DataFrame:
+    """
+    Allocate category-level revenue forecast down to item level.
+    
+    Args:
+        revenue_forecast: Category-level forecast with columns like Category, Period, Forecast_Revenue
+        item_mix: Historical item mix percentages from calculate_item_mix()
+        item_asp: Historical ASP by item from calculate_item_asp()
+    
+    Returns:
+        DataFrame with item-level forecast: Item, Category, Period, Forecast_Revenue, Forecast_Units
+    """
+    if revenue_forecast is None or revenue_forecast.empty:
+        return pd.DataFrame()
+    if item_mix is None or item_mix.empty:
+        return pd.DataFrame()
+    
+    forecast_df = revenue_forecast.copy()
+    
+    # Handle duplicate columns
+    if forecast_df.columns.duplicated().any():
+        forecast_df = forecast_df.loc[:, ~forecast_df.columns.duplicated()]
+    
+    # Find category column in forecast
+    cat_col = None
+    for col in forecast_df.columns:
+        col_lower = str(col).lower()
+        if 'category' in col_lower or 'product type' in col_lower or 'type' in col_lower:
+            cat_col = col
+            break
+    
+    # Find period/date column
+    period_col = None
+    for col in forecast_df.columns:
+        col_lower = str(col).lower()
+        if 'period' in col_lower or 'month' in col_lower or 'date' in col_lower:
+            period_col = col
+            break
+    
+    # Find forecast amount column
+    amount_col = None
+    for col in forecast_df.columns:
+        col_lower = str(col).lower()
+        if 'forecast' in col_lower or 'revenue' in col_lower or 'amount' in col_lower:
+            amount_col = col
+            break
+    
+    if cat_col is None or amount_col is None:
+        # Try to work with what we have - maybe it's a simpler format
+        return pd.DataFrame()
+    
+    # Allocate to items
+    result_rows = []
+    
+    for _, forecast_row in forecast_df.iterrows():
+        category = forecast_row[cat_col]
+        period = forecast_row[period_col] if period_col else 'Unknown'
+        forecast_revenue = pd.to_numeric(forecast_row[amount_col], errors='coerce')
+        
+        if pd.isna(forecast_revenue) or forecast_revenue == 0:
+            continue
+        
+        # Get items in this category
+        cat_items = item_mix[item_mix['Category'] == category]
+        
+        if cat_items.empty:
+            # No historical data for this category - keep at category level
+            result_rows.append({
+                'Item': f'{category} (Unallocated)',
+                'Category': category,
+                'Period': period,
+                'Forecast_Revenue': forecast_revenue,
+                'Forecast_Units': 0,
+                'Mix_Pct': 100
+            })
+            continue
+        
+        # Allocate forecast to each item based on mix percentage
+        for _, item_row in cat_items.iterrows():
+            item_name = item_row['Item']
+            mix_pct = item_row['Mix_Pct'] / 100  # Convert from percentage
+            
+            item_forecast_revenue = forecast_revenue * mix_pct
+            
+            # Get ASP for this item
+            item_asp_row = item_asp[item_asp['Item'] == item_name] if item_asp is not None else None
+            
+            if item_asp_row is not None and not item_asp_row.empty:
+                asp = item_asp_row['ASP'].iloc[0]
+                forecast_units = item_forecast_revenue / asp if asp > 0 else 0
+            else:
+                forecast_units = 0
+            
+            result_rows.append({
+                'Item': item_name,
+                'Category': category,
+                'Period': str(period),
+                'Forecast_Revenue': round(item_forecast_revenue, 2),
+                'Forecast_Units': round(forecast_units, 0),
+                'Mix_Pct': round(mix_pct * 100, 2)
+            })
+    
+    return pd.DataFrame(result_rows)
+
+
+def get_item_level_forecast(invoice_lines: pd.DataFrame = None,
+                            product_type_col: str = None,
+                            item_col: str = None,
+                            amount_col: str = None,
+                            qty_col: str = None) -> pd.DataFrame:
+    """
+    Main function to get item-level forecast from category-level Revenue Forecast.
+    
+    1. Loads Revenue Forecast sheet
+    2. Calculates historical item mix within categories
+    3. Calculates historical ASP by item
+    4. Allocates category forecast to items
+    
+    Returns DataFrame with item-level forecasts
+    """
+    # Load category-level forecast
+    revenue_forecast = load_revenue_forecast()
+    
+    if revenue_forecast is None or revenue_forecast.empty:
+        return pd.DataFrame()
+    
+    # Load invoice data if not provided
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    # Auto-detect columns if not provided
+    if product_type_col is None:
+        for col in invoice_lines.columns:
+            if 'product type' in col.lower() or 'calyx' in col.lower():
+                product_type_col = col
+                break
+    
+    if item_col is None:
+        for col in invoice_lines.columns:
+            if col.lower() in ['item', 'sku']:
+                item_col = col
+                break
+    
+    if amount_col is None:
+        for col in invoice_lines.columns:
+            if 'amount' in col.lower():
+                amount_col = col
+                break
+    
+    if qty_col is None:
+        for col in invoice_lines.columns:
+            if 'qty' in col.lower() or 'quantity' in col.lower():
+                qty_col = col
+                break
+    
+    if product_type_col is None or item_col is None or amount_col is None:
+        return pd.DataFrame()
+    
+    # Calculate item mix and ASP
+    item_mix = calculate_item_mix(invoice_lines, product_type_col, item_col, amount_col)
+    item_asp = calculate_item_asp(invoice_lines, item_col, amount_col, qty_col)
+    
+    # Allocate forecast to items
+    item_forecast = allocate_forecast_to_items(revenue_forecast, item_mix, item_asp)
+    
+    return item_forecast
+
+
+def get_forecast_by_period(category: str = None, freq: str = 'M') -> pd.DataFrame:
+    """
+    Get the Revenue Forecast aggregated by period, optionally filtered by category.
+    
+    Returns DataFrame with Period and Forecast_Revenue columns.
+    """
+    item_forecast = get_item_level_forecast()
+    
+    if item_forecast.empty:
+        return pd.DataFrame()
+    
+    # Filter by category if specified
+    if category and category != 'All':
+        item_forecast = item_forecast[item_forecast['Category'] == category]
+    
+    if item_forecast.empty:
+        return pd.DataFrame()
+    
+    # Aggregate by period
+    by_period = item_forecast.groupby('Period')['Forecast_Revenue'].sum().reset_index()
+    by_period.columns = ['Period', 'Forecast_Revenue']
+    
+    return by_period
+
+
 def get_pipeline_by_period(deals: pd.DataFrame = None,
                            period: str = 'M',
                            freq: str = None) -> pd.DataFrame:
