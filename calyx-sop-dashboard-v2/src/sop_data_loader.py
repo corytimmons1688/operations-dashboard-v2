@@ -559,8 +559,13 @@ def get_unique_skus(items: pd.DataFrame = None) -> List[str]:
 
 
 def prepare_demand_history(invoice_lines: pd.DataFrame = None, 
-                           period: str = 'M') -> pd.DataFrame:
+                           period: str = 'M',
+                           freq: str = None) -> pd.DataFrame:
     """Prepare historical demand data aggregated by period."""
+    # Handle freq as alias for period
+    if freq is not None:
+        period = freq
+        
     if invoice_lines is None:
         invoice_lines = load_invoice_lines()
     
@@ -569,13 +574,28 @@ def prepare_demand_history(invoice_lines: pd.DataFrame = None,
     
     df = invoice_lines.copy()
     
-    # Convert date
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df = df.dropna(subset=['Date'])
-        df['Period'] = df['Date'].dt.to_period(period)
-    else:
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find date column
+    date_col = None
+    for col in df.columns:
+        if 'date' in col.lower():
+            date_col = col
+            break
+    
+    if date_col is None:
         return pd.DataFrame()
+    
+    # Get date series safely
+    date_series = df.loc[:, date_col]
+    if isinstance(date_series, pd.DataFrame):
+        date_series = date_series.iloc[:, 0]
+    
+    df['Date'] = pd.to_datetime(date_series, errors='coerce')
+    df = df.dropna(subset=['Date'])
+    df['Period'] = df['Date'].dt.to_period(period)
     
     # Aggregate
     agg_cols = {}
@@ -594,8 +614,14 @@ def prepare_demand_history(invoice_lines: pd.DataFrame = None,
 
 
 def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
-                            group_by: str = None) -> pd.DataFrame:
+                            group_by: str = None,
+                            freq: str = None,
+                            period: str = 'M') -> pd.DataFrame:
     """Prepare revenue history, optionally grouped."""
+    # Handle freq as alias for period
+    if freq is not None:
+        period = freq
+        
     if invoice_lines is None:
         invoice_lines = load_invoice_lines()
     
@@ -604,31 +630,71 @@ def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
     
     df = invoice_lines.copy()
     
-    # Convert date
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        df = df.dropna(subset=['Date'])
-        df['Month'] = df['Date'].dt.to_period('M')
-    else:
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find date column
+    date_col = None
+    for col in df.columns:
+        if 'date' in col.lower():
+            date_col = col
+            break
+    
+    if date_col is None:
         return pd.DataFrame()
+    
+    # Get date series safely
+    date_series = df.loc[:, date_col]
+    if isinstance(date_series, pd.DataFrame):
+        date_series = date_series.iloc[:, 0]
+    
+    df['Date'] = pd.to_datetime(date_series, errors='coerce')
+    df = df.dropna(subset=['Date'])
+    df['Month'] = df['Date'].dt.to_period(period)
+    
+    # Find amount column
+    amt_col = None
+    for col in df.columns:
+        if 'amount' in col.lower():
+            amt_col = col
+            break
+    
+    if amt_col is None:
+        return pd.DataFrame()
+    
+    # Get amount series safely
+    amt_series = df.loc[:, amt_col]
+    if isinstance(amt_series, pd.DataFrame):
+        amt_series = amt_series.iloc[:, 0]
+    df['Amount'] = pd.to_numeric(amt_series, errors='coerce')
     
     # Group by
     group_cols = ['Month']
     if group_by and group_by in df.columns:
         group_cols.append(group_by)
     
-    if 'Amount' in df.columns:
-        grouped = df.groupby(group_cols)['Amount'].sum().reset_index()
-        grouped.columns = group_cols + ['Revenue']
-        grouped['Month'] = grouped['Month'].astype(str)
-        return grouped
-    
-    return pd.DataFrame()
+    grouped = df.groupby(group_cols)['Amount'].sum().reset_index()
+    grouped.columns = group_cols + ['Revenue']
+    grouped['Month'] = grouped['Month'].astype(str)
+    return grouped
 
 
 def get_pipeline_by_period(deals: pd.DataFrame = None,
-                           period: str = 'M') -> pd.DataFrame:
-    """Get pipeline/deals aggregated by expected close period."""
+                           period: str = 'M',
+                           freq: str = None) -> pd.DataFrame:
+    """
+    Get pipeline/deals aggregated by expected close period.
+    
+    Args:
+        deals: Deals DataFrame (optional, will load if not provided)
+        period: Period frequency ('M' for monthly, 'Q' for quarterly, etc.)
+        freq: Alias for period (for backwards compatibility)
+    """
+    # Handle freq as alias for period
+    if freq is not None:
+        period = freq
+    
     if deals is None:
         deals = load_deals()
     
@@ -637,22 +703,67 @@ def get_pipeline_by_period(deals: pd.DataFrame = None,
     
     df = deals.copy()
     
-    # Convert close date
-    if 'Close Date' in df.columns:
-        df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
-        df = df.dropna(subset=['Close Date'])
-        df['Period'] = df['Close Date'].dt.to_period(period)
-    else:
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find close date column
+    close_date_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'close' in col_lower and 'date' in col_lower:
+            close_date_col = col
+            break
+        elif col_lower == 'close date':
+            close_date_col = col
+            break
+    
+    if close_date_col is None:
+        # Try any date column
+        for col in df.columns:
+            if 'date' in col.lower():
+                close_date_col = col
+                break
+    
+    if close_date_col is None:
         return pd.DataFrame()
     
-    # Aggregate
-    if 'Amount' in df.columns:
-        grouped = df.groupby('Period')['Amount'].sum().reset_index()
-        grouped.columns = ['Period', 'Pipeline Value']
-        grouped['Period'] = grouped['Period'].astype(str)
-        return grouped
+    # Get date series safely
+    date_series = df.loc[:, close_date_col]
+    if isinstance(date_series, pd.DataFrame):
+        date_series = date_series.iloc[:, 0]
     
-    return pd.DataFrame()
+    df['Close Date'] = pd.to_datetime(date_series, errors='coerce')
+    df = df.dropna(subset=['Close Date'])
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    df['Period'] = df['Close Date'].dt.to_period(period)
+    
+    # Find amount column
+    amt_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'amount' in col_lower or 'value' in col_lower:
+            amt_col = col
+            break
+    
+    if amt_col is None:
+        return pd.DataFrame()
+    
+    # Get amount series safely
+    amt_series = df.loc[:, amt_col]
+    if isinstance(amt_series, pd.DataFrame):
+        amt_series = amt_series.iloc[:, 0]
+    
+    df['Amount'] = pd.to_numeric(amt_series, errors='coerce')
+    
+    grouped = df.groupby('Period')['Amount'].sum().reset_index()
+    grouped.columns = ['Period', 'Pipeline Value']
+    grouped['Period'] = grouped['Period'].astype(str)
+    
+    return grouped
 
 
 def calculate_lead_times(items: pd.DataFrame = None, 
