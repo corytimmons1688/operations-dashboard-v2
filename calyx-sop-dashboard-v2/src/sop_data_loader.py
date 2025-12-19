@@ -871,7 +871,10 @@ def parse_revenue_forecast_long_format(df: pd.DataFrame) -> pd.DataFrame:
 def parse_revenue_forecast_wide_format(df: pd.DataFrame) -> pd.DataFrame:
     """
     Parse Revenue Forecast in wide format (Category + monthly columns).
+    Handles columns like "January", "January 2026", "Jan 2026", etc.
     """
+    import re
+    
     # Find the category column
     cat_col = None
     for col in df.columns:
@@ -893,12 +896,9 @@ def parse_revenue_forecast_wide_format(df: pd.DataFrame) -> pd.DataFrame:
         'oct': 10, 'nov': 11, 'dec': 12
     }
     
-    # Determine forecast year
+    # Default forecast year
     current_date = datetime.now()
-    if current_date.month >= 6:
-        forecast_year = current_date.year + 1
-    else:
-        forecast_year = current_date.year
+    default_year = current_date.year + 1 if current_date.month >= 6 else current_date.year
     
     result_rows = []
     
@@ -911,26 +911,38 @@ def parse_revenue_forecast_wide_format(df: pd.DataFrame) -> pd.DataFrame:
             if col == cat_col:
                 continue
             
-            col_lower = str(col).lower().strip()
-            month_num = month_names.get(col_lower)
+            col_str = str(col).lower().strip()
             
-            if month_num:
-                value = row[col]
-                if isinstance(value, str):
-                    value = value.replace('$', '').replace(',', '').strip()
-                
-                try:
-                    forecast_revenue = float(value)
-                except:
-                    forecast_revenue = 0
-                
-                if forecast_revenue > 0:
-                    period = f"{forecast_year}-{month_num:02d}"
-                    result_rows.append({
-                        'Category': str(category).strip(),
-                        'Period': period,
-                        'Forecast_Revenue': forecast_revenue
-                    })
+            # Try to find month name within column string
+            month_num = None
+            for month_name, month_val in month_names.items():
+                if month_name in col_str:
+                    month_num = month_val
+                    break
+            
+            if month_num is None:
+                continue  # Not a month column
+            
+            # Try to extract year from column (e.g., "January 2026")
+            year_match = re.search(r'20\d{2}', str(col))
+            year = int(year_match.group()) if year_match else default_year
+            
+            value = row[col]
+            if isinstance(value, str):
+                value = value.replace('$', '').replace(',', '').strip()
+            
+            try:
+                forecast_revenue = float(value)
+            except:
+                forecast_revenue = 0
+            
+            if forecast_revenue > 0:
+                period = f"{year}-{month_num:02d}"
+                result_rows.append({
+                    'Category': str(category).strip(),
+                    'Period': period,
+                    'Forecast_Revenue': forecast_revenue
+                })
     
     return pd.DataFrame(result_rows)
 
@@ -1539,13 +1551,50 @@ def get_revenue_forecast_by_period(category: str = None) -> pd.DataFrame:
     Get Revenue Forecast aggregated by period for charting.
     Optionally filter by category.
     
+    Falls back to category-level data if item-level allocation fails.
+    
     Returns DataFrame with Period and Forecast_Revenue columns.
     """
+    # First try to get item-level forecast
     item_forecast = get_topdown_item_forecast()
     
+    # If item forecast is empty, fall back to parsed category-level forecast
     if item_forecast.empty:
-        return pd.DataFrame()
+        # Load and parse the raw forecast
+        revenue_forecast_raw = load_revenue_forecast()
+        if revenue_forecast_raw is None or revenue_forecast_raw.empty:
+            return pd.DataFrame()
+        
+        parsed_forecast = parse_revenue_forecast(revenue_forecast_raw)
+        if parsed_forecast.empty:
+            return pd.DataFrame()
+        
+        # Filter by category if specified
+        if category and category != 'All':
+            # Try exact match first
+            filtered = parsed_forecast[parsed_forecast['Category'] == category]
+            
+            # If no exact match, try case-insensitive
+            if filtered.empty:
+                category_lower = category.lower().strip()
+                filtered = parsed_forecast[parsed_forecast['Category'].str.lower().str.strip() == category_lower]
+            
+            # If still no match, try contains
+            if filtered.empty:
+                filtered = parsed_forecast[parsed_forecast['Category'].str.lower().str.contains(category_lower, na=False)]
+            
+            parsed_forecast = filtered
+        
+        if parsed_forecast.empty:
+            return pd.DataFrame()
+        
+        # Aggregate by period
+        by_period = parsed_forecast.groupby('Period')['Forecast_Revenue'].sum().reset_index()
+        by_period = by_period.sort_values('Period')
+        
+        return by_period
     
+    # If we have item-level forecast, use it
     # Filter by category if specified (with fuzzy matching)
     if category and category != 'All':
         # Try exact match first
