@@ -1356,6 +1356,8 @@ def calculate_item_asp_rolling12(invoice_lines: pd.DataFrame = None) -> pd.DataF
     Uses Invoice Lines data for actual sales prices.
     Rolling 12 months only.
     
+    EXCLUDES lines with $0 amounts to avoid skewing ASP calculations.
+    
     Returns DataFrame with columns: Item, ASP, Total_Units, Total_Revenue
     """
     if invoice_lines is None:
@@ -1423,6 +1425,16 @@ def calculate_item_asp_rolling12(invoice_lines: pd.DataFrame = None) -> pd.DataF
         temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
         cutoff_date = datetime.now() - timedelta(days=365)
         temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+    
+    if temp_df.empty:
+        return pd.DataFrame()
+    
+    # CRITICAL: Exclude $0 lines from ASP calculation
+    # These are often samples, returns, or adjustments that would skew ASP
+    temp_df = temp_df[temp_df['Amount'] > 0]
+    
+    # Also exclude lines with 0 quantity
+    temp_df = temp_df[temp_df['Quantity'] > 0]
     
     if temp_df.empty:
         return pd.DataFrame()
