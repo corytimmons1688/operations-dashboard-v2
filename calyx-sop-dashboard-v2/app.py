@@ -353,27 +353,14 @@ def render_sales_rep_tab():
 
 
 def render_operations_tab():
-    """Render Operations View tab with its specific filters."""
-    st.markdown('<div class="filter-section">', unsafe_allow_html=True)
-    cols = st.columns([2, 2, 2, 2, 1])
-    with cols[0]:
-        st.selectbox("Product Category", ["All", "Concentrate", "Flower", "Pre-Roll", "Custom"], key="ops_cat")
-    with cols[1]:
-        st.selectbox("Time Period", ["Monthly", "Quarterly", "Weekly"], key="ops_period")
-    with cols[2]:
-        st.selectbox("Forecast Type", ["Blended", "ETS", "ARIMA", "ML"], key="ops_forecast")
-    with cols[3]:
-        st.selectbox("Compare To", ["Prior Year", "Budget", "None"], key="ops_compare")
-    with cols[4]:
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.button("Apply", key="ops_apply", use_container_width=True)
-    st.markdown('</div>', unsafe_allow_html=True)
-    
+    """Render Operations View tab - filters are handled within the view itself."""
     if MODULES_LOADED:
         try:
             render_operations_view()
         except Exception as e:
             st.error(f"Error loading Operations View: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
     else:
         st.warning(f"Module not loaded: {IMPORT_ERROR}")
 
