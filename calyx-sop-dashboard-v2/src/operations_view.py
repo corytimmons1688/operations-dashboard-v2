@@ -126,20 +126,20 @@ def render_operations_view():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        selected_category = st.selectbox("Product Category", category_options, key="ops_category")
+        selected_category = st.selectbox("Product Category", category_options, key="opsv_category")
     with col2:
-        selected_item = st.selectbox("Item/SKU", item_options, key="ops_item")
+        selected_item = st.selectbox("Item/SKU", item_options, key="opsv_item")
     with col3:
         time_period = st.selectbox(
             "Time Period", 
             ["Monthly", "Quarterly", "Weekly"],
-            key="ops_period"
+            key="opsv_time_period"
         )
     with col4:
         forecast_horizon = st.selectbox(
             "Forecast Horizon",
             ["3 Months", "6 Months", "12 Months"],
-            key="ops_horizon"
+            key="opsv_horizon"
         )
     
     st.markdown("---")
