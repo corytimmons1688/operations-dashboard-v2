@@ -285,15 +285,36 @@ def generate_simple_forecast(history_df, horizon, freq):
         avg_value = recent['Amount'].mean()
         growth_rate = 0.02  # 2% monthly growth assumption
         
-        # Generate future periods
-        last_period = history_df['Period'].iloc[-1]
+        # Get last period and generate future periods
+        last_period_str = history_df['Period'].iloc[-1]
         
-        # Parse last period and generate future
+        # Parse the period string to get a date
+        try:
+            # Try parsing as period (e.g., "2025-07")
+            last_date = pd.to_datetime(last_period_str)
+        except:
+            # If that fails, try to parse differently
+            last_date = datetime.now()
+        
+        # Generate future periods based on frequency
         forecast_data = []
         for i in range(1, horizon + 1):
+            if freq == 'M':
+                future_date = last_date + pd.DateOffset(months=i)
+                period_label = future_date.strftime('%Y-%m')
+            elif freq == 'Q':
+                future_date = last_date + pd.DateOffset(months=i*3)
+                period_label = f"{future_date.year}-Q{(future_date.month-1)//3 + 1}"
+            elif freq == 'W':
+                future_date = last_date + pd.DateOffset(weeks=i)
+                period_label = future_date.strftime('%Y-%W')
+            else:
+                future_date = last_date + pd.DateOffset(months=i)
+                period_label = future_date.strftime('%Y-%m')
+            
             forecast_value = avg_value * (1 + growth_rate) ** i
             forecast_data.append({
-                'Period': f"F+{i}",
+                'Period': period_label,
                 'Forecast': forecast_value,
                 'Lower': forecast_value * 0.85,
                 'Upper': forecast_value * 1.15
