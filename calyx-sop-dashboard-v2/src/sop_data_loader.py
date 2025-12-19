@@ -564,3 +564,128 @@ def get_pipeline_by_period(deals: pd.DataFrame = None,
     return pd.DataFrame()
 
 
+def calculate_lead_times(items: pd.DataFrame = None, 
+                         vendors: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Calculate lead times for items based on vendor data.
+    
+    Args:
+        items: Items dataframe
+        vendors: Vendors dataframe
+    
+    Returns:
+        DataFrame with item lead time information
+    """
+    if items is None:
+        items = load_items()
+    if vendors is None:
+        vendors = load_vendors()
+    
+    if items is None or items.empty:
+        return pd.DataFrame()
+    
+    df = items.copy()
+    
+    # Look for lead time column in items
+    lead_time_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'lead' in col_lower and 'time' in col_lower:
+            lead_time_col = col
+            break
+        elif 'leadtime' in col_lower:
+            lead_time_col = col
+            break
+    
+    # If no lead time column, try to get from vendors
+    if lead_time_col is None and vendors is not None and not vendors.empty:
+        # Find vendor column in items
+        vendor_col = None
+        for col in df.columns:
+            col_lower = col.lower()
+            if 'vendor' in col_lower or 'supplier' in col_lower:
+                vendor_col = col
+                break
+        
+        if vendor_col:
+            # Find lead time in vendors
+            vendor_lead_col = None
+            for col in vendors.columns:
+                col_lower = col.lower()
+                if 'lead' in col_lower and 'time' in col_lower:
+                    vendor_lead_col = col
+                    break
+            
+            if vendor_lead_col:
+                # Find vendor name column
+                vendor_name_col = None
+                for col in vendors.columns:
+                    col_lower = col.lower()
+                    if col_lower in ['vendor', 'name', 'vendor name', 'supplier']:
+                        vendor_name_col = col
+                        break
+                
+                if vendor_name_col:
+                    vendor_lead_times = vendors.set_index(vendor_name_col)[vendor_lead_col].to_dict()
+                    df['Lead Time'] = df[vendor_col].map(vendor_lead_times)
+    
+    # If we found a lead time column, standardize it
+    if lead_time_col:
+        df['Lead Time'] = pd.to_numeric(df[lead_time_col], errors='coerce').fillna(0)
+    elif 'Lead Time' not in df.columns:
+        # Default lead time
+        df['Lead Time'] = 30  # Default 30 days
+    
+    # Create summary
+    result_cols = ['Item'] if 'Item' in df.columns else [df.columns[0]]
+    if 'Calyx Product Type' in df.columns:
+        result_cols.append('Calyx Product Type')
+    elif 'Product Type' in df.columns:
+        result_cols.append('Product Type')
+    result_cols.append('Lead Time')
+    
+    # Add vendor if available
+    vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
+    if vendor_col:
+        result_cols.insert(-1, vendor_col)
+    
+    return df[[c for c in result_cols if c in df.columns]]
+
+
+def allocate_topdown_forecast(total_forecast: float, 
+                               historical_mix: pd.DataFrame) -> pd.DataFrame:
+    """
+    Allocate a top-down forecast to products based on historical mix.
+    
+    Args:
+        total_forecast: Total forecast value to allocate
+        historical_mix: DataFrame with product mix percentages
+    
+    Returns:
+        DataFrame with allocated forecast by product
+    """
+    if historical_mix is None or historical_mix.empty:
+        return pd.DataFrame()
+    
+    df = historical_mix.copy()
+    
+    # Find value column
+    value_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'revenue' in col_lower or 'amount' in col_lower or 'value' in col_lower:
+            value_col = col
+            break
+    
+    if value_col is None:
+        return pd.DataFrame()
+    
+    # Calculate mix percentages
+    total_historical = df[value_col].sum()
+    if total_historical == 0:
+        return pd.DataFrame()
+    
+    df['Mix %'] = df[value_col] / total_historical
+    df['Allocated Forecast'] = df['Mix %'] * total_forecast
+    
+    return df
