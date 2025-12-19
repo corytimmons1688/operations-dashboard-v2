@@ -85,6 +85,7 @@ def load_sheet_to_dataframe(sheet_name: str, handle_duplicates: bool = True) -> 
     try:
         client = get_google_sheets_client()
         if client is None:
+            logger.error(f"No Google Sheets client available for sheet '{sheet_name}'")
             return None
         
         spreadsheet_id = get_spreadsheet_id()
@@ -92,12 +93,16 @@ def load_sheet_to_dataframe(sheet_name: str, handle_duplicates: bool = True) -> 
             logger.error("No spreadsheet ID configured")
             return None
         
+        logger.info(f"Opening spreadsheet {spreadsheet_id} for sheet '{sheet_name}'")
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(sheet_name)
         data = worksheet.get_all_values()
         
         if not data:
+            logger.info(f"Sheet '{sheet_name}' has no data")
             return pd.DataFrame()
+        
+        logger.info(f"Sheet '{sheet_name}' has {len(data)} rows")
         
         # Handle duplicate column names
         headers = data[0]
@@ -125,6 +130,7 @@ def load_sheet_to_dataframe(sheet_name: str, handle_duplicates: bool = True) -> 
             except:
                 pass
         
+        logger.info(f"Successfully created DataFrame with {len(df)} rows and {len(df.columns)} columns")
         return df
         
     except Exception as e:
@@ -737,12 +743,14 @@ def load_revenue_forecast() -> Optional[pd.DataFrame]:
             logger.info(f"Trying to load sheet: '{sheet_name}'")
             df = load_sheet_to_dataframe(sheet_name)
             if df is not None and not df.empty:
-                logger.info(f"Successfully loaded Revenue Forecast from: '{sheet_name}'")
+                logger.info(f"Successfully loaded Revenue Forecast from: '{sheet_name}' with {len(df)} rows")
                 if df.columns.duplicated().any():
                     df = df.loc[:, ~df.columns.duplicated()]
                 return df
+            else:
+                logger.info(f"Sheet '{sheet_name}' returned empty or None")
         except Exception as e:
-            logger.debug(f"Sheet '{sheet_name}' not found: {e}")
+            logger.info(f"Sheet '{sheet_name}' not found or error: {e}")
             continue
     
     # If standard names fail, list all sheets and look for any with "forecast"
