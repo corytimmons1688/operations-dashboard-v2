@@ -3,55 +3,132 @@ Operations/Supply Chain View Module for S&OP Dashboard
 Demand planning, pipeline analysis, and coverage tracking
 
 Author: Xander @ Calyx Containers
-Version: 4.0.0
+Version: 4.1.0 - Performance Optimized
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# SETTINGS STORAGE (Session State)
+# PERFORMANCE: Cache expensive computations
+# =============================================================================
+
+@st.cache_data(ttl=300)
+def get_category_items_map(_invoice_lines_hash, invoice_lines, item_col, product_type_col):
+    """Cache the mapping of categories to their items."""
+    if invoice_lines is None or item_col is None or product_type_col is None:
+        return {}
+    
+    result = {}
+    try:
+        cat_series = get_column_as_series(invoice_lines, product_type_col)
+        item_series = get_column_as_series(invoice_lines, item_col)
+        
+        if cat_series is not None and item_series is not None:
+            df = pd.DataFrame({'Category': cat_series, 'Item': item_series})
+            for cat in df['Category'].dropna().unique():
+                items = df[df['Category'] == cat]['Item'].dropna().unique().tolist()
+                result[str(cat).strip()] = sorted([str(i) for i in items])[:200]
+    except:
+        pass
+    
+    return result
+
+
+@st.cache_data(ttl=300)
+def compute_demand_history_cached(data_hash, filtered_data, date_col, amount_col, freq):
+    """Cache demand history computation."""
+    if filtered_data is None or filtered_data.empty:
+        return pd.DataFrame()
+    
+    try:
+        date_series = get_column_as_series(filtered_data, date_col)
+        amt_series = get_column_as_series(filtered_data, amount_col)
+        
+        if date_series is None or amt_series is None:
+            return pd.DataFrame()
+        
+        temp_df = pd.DataFrame({
+            'Date': pd.to_datetime(date_series, errors='coerce'),
+            'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+        })
+        temp_df = temp_df.dropna(subset=['Date'])
+        
+        if freq == 'Q':
+            temp_df['Period'] = temp_df['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
+        else:
+            temp_df['Period'] = temp_df['Date'].dt.to_period(freq).astype(str)
+        
+        demand_history = temp_df.groupby('Period')['Amount'].sum().reset_index()
+        return demand_history.sort_values('Period')
+    except:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def compute_pipeline_data_cached(deals_hash, deals, freq):
+    """Cache pipeline data computation."""
+    if deals is None or deals.empty:
+        return pd.DataFrame()
+    
+    try:
+        # Find columns
+        close_date_col = find_column(deals, ['close date', 'closedate', 'close_date'])
+        if close_date_col is None:
+            close_date_col = find_column(deals, ['date'])
+        
+        amount_col = find_column(deals, ['amount', 'value', 'revenue'])
+        sku_col = find_column(deals, ['sku'])
+        
+        if close_date_col is None or amount_col is None:
+            return pd.DataFrame()
+        
+        date_series = get_column_as_series(deals, close_date_col)
+        amt_series = get_column_as_series(deals, amount_col)
+        
+        temp_df = pd.DataFrame({
+            'Date': pd.to_datetime(date_series, errors='coerce'),
+            'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+        })
+        
+        if sku_col:
+            temp_df['SKU'] = get_column_as_series(deals, sku_col)
+        
+        temp_df = temp_df.dropna(subset=['Date'])
+        
+        if freq == 'Q':
+            temp_df['Period'] = temp_df['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
+        else:
+            temp_df['Period'] = temp_df['Date'].dt.to_period(freq).astype(str)
+        
+        pipeline_by_period = temp_df.groupby('Period')['Amount'].sum().reset_index()
+        pipeline_by_period.columns = ['Period', 'Pipeline Value']
+        return pipeline_by_period
+    except:
+        return pd.DataFrame()
+
+
+# =============================================================================
+# SETTINGS STORAGE
 # =============================================================================
 
 def init_settings():
     """Initialize settings in session state if not present."""
     if 'ops_case_quantities' not in st.session_state:
-        # Default case quantities by category
         st.session_state.ops_case_quantities = {
-            'Calyx Cure': 1,
-            'Plastic Lids': 1000,
-            'Plastic Bases': 1000,
-            'Glass Bases': 100,
-            'Shrink Bands': 5000,
-            'Tray Inserts': 100,
-            'Tray Frames': 50,
-            'Tubes': 500,
+            'Calyx Cure': 1, 'Plastic Lids': 1000, 'Plastic Bases': 1000,
+            'Glass Bases': 100, 'Shrink Bands': 5000, 'Tray Inserts': 100,
+            'Tray Frames': 50, 'Tubes': 500,
         }
     
     if 'ops_item_consolidation' not in st.session_state:
-        # Item consolidation mapping: {child_sku: parent_sku}
         st.session_state.ops_item_consolidation = {}
-
-
-def get_case_quantity(category):
-    """Get case quantity for a category."""
-    init_settings()
-    return st.session_state.ops_case_quantities.get(category, 1)
-
-
-def get_consolidated_sku(sku):
-    """Get the parent SKU if this SKU is consolidated, otherwise return itself."""
-    init_settings()
-    return st.session_state.ops_item_consolidation.get(sku, sku)
 
 
 # =============================================================================
@@ -68,7 +145,7 @@ def clean_dataframe(df):
 
 
 def get_column_as_series(df, col_name):
-    """Safely get a column as a Series, handling duplicates."""
+    """Safely get a column as a Series."""
     if df is None or col_name not in df.columns:
         return None
     result = df.loc[:, col_name]
@@ -90,48 +167,36 @@ def find_column(df, keywords, exclude=None):
     return None
 
 
-def get_items_for_category(invoice_lines, item_col, product_type_col, category):
-    """Get list of items that belong to a specific category."""
-    if invoice_lines is None or item_col is None or product_type_col is None:
-        return []
-    
-    if category == "All":
-        item_series = get_column_as_series(invoice_lines, item_col)
-        if item_series is not None:
-            return sorted(item_series.dropna().astype(str).unique().tolist())[:200]
-        return []
-    
-    cat_series = get_column_as_series(invoice_lines, product_type_col)
-    item_series = get_column_as_series(invoice_lines, item_col)
-    
-    if cat_series is None or item_series is None:
-        return []
-    
-    mask = cat_series.astype(str).str.strip() == category
-    items = item_series[mask].dropna().astype(str).unique().tolist()
-    return sorted(items)[:200]
+def get_df_hash(df):
+    """Get a simple hash for a dataframe for caching."""
+    if df is None:
+        return "none"
+    return f"{len(df)}_{df.columns.tolist()[:3]}"
 
 
 # =============================================================================
-# MAIN RENDER FUNCTION
+# MAIN RENDER FUNCTION - OPTIMIZED
 # =============================================================================
 
 def render_operations_view():
-    """Main render function for Operations/Supply Chain View."""
+    """Main render function for Operations/Supply Chain View - Optimized."""
     
     init_settings()
     
     st.markdown("## 📦 Operations & Supply Chain View")
     st.markdown("Demand planning, pipeline analysis, and coverage tracking")
     
-    # Load data
+    # ==========================================================================
+    # LOAD ALL DATA ONCE (cached in sop_data_loader)
+    # ==========================================================================
+    
     try:
         from .sop_data_loader import (
             load_invoice_lines, load_sales_orders, load_items,
-            load_inventory, load_deals, prepare_demand_history,
-            get_pipeline_by_period
+            load_inventory, load_deals
         )
         
+        # These are all cached - only load once
         invoice_lines = clean_dataframe(load_invoice_lines())
         sales_orders = clean_dataframe(load_sales_orders())
         items = clean_dataframe(load_items())
@@ -140,8 +205,6 @@ def render_operations_view():
         
     except Exception as e:
         st.error(f"Error loading data: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
         return
     
     if invoice_lines is None or invoice_lines.empty:
@@ -149,7 +212,7 @@ def render_operations_view():
         return
     
     # ==========================================================================
-    # IDENTIFY KEY COLUMNS
+    # IDENTIFY KEY COLUMNS (do once)
     # ==========================================================================
     
     product_type_col = find_column(invoice_lines, ['product type', 'calyx'])
@@ -159,7 +222,7 @@ def render_operations_view():
     qty_col = find_column(invoice_lines, ['qty', 'quantity'])
     
     # ==========================================================================
-    # BUILD FILTER OPTIONS - Category first
+    # BUILD FILTER OPTIONS (cached)
     # ==========================================================================
     
     category_options = ["All"]
@@ -168,6 +231,10 @@ def render_operations_view():
         if cat_series is not None:
             cats = cat_series.dropna().astype(str).unique().tolist()
             category_options.extend(sorted([c for c in cats if c.strip() and c != 'Unknown']))
+    
+    # Get cached category-items map
+    invoice_hash = get_df_hash(invoice_lines)
+    category_items_map = get_category_items_map(invoice_hash, invoice_lines, item_col, product_type_col)
     
     # ==========================================================================
     # FILTER UI
@@ -179,65 +246,63 @@ def render_operations_view():
     with col1:
         selected_category = st.selectbox("Product Category", category_options, key="opsv_category")
     
-    # Dynamic Item/SKU filter based on selected category
+    # Dynamic item options based on category
     with col2:
-        item_options = ["All"] + get_items_for_category(invoice_lines, item_col, product_type_col, selected_category)
+        if selected_category == "All":
+            item_options = ["All"] + sorted(list(set(
+                item for items in category_items_map.values() for item in items
+            )))[:200]
+        else:
+            item_options = ["All"] + category_items_map.get(selected_category, [])
         selected_item = st.selectbox("Item/SKU", item_options, key="opsv_item")
     
     with col3:
-        time_period = st.selectbox(
-            "Time Period", 
-            ["Monthly", "Quarterly", "Weekly"],
-            key="opsv_time_period"
-        )
-    with col4:
-        forecast_horizon = st.selectbox(
-            "Forecast Horizon",
-            ["3 Months", "6 Months", "12 Months"],
-            key="opsv_horizon"
-        )
+        time_period = st.selectbox("Time Period", ["Monthly", "Quarterly", "Weekly"], key="opsv_time_period")
     
-    # Convert selections to parameters
+    with col4:
+        forecast_horizon = st.selectbox("Forecast Horizon", ["3 Months", "6 Months", "12 Months"], key="opsv_horizon")
+    
     freq_map = {"Monthly": "M", "Quarterly": "Q", "Weekly": "W"}
     freq = freq_map.get(time_period, "M")
-    
-    horizon_map = {"3 Months": 3, "6 Months": 6, "12 Months": 12}
-    horizon = horizon_map.get(forecast_horizon, 6)
+    horizon = {"3 Months": 3, "6 Months": 6, "12 Months": 12}.get(forecast_horizon, 6)
     
     # ==========================================================================
-    # APPLY FILTERS
+    # APPLY FILTERS (vectorized operations)
     # ==========================================================================
     
-    filtered = invoice_lines.copy()
+    # Create filter mask instead of copying dataframe multiple times
+    mask = pd.Series([True] * len(invoice_lines), index=invoice_lines.index)
     
     if selected_category != "All" and product_type_col:
-        cat_series = get_column_as_series(filtered, product_type_col)
+        cat_series = get_column_as_series(invoice_lines, product_type_col)
         if cat_series is not None:
-            filtered = filtered[cat_series.astype(str).str.strip() == selected_category].copy()
+            mask &= (cat_series.astype(str).str.strip() == selected_category)
     
     if selected_item != "All" and item_col:
-        item_series = get_column_as_series(filtered, item_col)
+        item_series = get_column_as_series(invoice_lines, item_col)
         if item_series is not None:
-            filtered = filtered[item_series == selected_item].copy()
+            mask &= (item_series == selected_item)
     
-    # Convert numeric columns
+    filtered = invoice_lines[mask].copy()
+    
+    # Convert numeric columns once
     if amount_col:
         amt_series = get_column_as_series(filtered, amount_col)
         if amt_series is not None:
-            filtered.loc[:, amount_col] = pd.to_numeric(amt_series, errors='coerce').fillna(0)
+            filtered[amount_col] = pd.to_numeric(amt_series, errors='coerce').fillna(0)
     
     if qty_col:
         qty_series = get_column_as_series(filtered, qty_col)
         if qty_series is not None:
-            filtered.loc[:, qty_col] = pd.to_numeric(qty_series, errors='coerce').fillna(0)
+            filtered[qty_col] = pd.to_numeric(qty_series, errors='coerce').fillna(0)
     
     # ==========================================================================
-    # TABS
+    # TABS - Each tab only computes what it needs
     # ==========================================================================
     
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📈 Demand vs Pipeline",
-        "📊 Coverage Analysis",
+        "📊 Coverage Analysis", 
         "📦 Inventory Status",
         "🔍 SKU Deep Dive",
         "📋 Top-Down Forecast",
@@ -245,284 +310,141 @@ def render_operations_view():
     ])
     
     with tab1:
-        render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, selected_category, item_col, product_type_col)
+        render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, selected_category)
     
     with tab2:
-        render_coverage_tab(filtered, deals, sales_orders, date_col, amount_col, product_type_col)
+        render_coverage_tab(filtered, amount_col, product_type_col)
     
     with tab3:
-        render_inventory_tab(inventory, items, item_col, product_type_col, selected_category, selected_item)
+        render_inventory_tab(inventory, items, selected_category, selected_item)
     
     with tab4:
-        render_sku_deep_dive(filtered, item_col, amount_col, qty_col, date_col, product_type_col)
+        render_sku_deep_dive(filtered, item_col, amount_col, qty_col)
     
     with tab5:
-        render_topdown_forecast_tab(selected_category, freq)
+        render_topdown_forecast_tab(selected_category)
     
     with tab6:
         render_settings_tab()
     
-    # ==========================================================================
-    # DEBUG INFO AT BOTTOM
-    # ==========================================================================
-    
-    st.markdown("---")
-    with st.expander("🔧 Data Debug Info"):
-        st.write(f"**Data Loaded:**")
-        st.write(f"- Invoice Lines: {len(invoice_lines) if invoice_lines is not None else 'None'} rows")
-        st.write(f"- Sales Orders: {len(sales_orders) if sales_orders is not None else 'None'} rows")
-        st.write(f"- Items: {len(items) if items is not None else 'None'} rows")
-        st.write(f"- Inventory: {len(inventory) if inventory is not None else 'None'} rows")
-        st.write(f"- Deals: {len(deals) if deals is not None else 'None'} rows")
-        st.write(f"- Filtered: {len(filtered)} rows")
-        
-        st.write(f"**Column Mappings:**")
-        st.write(f"- Product Type: {product_type_col}")
-        st.write(f"- Item: {item_col}")
-        st.write(f"- Date: {date_col}")
-        st.write(f"- Amount: {amount_col}")
-        st.write(f"- Quantity: {qty_col}")
-        
-        # Revenue Forecast debug
-        if 'forecast_debug' in st.session_state:
-            st.write("---")
-            st.write("**Revenue Forecast Debug:**")
-            for key, value in st.session_state.forecast_debug.items():
-                st.write(f"- {key}: {value}")
-        
-        if 'item_mix_debug' in st.session_state:
-            st.write("---")
-            st.write("**Item Mix Debug:**")
-            for key, value in st.session_state.item_mix_debug.items():
-                st.write(f"- {key}: {value}")
+    # Debug info at bottom
+    with st.expander("🔧 Data Debug Info", expanded=False):
+        st.write(f"Invoice Lines: {len(invoice_lines):,} | Filtered: {len(filtered):,}")
+        st.write(f"Sales Orders: {len(sales_orders) if sales_orders is not None else 0:,}")
+        st.write(f"Items: {len(items) if items is not None else 0:,}")
+        st.write(f"Inventory: {len(inventory) if inventory is not None else 0:,}")
+        st.write(f"Deals: {len(deals) if deals is not None else 0:,}")
 
 
 # =============================================================================
 # DEMAND VS PIPELINE TAB
 # =============================================================================
 
-def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, category, item_col, product_type_col):
-    """Render Demand vs Pipeline overlay chart with 4 lines."""
+def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, category):
+    """Render Demand vs Pipeline overlay chart."""
     
     st.markdown("### 📈 Demand Forecast vs Pipeline Overlay")
-    st.markdown("Compare historical demand, demand forecast, deals pipeline, and revenue forecast plan")
     
     if filtered.empty:
         st.warning("No data available for the selected filters.")
         return
     
-    # Load Top-Down Revenue Forecast from Google Sheet
-    revenue_forecast_raw = None
-    revenue_forecast_by_period = pd.DataFrame()
-    item_forecast = pd.DataFrame()
-    
+    # Load revenue forecast (cached)
     try:
-        from .sop_data_loader import (
-            get_topdown_item_forecast, get_revenue_forecast_by_period, 
-            load_revenue_forecast
-        )
-        
-        revenue_forecast_raw = load_revenue_forecast()
+        from .sop_data_loader import get_revenue_forecast_by_period
         revenue_forecast_by_period = get_revenue_forecast_by_period(category=category)
-        item_forecast = get_topdown_item_forecast()
         
-    except Exception as e:
-        st.warning(f"Could not load Revenue Forecast: {e}")
+        # Align to quarterly if needed
+        if freq == 'Q' and not revenue_forecast_by_period.empty:
+            revenue_forecast_by_period = align_forecast_periods(revenue_forecast_by_period)
+    except:
+        revenue_forecast_by_period = pd.DataFrame()
     
-    # Prepare historical demand by period
-    if date_col and amount_col:
-        try:
-            date_series = get_column_as_series(filtered, date_col)
-            amt_series = get_column_as_series(filtered, amount_col)
-            
-            if date_series is not None and amt_series is not None:
-                temp_df = pd.DataFrame({
-                    'Date': pd.to_datetime(date_series, errors='coerce'),
-                    'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
-                })
-                temp_df = temp_df.dropna(subset=['Date'])
-                temp_df['Period'] = temp_df['Date'].dt.to_period(freq)
-                
-                demand_history = temp_df.groupby('Period')['Amount'].sum().reset_index()
-                demand_history['Period'] = demand_history['Period'].astype(str)
-                demand_history = demand_history.sort_values('Period')
-                
-                # Generate demand forecast (statistical/ML based)
-                demand_forecast_df = generate_advanced_forecast(demand_history, horizon, freq)
-                
-                # Get pipeline/deals data with SKU and Close Date
-                pipeline_df = get_pipeline_data(deals, freq, category, item_col, product_type_col)
-                
-                # Align revenue forecast periods to match chart format
-                if not revenue_forecast_by_period.empty:
-                    revenue_forecast_by_period = align_forecast_periods(revenue_forecast_by_period, freq)
-                
-                # Create overlay chart with 4 lines
-                fig = create_four_line_chart(
-                    demand_history, 
-                    demand_forecast_df, 
-                    pipeline_df, 
-                    revenue_forecast_by_period,
-                    category,
-                    freq
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Summary metrics
-                col1, col2, col3, col4 = st.columns(4)
-                
-                total_historical = demand_history['Amount'].sum()
-                total_demand_forecast = demand_forecast_df['Forecast'].sum() if not demand_forecast_df.empty else 0
-                total_pipeline = pipeline_df['Pipeline Value'].sum() if not pipeline_df.empty and 'Pipeline Value' in pipeline_df.columns else 0
-                total_revenue_forecast = revenue_forecast_by_period['Forecast_Revenue'].sum() if not revenue_forecast_by_period.empty else 0
-                
-                with col1:
-                    st.metric("Historical Demand", f"${total_historical:,.0f}")
-                with col2:
-                    st.metric("Demand Forecast", f"${total_demand_forecast:,.0f}")
-                with col3:
-                    st.metric("Pipeline/Deals", f"${total_pipeline:,.0f}")
-                with col4:
-                    st.metric("Revenue Forecast", f"${total_revenue_forecast:,.0f}")
-                
-        except Exception as e:
-            st.error(f"Error creating demand chart: {e}")
-            import traceback
-            st.code(traceback.format_exc())
-    else:
-        st.warning("Required columns (Date, Amount) not found.")
+    # Compute demand history (cached based on filtered data hash)
+    filtered_hash = f"{len(filtered)}_{category}_{freq}"
+    demand_history = compute_demand_history_cached(filtered_hash, filtered, date_col, amount_col, freq)
+    
+    if demand_history.empty:
+        st.warning("Could not compute demand history.")
+        return
+    
+    # Generate forecast
+    demand_forecast_df = generate_forecast(demand_history, horizon, freq)
+    
+    # Get pipeline data (cached)
+    deals_hash = get_df_hash(deals)
+    pipeline_df = compute_pipeline_data_cached(deals_hash, deals, freq)
+    
+    # Create chart
+    fig = create_overlay_chart(demand_history, demand_forecast_df, pipeline_df, revenue_forecast_by_period, category)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Historical Demand", f"${demand_history['Amount'].sum():,.0f}")
+    with col2:
+        st.metric("Demand Forecast", f"${demand_forecast_df['Forecast'].sum() if not demand_forecast_df.empty else 0:,.0f}")
+    with col3:
+        st.metric("Pipeline/Deals", f"${pipeline_df['Pipeline Value'].sum() if not pipeline_df.empty else 0:,.0f}")
+    with col4:
+        st.metric("Revenue Forecast", f"${revenue_forecast_by_period['Forecast_Revenue'].sum() if not revenue_forecast_by_period.empty else 0:,.0f}")
 
 
-def get_pipeline_data(deals, freq, category, item_col, product_type_col):
-    """Get pipeline data from Deals using SKU column and Close Date."""
-    if deals is None or deals.empty:
-        return pd.DataFrame()
-    
-    df = deals.copy()
-    
-    # Find SKU column
-    sku_col = find_column(df, ['sku'])
-    
-    # Find Close Date column
-    close_date_col = find_column(df, ['close date', 'closedate', 'close_date'])
-    if close_date_col is None:
-        close_date_col = find_column(df, ['date'])
-    
-    # Find Amount column
-    amount_col = find_column(df, ['amount', 'value', 'revenue'])
-    
-    if close_date_col is None or amount_col is None:
-        return pd.DataFrame()
-    
-    try:
-        date_series = get_column_as_series(df, close_date_col)
-        amt_series = get_column_as_series(df, amount_col)
-        
-        temp_df = pd.DataFrame({
-            'Date': pd.to_datetime(date_series, errors='coerce'),
-            'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
-        })
-        
-        # Add SKU if available
-        if sku_col:
-            sku_series = get_column_as_series(df, sku_col)
-            temp_df['SKU'] = sku_series
-        
-        temp_df = temp_df.dropna(subset=['Date'])
-        temp_df['Period'] = temp_df['Date'].dt.to_period(freq).astype(str)
-        
-        # Format period for quarterly
-        if freq == 'Q':
-            temp_df['Period'] = temp_df['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
-        
-        pipeline_by_period = temp_df.groupby('Period')['Amount'].sum().reset_index()
-        pipeline_by_period.columns = ['Period', 'Pipeline Value']
-        
-        return pipeline_by_period
-        
-    except Exception as e:
-        logger.error(f"Error getting pipeline data: {e}")
-        return pd.DataFrame()
-
-
-def align_forecast_periods(forecast_df, freq):
-    """Align forecast periods to match chart format."""
+def align_forecast_periods(forecast_df):
+    """Convert monthly periods to quarterly."""
     if forecast_df.empty or 'Period' not in forecast_df.columns:
         return forecast_df
     
     df = forecast_df.copy()
     
-    if freq == 'Q':
-        # Convert YYYY-MM to YYYY-QN format
-        def to_quarter(period_str):
-            try:
-                parts = str(period_str).split('-')
-                if len(parts) == 2:
-                    year = int(parts[0])
-                    month = int(parts[1])
-                    quarter = (month - 1) // 3 + 1
-                    return f"{year}-Q{quarter}"
-                return period_str
-            except:
-                return period_str
-        
-        df['Period'] = df['Period'].apply(to_quarter)
-        # Aggregate by quarter in case multiple months map to same quarter
-        df = df.groupby('Period').agg({
-            'Forecast_Revenue': 'sum',
-            'Forecast_Units': 'sum' if 'Forecast_Units' in df.columns else 'first'
-        }).reset_index()
+    def to_quarter(period_str):
+        try:
+            parts = str(period_str).split('-')
+            if len(parts) == 2:
+                year, month = int(parts[0]), int(parts[1])
+                return f"{year}-Q{(month - 1) // 3 + 1}"
+            return period_str
+        except:
+            return period_str
     
-    return df
+    df['Period'] = df['Period'].apply(to_quarter)
+    
+    agg_cols = {'Forecast_Revenue': 'sum'}
+    if 'Forecast_Units' in df.columns:
+        agg_cols['Forecast_Units'] = 'sum'
+    
+    return df.groupby('Period').agg(agg_cols).reset_index()
 
 
-def generate_advanced_forecast(history_df, horizon, freq):
-    """Generate demand forecast using moving average with trend."""
+def generate_forecast(history_df, horizon, freq):
+    """Generate demand forecast using weighted moving average."""
     if history_df.empty:
         return pd.DataFrame()
     
     try:
-        # Use weighted moving average of last 6 periods
         recent = history_df.tail(6)
+        values = recent['Amount'].values
         
-        if len(recent) < 2:
-            avg_value = recent['Amount'].mean() if not recent.empty else 0
+        if len(values) < 2:
+            avg_value = values.mean() if len(values) > 0 else 0
             growth_rate = 0.02
         else:
-            values = recent['Amount'].values
-            weights = np.array([1, 2, 3, 4, 5, 6])[:len(values)]
-            weights = weights / weights.sum()
-            
-            weighted_avg = np.sum(values * weights)
-            
-            if len(values) >= 2 and values[0] > 0:
-                growth_rate = (values[-1] / values[0]) ** (1/len(values)) - 1
-                growth_rate = max(min(growth_rate, 0.15), -0.10)
-            else:
-                growth_rate = 0.02
-            
+            weights = np.arange(1, len(values) + 1)
+            weighted_avg = np.average(values, weights=weights)
+            growth_rate = np.clip((values[-1] / values[0]) ** (1/len(values)) - 1, -0.10, 0.15) if values[0] > 0 else 0.02
             avg_value = weighted_avg
         
-        # Get last period and generate future periods
-        last_period_str = history_df['Period'].iloc[-1]
-        
         try:
-            last_date = pd.to_datetime(last_period_str)
+            last_date = pd.to_datetime(history_df['Period'].iloc[-1])
         except:
             last_date = datetime.now()
         
-        # Generate future periods
         forecast_data = []
         for i in range(1, horizon + 1):
-            if freq == 'M':
-                future_date = last_date + pd.DateOffset(months=i)
-                period_label = future_date.strftime('%Y-%m')
-            elif freq == 'Q':
+            if freq == 'Q':
                 future_date = last_date + pd.DateOffset(months=i*3)
                 period_label = f"{future_date.year}-Q{(future_date.month-1)//3 + 1}"
-            elif freq == 'W':
-                future_date = last_date + pd.DateOffset(weeks=i)
-                period_label = future_date.strftime('%Y-%W')
             else:
                 future_date = last_date + pd.DateOffset(months=i)
                 period_label = future_date.strftime('%Y-%m')
@@ -536,94 +458,67 @@ def generate_advanced_forecast(history_df, horizon, freq):
             })
         
         return pd.DataFrame(forecast_data)
-        
-    except Exception as e:
-        logger.error(f"Forecast error: {e}")
+    except:
         return pd.DataFrame()
 
 
-def create_four_line_chart(demand_df, demand_forecast_df, pipeline_df, revenue_forecast_df, category, freq):
-    """Create overlay chart with Historical, Demand Forecast, Pipeline, and Revenue Forecast."""
+def create_overlay_chart(demand_df, forecast_df, pipeline_df, revenue_forecast_df, category):
+    """Create overlay chart with 4 lines."""
     
     fig = go.Figure()
+    title_suffix = f" - {category}" if category != "All" else ""
     
-    title_suffix = f" - {category}" if category != "All" else " - All Categories"
-    
-    # 1. Historical demand (blue bars)
+    # Historical demand
     if not demand_df.empty:
         fig.add_trace(go.Bar(
-            x=demand_df['Period'],
-            y=demand_df['Amount'],
-            name='Historical Demand',
-            marker_color='#0033A1',
-            opacity=0.7,
+            x=demand_df['Period'], y=demand_df['Amount'],
+            name='Historical Demand', marker_color='#0033A1', opacity=0.7,
             hovertemplate='<b>Historical Demand</b><br>Period: %{x}<br>Revenue: $%{y:,.0f}<extra></extra>'
         ))
     
-    # 2. Demand Forecast (green dashed line)
-    if not demand_forecast_df.empty:
+    # Demand Forecast
+    if not forecast_df.empty:
         fig.add_trace(go.Scatter(
-            x=demand_forecast_df['Period'],
-            y=demand_forecast_df['Forecast'],
-            mode='lines+markers',
-            name='Demand Forecast',
+            x=forecast_df['Period'], y=forecast_df['Forecast'],
+            mode='lines+markers', name='Demand Forecast',
             line=dict(color='#22C55E', width=3, dash='dash'),
-            marker=dict(size=8, symbol='circle'),
             hovertemplate='<b>Demand Forecast</b><br>Period: %{x}<br>Forecast: $%{y:,.0f}<extra></extra>'
         ))
         
         # Confidence interval
         fig.add_trace(go.Scatter(
-            x=demand_forecast_df['Period'].tolist() + demand_forecast_df['Period'].tolist()[::-1],
-            y=demand_forecast_df['Upper'].tolist() + demand_forecast_df['Lower'].tolist()[::-1],
-            fill='toself',
-            fillcolor='rgba(34, 197, 94, 0.15)',
+            x=forecast_df['Period'].tolist() + forecast_df['Period'].tolist()[::-1],
+            y=forecast_df['Upper'].tolist() + forecast_df['Lower'].tolist()[::-1],
+            fill='toself', fillcolor='rgba(34, 197, 94, 0.15)',
             line=dict(color='rgba(255,255,255,0)'),
-            name='Forecast CI (85%)',
-            showlegend=True,
-            hoverinfo='skip'
+            name='Forecast CI (85%)', showlegend=True, hoverinfo='skip'
         ))
     
-    # 3. Pipeline/Deals (orange line)
+    # Pipeline
     if pipeline_df is not None and not pipeline_df.empty and 'Pipeline Value' in pipeline_df.columns:
         fig.add_trace(go.Scatter(
-            x=pipeline_df['Period'],
-            y=pipeline_df['Pipeline Value'],
-            mode='lines+markers',
-            name='Deals Pipeline',
-            line=dict(color='#F59E0B', width=3),
-            marker=dict(size=8, symbol='diamond'),
+            x=pipeline_df['Period'], y=pipeline_df['Pipeline Value'],
+            mode='lines+markers', name='Deals Pipeline',
+            line=dict(color='#F59E0B', width=3), marker=dict(symbol='diamond', size=8),
             hovertemplate='<b>Deals Pipeline</b><br>Period: %{x}<br>Value: $%{y:,.0f}<extra></extra>'
         ))
     
-    # 4. Revenue Forecast (purple line)
+    # Revenue Forecast
     if revenue_forecast_df is not None and not revenue_forecast_df.empty and 'Forecast_Revenue' in revenue_forecast_df.columns:
         fig.add_trace(go.Scatter(
-            x=revenue_forecast_df['Period'],
-            y=revenue_forecast_df['Forecast_Revenue'],
-            mode='lines+markers',
-            name='Revenue Plan (Top-Down)',
-            line=dict(color='#8B5CF6', width=3),
-            marker=dict(size=10, symbol='star'),
+            x=revenue_forecast_df['Period'], y=revenue_forecast_df['Forecast_Revenue'],
+            mode='lines+markers', name='Revenue Plan (Top-Down)',
+            line=dict(color='#8B5CF6', width=3), marker=dict(symbol='star', size=10),
             hovertemplate='<b>Revenue Plan (Top-Down)</b><br>Period: %{x}<br>Forecast: $%{y:,.0f}<extra></extra>'
         ))
     
     fig.update_layout(
         title=f'Demand & Pipeline Overlay{title_suffix}',
-        xaxis_title='Period',
-        yaxis_title='Revenue ($)',
+        xaxis_title='Period', yaxis_title='Revenue ($)',
         hovermode='x unified',
-        legend=dict(
-            orientation='h', 
-            yanchor='bottom', 
-            y=1.02, 
-            xanchor='right', 
-            x=1
-        ),
-        height=550,
-        barmode='group'
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        height=500
     )
-    
     fig.update_yaxes(tickformat='$,.0f')
     
     return fig
@@ -633,93 +528,67 @@ def create_four_line_chart(demand_df, demand_forecast_df, pipeline_df, revenue_f
 # TOP-DOWN FORECAST TAB
 # =============================================================================
 
-def render_topdown_forecast_tab(category, freq):
-    """Render Top-Down Forecast tab with SKU-level monthly breakdown."""
+@st.cache_data(ttl=300)
+def get_forecast_pivot_data(category):
+    """Cache the forecast pivot table computation."""
+    try:
+        from .sop_data_loader import get_topdown_item_forecast
+        item_forecast = get_topdown_item_forecast()
+        
+        if item_forecast.empty:
+            return None, None
+        
+        if category and category != 'All':
+            item_forecast = item_forecast[
+                item_forecast['Category'].str.lower().str.strip() == category.lower().strip()
+            ]
+        
+        if item_forecast.empty:
+            return None, None
+        
+        # Units pivot
+        pivot_units = item_forecast.pivot_table(
+            index=['Item', 'Category'], columns='Period',
+            values='Forecast_Units', aggfunc='sum', fill_value=0
+        ).reset_index()
+        
+        # Revenue pivot
+        pivot_revenue = item_forecast.pivot_table(
+            index=['Item', 'Category'], columns='Period',
+            values='Forecast_Revenue', aggfunc='sum', fill_value=0
+        ).reset_index()
+        
+        return pivot_units, pivot_revenue
+    except:
+        return None, None
+
+
+def render_topdown_forecast_tab(category):
+    """Render Top-Down Forecast tab."""
     
     st.markdown("### 📋 Top-Down Item Forecast Allocation")
-    st.markdown("SKU-level forecast breakdown by period based on historical mix and ASP")
     
-    try:
-        from .sop_data_loader import get_topdown_item_forecast, load_revenue_forecast
-        
-        item_forecast = get_topdown_item_forecast()
-        revenue_forecast_raw = load_revenue_forecast()
-        
-        if item_forecast.empty:
-            st.warning("No item-level forecast data available.")
-            if revenue_forecast_raw is not None and not revenue_forecast_raw.empty:
-                st.info("Revenue Forecast sheet loaded but item allocation failed. Check that Items table has Product Type mapping.")
-            return
-        
-        # Filter by category if selected
-        if category and category != 'All':
-            item_forecast = item_forecast[item_forecast['Category'].str.lower().str.strip() == category.lower().strip()]
-        
-        if item_forecast.empty:
-            st.warning(f"No forecast data for category: {category}")
-            return
-        
-        # Create pivot table: SKU x Period with Units
-        st.markdown("#### Forecasted Units by SKU and Period")
-        
-        pivot_units = item_forecast.pivot_table(
-            index=['Item', 'Category'],
-            columns='Period',
-            values='Forecast_Units',
-            aggfunc='sum',
-            fill_value=0
-        ).reset_index()
-        
-        # Sort columns (periods) chronologically
-        period_cols = [c for c in pivot_units.columns if c not in ['Item', 'Category']]
-        period_cols_sorted = sorted(period_cols)
-        
-        display_cols = ['Item', 'Category'] + period_cols_sorted
-        pivot_units = pivot_units[display_cols]
-        
-        # Format numbers
-        for col in period_cols_sorted:
-            pivot_units[col] = pivot_units[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "0")
-        
-        st.dataframe(pivot_units, use_container_width=True, hide_index=True, height=400)
-        
-        # Also show revenue breakdown
-        st.markdown("#### Forecasted Revenue by SKU and Period")
-        
-        pivot_revenue = item_forecast.pivot_table(
-            index=['Item', 'Category'],
-            columns='Period',
-            values='Forecast_Revenue',
-            aggfunc='sum',
-            fill_value=0
-        ).reset_index()
-        
-        pivot_revenue = pivot_revenue[display_cols]
-        
-        for col in period_cols_sorted:
-            pivot_revenue[col] = pivot_revenue[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
-        
-        st.dataframe(pivot_revenue, use_container_width=True, hide_index=True, height=400)
-        
-        # Summary stats
-        st.markdown("---")
-        col1, col2, col3 = st.columns(3)
-        
-        total_units = item_forecast['Forecast_Units'].sum()
-        total_revenue = item_forecast['Forecast_Revenue'].sum()
-        unique_skus = item_forecast['Item'].nunique()
-        
-        with col1:
-            st.metric("Total Forecast Units", f"{total_units:,.0f}")
-        with col2:
-            st.metric("Total Forecast Revenue", f"${total_revenue:,.0f}")
-        with col3:
-            st.metric("Unique SKUs", f"{unique_skus}")
-        
-    except Exception as e:
-        st.error(f"Error loading forecast data: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+    pivot_units, pivot_revenue = get_forecast_pivot_data(category)
+    
+    if pivot_units is None:
+        st.warning("No item-level forecast data available.")
+        return
+    
+    # Sort period columns
+    period_cols = sorted([c for c in pivot_units.columns if c not in ['Item', 'Category']])
+    display_cols = ['Item', 'Category'] + period_cols
+    
+    st.markdown("#### Forecasted Units by SKU and Period")
+    units_display = pivot_units[display_cols].copy()
+    for col in period_cols:
+        units_display[col] = units_display[col].apply(lambda x: f"{x:,.0f}")
+    st.dataframe(units_display, use_container_width=True, hide_index=True, height=350)
+    
+    st.markdown("#### Forecasted Revenue by SKU and Period")
+    rev_display = pivot_revenue[display_cols].copy()
+    for col in period_cols:
+        rev_display[col] = rev_display[col].apply(lambda x: f"${x:,.0f}")
+    st.dataframe(rev_display, use_container_width=True, hide_index=True, height=350)
 
 
 # =============================================================================
@@ -727,289 +596,194 @@ def render_topdown_forecast_tab(category, freq):
 # =============================================================================
 
 def render_settings_tab():
-    """Render Settings tab with case quantities and item consolidation."""
+    """Render Settings tab."""
     
     st.markdown("### ⚙️ Operations Settings")
     
-    # Case Quantities Section
+    # Case Quantities
     st.markdown("#### 📦 Case Quantities by Category")
-    st.markdown("Set the number of units per case for each category to align forecast with packout expectations.")
     
-    init_settings()
+    categories = ['Calyx Cure', 'Plastic Lids', 'Plastic Bases', 'Glass Bases',
+                  'Shrink Bands', 'Tray Inserts', 'Tray Frames', 'Tubes']
     
-    # Create editable table for case quantities
-    categories = [
-        'Calyx Cure', 'Plastic Lids', 'Plastic Bases', 'Glass Bases',
-        'Shrink Bands', 'Tray Inserts', 'Tray Frames', 'Tubes'
-    ]
-    
-    case_data = []
-    for cat in categories:
-        case_data.append({
-            'Category': cat,
-            'Units per Case': st.session_state.ops_case_quantities.get(cat, 1)
-        })
-    
-    case_df = pd.DataFrame(case_data)
+    case_df = pd.DataFrame([
+        {'Category': cat, 'Units per Case': st.session_state.ops_case_quantities.get(cat, 1)}
+        for cat in categories
+    ])
     
     edited_case_df = st.data_editor(
         case_df,
         column_config={
             "Category": st.column_config.TextColumn("Category", disabled=True),
-            "Units per Case": st.column_config.NumberColumn("Units per Case", min_value=1, max_value=100000, step=1)
+            "Units per Case": st.column_config.NumberColumn("Units per Case", min_value=1, max_value=100000)
         },
-        hide_index=True,
-        use_container_width=True,
-        key="case_qty_editor"
+        hide_index=True, use_container_width=True, key="case_qty_editor"
     )
     
-    if st.button("💾 Save Case Quantities", key="save_case_qty"):
+    if st.button("💾 Save Case Quantities"):
         for _, row in edited_case_df.iterrows():
             st.session_state.ops_case_quantities[row['Category']] = int(row['Units per Case'])
-        st.success("Case quantities saved!")
+        st.success("Saved!")
+        st.cache_data.clear()
     
     st.markdown("---")
     
-    # Item Consolidation Section
+    # Item Consolidation
     st.markdown("#### 🔗 Item Consolidation")
-    st.markdown("Combine demand from one SKU into another. For example, consolidate 'PB-25D-001-00-EZ' into 'PB-25D-001-00'.")
     
-    # Show current consolidations
     consolidations = st.session_state.ops_item_consolidation
-    
     if consolidations:
-        st.write("**Current Consolidations:**")
-        consol_df = pd.DataFrame([
-            {'Child SKU': k, 'Parent SKU': v} 
-            for k, v in consolidations.items()
-        ])
-        st.dataframe(consol_df, hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame([{'Child SKU': k, 'Parent SKU': v} for k, v in consolidations.items()]),
+                     hide_index=True, use_container_width=True)
     
-    # Add new consolidation
-    st.markdown("**Add New Consolidation:**")
     col1, col2, col3 = st.columns([2, 2, 1])
-    
     with col1:
-        child_sku = st.text_input("Child SKU (to be consolidated)", key="child_sku_input")
+        child_sku = st.text_input("Child SKU", key="child_sku_input")
     with col2:
-        parent_sku = st.text_input("Parent SKU (consolidate into)", key="parent_sku_input")
+        parent_sku = st.text_input("Parent SKU", key="parent_sku_input")
     with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("➕ Add", key="add_consolidation"):
+        st.write("")
+        if st.button("➕ Add"):
             if child_sku and parent_sku:
                 st.session_state.ops_item_consolidation[child_sku.strip()] = parent_sku.strip()
                 st.success(f"Added: {child_sku} → {parent_sku}")
+                st.cache_data.clear()
                 st.rerun()
-            else:
-                st.warning("Please enter both SKUs")
     
-    # Remove consolidation
     if consolidations:
-        st.markdown("**Remove Consolidation:**")
-        sku_to_remove = st.selectbox(
-            "Select child SKU to remove",
-            options=list(consolidations.keys()),
-            key="remove_consolidation_select"
-        )
-        if st.button("🗑️ Remove Selected", key="remove_consolidation"):
-            if sku_to_remove in st.session_state.ops_item_consolidation:
-                del st.session_state.ops_item_consolidation[sku_to_remove]
-                st.success(f"Removed consolidation for: {sku_to_remove}")
-                st.rerun()
+        to_remove = st.selectbox("Remove consolidation:", list(consolidations.keys()), key="remove_select")
+        if st.button("🗑️ Remove"):
+            del st.session_state.ops_item_consolidation[to_remove]
+            st.cache_data.clear()
+            st.rerun()
 
 
 # =============================================================================
 # COVERAGE ANALYSIS TAB
 # =============================================================================
 
-def render_coverage_tab(filtered, deals, sales_orders, date_col, amount_col, product_type_col):
+def render_coverage_tab(filtered, amount_col, product_type_col):
     """Render Coverage Analysis tab."""
     
     st.markdown("### 📊 Pipeline Coverage Analysis")
-    st.markdown("Analyze pipeline coverage by product category")
     
-    if filtered.empty:
-        st.warning("No data available for coverage analysis.")
+    if filtered.empty or product_type_col is None:
+        st.warning("No data available.")
         return
     
-    if product_type_col is None:
-        st.warning("Product type column not found.")
+    cat_series = get_column_as_series(filtered, product_type_col)
+    amt_series = get_column_as_series(filtered, amount_col)
+    
+    if cat_series is None or amt_series is None:
         return
     
-    try:
-        # Calculate demand by category
-        cat_series = get_column_as_series(filtered, product_type_col)
-        amt_series = get_column_as_series(filtered, amount_col)
-        
-        if cat_series is None or amt_series is None:
-            st.warning("Could not extract category or amount data.")
-            return
-        
-        temp_df = pd.DataFrame({
-            'Category': cat_series,
-            'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
-        })
-        
-        by_category = temp_df.groupby('Category')['Amount'].sum().reset_index()
-        by_category.columns = ['Category', 'Historical Revenue']
-        by_category = by_category.sort_values('Historical Revenue', ascending=False)
-        
-        # Create chart
-        fig = px.bar(
-            by_category.head(15),
-            x='Category',
-            y='Historical Revenue',
-            title='Revenue by Product Category'
-        )
-        fig.update_layout(height=400)
-        fig.update_yaxes(tickformat='$,.0f')
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Show table
-        display_df = by_category.copy()
-        display_df['Historical Revenue'] = display_df['Historical Revenue'].apply(lambda x: f"${x:,.0f}")
-        st.dataframe(display_df, hide_index=True, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"Error in coverage analysis: {e}")
+    by_category = pd.DataFrame({
+        'Category': cat_series,
+        'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+    }).groupby('Category')['Amount'].sum().reset_index()
+    
+    by_category = by_category.sort_values('Amount', ascending=False)
+    
+    fig = go.Figure(go.Bar(
+        x=by_category['Category'].head(15),
+        y=by_category['Amount'].head(15),
+        marker_color='#0033A1'
+    ))
+    fig.update_layout(title='Revenue by Product Category', height=400)
+    fig.update_yaxes(tickformat='$,.0f')
+    st.plotly_chart(fig, use_container_width=True)
 
 
 # =============================================================================
 # INVENTORY STATUS TAB
 # =============================================================================
 
-def render_inventory_tab(inventory, items, item_col, product_type_col, selected_category, selected_item):
-    """Render Inventory Status tab with category/item filtering."""
+def render_inventory_tab(inventory, items, selected_category, selected_item):
+    """Render Inventory Status tab with filtering."""
     
     st.markdown("### 📦 Inventory Status")
-    st.markdown("Current inventory levels filtered by selected category and item")
     
     if inventory is None or inventory.empty:
         st.info("No inventory data available.")
         return
     
     df = inventory.copy()
-    
-    # Find columns in inventory
     inv_item_col = find_column(df, ['item', 'sku', 'name'])
-    inv_qty_col = find_column(df, ['qty', 'quantity', 'on hand', 'available'])
     
     if inv_item_col is None:
-        st.warning("Item column not found in inventory data.")
+        st.warning("Item column not found.")
         return
     
-    # Try to filter by category if we have items table with product type
-    if items is not None and not items.empty and selected_category != "All":
-        # Build item -> category mapping from items table
+    # Filter by category using items table
+    if selected_category != "All" and items is not None and not items.empty:
         items_item_col = find_column(items, ['item', 'sku', 'name'])
         items_cat_col = find_column(items, ['product type', 'calyx', 'category'])
         
         if items_item_col and items_cat_col:
-            item_cat_map = {}
-            for _, row in items.iterrows():
-                item_val = row[items_item_col]
-                cat_val = row[items_cat_col]
-                if pd.notna(item_val) and pd.notna(cat_val):
-                    item_cat_map[str(item_val).strip()] = str(cat_val).strip()
-            
-            # Filter inventory to items in selected category
+            item_cat_map = dict(zip(
+                items[items_item_col].astype(str).str.strip(),
+                items[items_cat_col].astype(str).str.strip()
+            ))
             inv_items = get_column_as_series(df, inv_item_col)
             if inv_items is not None:
-                df['_category'] = inv_items.astype(str).str.strip().map(item_cat_map)
-                df = df[df['_category'] == selected_category]
-                df = df.drop(columns=['_category'])
+                df = df[inv_items.astype(str).str.strip().map(item_cat_map) == selected_category]
     
-    # Filter by specific item if selected
-    if selected_item != "All" and inv_item_col:
+    # Filter by specific item
+    if selected_item != "All":
         inv_items = get_column_as_series(df, inv_item_col)
         if inv_items is not None:
             df = df[inv_items.astype(str).str.strip() == selected_item]
     
     if df.empty:
-        st.info(f"No inventory data for the selected filters.")
+        st.info("No inventory data for selected filters.")
         return
     
-    # Display inventory table
     st.dataframe(df, use_container_width=True, hide_index=True, height=400)
-    
-    # Summary metrics
-    if inv_qty_col:
-        qty_series = get_column_as_series(df, inv_qty_col)
-        if qty_series is not None:
-            total_qty = pd.to_numeric(qty_series, errors='coerce').fillna(0).sum()
-            unique_items = df[inv_item_col].nunique() if inv_item_col else 0
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Total Units in Stock", f"{total_qty:,.0f}")
-            with col2:
-                st.metric("Unique Items", f"{unique_items}")
 
 
 # =============================================================================
 # SKU DEEP DIVE TAB
 # =============================================================================
 
-def render_sku_deep_dive(filtered, item_col, amount_col, qty_col, date_col, product_type_col):
+def render_sku_deep_dive(filtered, item_col, amount_col, qty_col):
     """Render SKU Deep Dive tab."""
     
     st.markdown("### 🔍 SKU Deep Dive")
-    st.markdown("Detailed analysis of top performing SKUs")
     
-    if filtered.empty or item_col is None or amount_col is None:
-        st.warning("Insufficient data for SKU analysis.")
+    if filtered.empty or item_col is None:
+        st.warning("Insufficient data.")
         return
     
-    try:
-        item_series = get_column_as_series(filtered, item_col)
-        amt_series = get_column_as_series(filtered, amount_col)
-        
-        if item_series is None or amt_series is None:
-            st.warning("Could not extract item or amount data.")
-            return
-        
-        temp_df = pd.DataFrame({
-            'Item': item_series,
-            'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
-        })
-        
-        if qty_col:
-            qty_series = get_column_as_series(filtered, qty_col)
-            if qty_series is not None:
-                temp_df['Quantity'] = pd.to_numeric(qty_series, errors='coerce').fillna(0)
-        
-        # Aggregate by item
-        by_item = temp_df.groupby('Item').agg({
-            'Amount': 'sum',
-            'Quantity': 'sum' if 'Quantity' in temp_df.columns else 'count'
-        }).reset_index()
-        
-        by_item.columns = ['Item', 'Revenue', 'Units']
-        by_item = by_item.sort_values('Revenue', ascending=False)
-        
-        # Top 25 SKUs
-        top_skus = by_item.head(25)
-        
-        # Chart
-        fig = px.bar(
-            top_skus.head(10),
-            x='Item',
-            y='Revenue',
-            title='Top 10 SKUs by Revenue'
-        )
-        fig.update_layout(height=400)
-        fig.update_yaxes(tickformat='$,.0f')
-        fig.update_xaxes(tickangle=45)
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Table
-        display_df = top_skus.copy()
-        display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
-        display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
-        
-        st.dataframe(display_df, hide_index=True, use_container_width=True)
-        
-    except Exception as e:
-        st.error(f"Error in SKU analysis: {e}")
+    item_series = get_column_as_series(filtered, item_col)
+    amt_series = get_column_as_series(filtered, amount_col)
+    
+    if item_series is None or amt_series is None:
+        return
+    
+    temp_df = pd.DataFrame({
+        'Item': item_series,
+        'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+    })
+    
+    if qty_col:
+        qty_series = get_column_as_series(filtered, qty_col)
+        if qty_series is not None:
+            temp_df['Quantity'] = pd.to_numeric(qty_series, errors='coerce').fillna(0)
+    
+    by_item = temp_df.groupby('Item').agg({
+        'Amount': 'sum',
+        'Quantity': 'sum' if 'Quantity' in temp_df.columns else 'count'
+    }).reset_index()
+    by_item.columns = ['Item', 'Revenue', 'Units']
+    by_item = by_item.sort_values('Revenue', ascending=False).head(25)
+    
+    fig = go.Figure(go.Bar(x=by_item['Item'].head(10), y=by_item['Revenue'].head(10), marker_color='#0033A1'))
+    fig.update_layout(title='Top 10 SKUs by Revenue', height=400)
+    fig.update_yaxes(tickformat='$,.0f')
+    fig.update_xaxes(tickangle=45)
+    st.plotly_chart(fig, use_container_width=True)
+    
+    display_df = by_item.copy()
+    display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+    display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
+    st.dataframe(display_df, hide_index=True, use_container_width=True)
