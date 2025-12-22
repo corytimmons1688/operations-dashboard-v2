@@ -1,694 +1,445 @@
 """
 Purchase Order Forecast Module for S&OP Dashboard
-Tab 4: PO planning, timing, and cash flow impact
-
-Features:
-- Generate planned PO dates based on demand forecast and lead times
-- Expected arrival dates
-- PO quantity and cost calculations
-- Vendor assignment
-- Payment timing
-- Cash flow impact timeline
-- Export-ready structure for Finance
+Plan purchase orders based on demand forecast and inventory requirements
 
 Author: Xander @ Calyx Containers
+Version: 2.0.0 - Fixed type handling
 """
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Tuple
 import logging
-
-from .sop_data_loader import (
-    load_invoice_lines, load_items, load_vendors, load_inventory,
-    load_sales_orders, calculate_lead_times, prepare_demand_history
-)
-from .forecasting_models import generate_forecast
-from .scenario_planning import APPROVED_SCENARIO_KEY, SCENARIOS_KEY, load_scenario_forecast
 
 logger = logging.getLogger(__name__)
 
 
-# Default assumptions
-DEFAULT_LEAD_TIME_DAYS = 30
-DEFAULT_SAFETY_STOCK_DAYS = 14
-DEFAULT_REORDER_POINT_DAYS = 45
-DEFAULT_PAYMENT_TERMS_DAYS = 30
+def safe_int(value, default=0):
+    """Safely convert a value to integer."""
+    if pd.isna(value):
+        return default
+    try:
+        return int(float(value))
+    except (ValueError, TypeError):
+        return default
+
+
+def safe_float(value, default=0.0):
+    """Safely convert a value to float."""
+    if pd.isna(value):
+        return default
+    try:
+        if isinstance(value, str):
+            value = value.replace('$', '').replace(',', '').strip()
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def get_column_as_series(df, col_name):
+    """Safely get a column as a Series."""
+    if df is None or col_name not in df.columns:
+        return None
+    result = df.loc[:, col_name]
+    if isinstance(result, pd.DataFrame):
+        return result.iloc[:, 0]
+    return result
+
+
+def find_column(df, keywords, exclude=None):
+    """Find first column matching any keyword."""
+    if df is None:
+        return None
+    exclude = exclude or []
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if any(kw in col_lower for kw in keywords):
+            if not any(ex in col_lower for ex in exclude):
+                return col
+    return None
 
 
 def render_po_forecast():
-    """Main render function for Purchase Order Forecast tab."""
+    """Render the Purchase Order Forecast view."""
     
     st.markdown("## 📦 Purchase Order Forecast")
     st.markdown("Plan purchase orders based on demand forecast and inventory requirements")
     
-    # Load data
-    with st.spinner("Loading data..."):
-        invoice_lines = load_invoice_lines()
-        items = load_items()
-        vendors = load_vendors()
-        inventory = load_inventory()
-        sales_orders = load_sales_orders()
-    
-    if invoice_lines is None:
-        st.error("Unable to load data. Please check your data connection.")
-        return
-    
-    # Sidebar settings
-    st.sidebar.markdown("### ⚙️ PO Planning Settings")
-    
-    planning_horizon = st.sidebar.selectbox(
-        "Planning Horizon",
-        options=[3, 6, 9, 12],
-        index=1,
-        format_func=lambda x: f"{x} months",
-        key="po_planning_horizon"
-    )
-    
-    safety_stock_days = st.sidebar.slider(
-        "Safety Stock (Days)",
-        min_value=0,
-        max_value=60,
-        value=DEFAULT_SAFETY_STOCK_DAYS,
-        key="safety_stock_days"
-    )
-    
-    reorder_point_days = st.sidebar.slider(
-        "Reorder Point (Days of Supply)",
-        min_value=14,
-        max_value=90,
-        value=DEFAULT_REORDER_POINT_DAYS,
-        key="reorder_point_days"
-    )
-    
-    default_payment_terms = st.sidebar.selectbox(
-        "Default Payment Terms",
-        options=[0, 15, 30, 45, 60, 90],
-        index=2,
-        format_func=lambda x: f"Net {x}" if x > 0 else "Due on Receipt",
-        key="default_payment_terms"
-    )
-    
-    st.sidebar.markdown("---")
-    
-    # Check for approved scenario
-    approved_scenario = st.session_state.get(APPROVED_SCENARIO_KEY)
-    scenarios = st.session_state.get(SCENARIOS_KEY, {})
-    
-    use_approved = False
-    if approved_scenario and approved_scenario in scenarios:
-        use_approved = st.sidebar.checkbox(
-            f"Use Approved Scenario: {approved_scenario}",
-            value=True,
-            key="use_approved_scenario"
-        )
-    
-    # Main content tabs
+    # Create tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "📋 PO Schedule",
         "💰 Cash Flow Impact",
         "📊 SKU Analysis",
-        "📥 Export"
+        "📤 Export"
     ])
     
     with tab1:
-        render_po_schedule(
-            invoice_lines, items, inventory, vendors,
-            planning_horizon, safety_stock_days, reorder_point_days,
-            default_payment_terms, use_approved, approved_scenario, scenarios
-        )
+        render_po_schedule_tab()
     
     with tab2:
-        render_cash_flow_impact(
-            invoice_lines, items, inventory,
-            planning_horizon, safety_stock_days, reorder_point_days,
-            default_payment_terms, use_approved, approved_scenario, scenarios
-        )
+        render_cash_flow_tab()
     
     with tab3:
-        render_sku_po_analysis(
-            invoice_lines, items, inventory,
-            planning_horizon, use_approved, approved_scenario, scenarios
-        )
+        render_sku_analysis_tab()
     
     with tab4:
-        render_po_export(
-            invoice_lines, items, inventory, vendors,
-            planning_horizon, safety_stock_days, reorder_point_days,
-            default_payment_terms, use_approved, approved_scenario, scenarios
-        )
+        render_export_tab()
 
 
-def calculate_demand_forecast(
-    invoice_lines: pd.DataFrame,
-    horizon: int,
-    use_approved: bool,
-    approved_scenario: str,
-    scenarios: Dict
-) -> Tuple[pd.Series, pd.Series]:
-    """Calculate or retrieve demand forecast."""
-    
-    # Prepare historical demand
-    df = invoice_lines.copy()
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df = df.dropna(subset=['Date'])
-    df['Period'] = df['Date'].dt.to_period('M').dt.to_timestamp()
-    
-    monthly_demand = df.groupby('Period')['Quantity'].sum()
-    
-    # Use approved scenario if available
-    if use_approved and approved_scenario and approved_scenario in scenarios:
-        scenario = scenarios[approved_scenario]
-        forecast_result = load_scenario_forecast(scenario)
-        return monthly_demand, forecast_result.forecast
-    
-    # Generate fresh forecast
-    if len(monthly_demand) >= 6:
-        try:
-            result = generate_forecast(monthly_demand, model='exponential_smoothing', horizon=horizon)
-            return monthly_demand, result.forecast
-        except Exception as e:
-            logger.error(f"Forecast failed: {e}")
-    
-    # Fallback: use average of last 6 months
-    avg_demand = monthly_demand.tail(6).mean()
-    future_dates = pd.date_range(
-        start=monthly_demand.index[-1] + pd.DateOffset(months=1),
-        periods=horizon,
-        freq='MS'
-    )
-    fallback_forecast = pd.Series([avg_demand] * horizon, index=future_dates)
-    
-    return monthly_demand, fallback_forecast
-
-
-def generate_po_schedule(
-    forecast: pd.Series,
-    items: pd.DataFrame,
-    inventory: pd.DataFrame,
-    safety_stock_days: int,
-    reorder_point_days: int,
-    default_payment_terms: int
-) -> pd.DataFrame:
-    """Generate a purchase order schedule based on forecast and inventory."""
-    
-    po_records = []
-    
-    # Get item details
-    if items is not None and not items.empty:
-        item_details = items.set_index('SKU').to_dict('index') if 'SKU' in items.columns else {}
-    else:
-        item_details = {}
-    
-    # Get current inventory
-    if inventory is not None and not inventory.empty and 'Name' in inventory.columns:
-        current_inv = inventory.set_index('Name')['On Hand'].to_dict() if 'On Hand' in inventory.columns else {}
-        avg_cost = inventory.set_index('Name')['Average Cost'].to_dict() if 'Average Cost' in inventory.columns else {}
-    else:
-        current_inv = {}
-        avg_cost = {}
-    
-    # Calculate daily demand rate from forecast
-    total_forecast = forecast.sum()
-    forecast_days = len(forecast) * 30  # Approximate days
-    daily_demand = total_forecast / forecast_days if forecast_days > 0 else 0
-    
-    # Generate POs for aggregate level (simplified)
-    running_inventory = sum(current_inv.values()) if current_inv else 0
-    safety_stock = daily_demand * safety_stock_days
-    reorder_point = daily_demand * reorder_point_days
-    
-    current_date = datetime.now()
-    
-    for period, demand in forecast.items():
-        period_start = period
-        period_end = period + pd.DateOffset(months=1) - pd.DateOffset(days=1)
-        
-        # Check if we need to order
-        projected_inv = running_inventory - demand
-        
-        if projected_inv < reorder_point:
-            # Calculate order quantity (EOQ simplified)
-            order_qty = max(demand * 2, reorder_point + safety_stock - projected_inv)
-            
-            # Determine lead time (use average)
-            lead_time = DEFAULT_LEAD_TIME_DAYS
-            
-            # Calculate dates
-            arrival_needed = period_start - pd.DateOffset(days=safety_stock_days)
-            po_date = arrival_needed - pd.DateOffset(days=lead_time)
-            
-            # Don't create POs in the past
-            if po_date < pd.Timestamp(current_date):
-                po_date = pd.Timestamp(current_date) + pd.DateOffset(days=3)
-                arrival_needed = po_date + pd.DateOffset(days=lead_time)
-            
-            # Calculate cost
-            avg_unit_cost = np.mean(list(avg_cost.values())) if avg_cost else 10.0
-            total_cost = order_qty * avg_unit_cost
-            
-            # Payment due date
-            payment_date = po_date + pd.DateOffset(days=default_payment_terms)
-            
-            po_records.append({
-                'PO_Date': po_date,
-                'Arrival_Date': arrival_needed,
-                'For_Period': period.strftime('%Y-%m'),
-                'Quantity': order_qty,
-                'Unit_Cost': avg_unit_cost,
-                'Total_Cost': total_cost,
-                'Payment_Terms': f"Net {default_payment_terms}",
-                'Payment_Due': payment_date,
-                'Lead_Time_Days': lead_time,
-                'Status': 'Planned'
-            })
-            
-            # Update running inventory
-            running_inventory = projected_inv + order_qty
-        else:
-            running_inventory = projected_inv
-    
-    return pd.DataFrame(po_records)
-
-
-def render_po_schedule(
-    invoice_lines: pd.DataFrame,
-    items: pd.DataFrame,
-    inventory: pd.DataFrame,
-    vendors: pd.DataFrame,
-    horizon: int,
-    safety_stock_days: int,
-    reorder_point_days: int,
-    payment_terms: int,
-    use_approved: bool,
-    approved_scenario: str,
-    scenarios: Dict
-):
-    """Render the PO schedule view."""
+def render_po_schedule_tab():
+    """Render Planned Purchase Order Schedule tab."""
     
     st.markdown("### 📋 Planned Purchase Order Schedule")
     
-    # Get forecast
-    historical, forecast = calculate_demand_forecast(
-        invoice_lines, horizon, use_approved, approved_scenario, scenarios
-    )
-    
-    if use_approved and approved_scenario:
-        st.info(f"📊 Using approved scenario: **{approved_scenario}**")
-    
-    # Generate PO schedule
-    po_schedule = generate_po_schedule(
-        forecast, items, inventory,
-        safety_stock_days, reorder_point_days, payment_terms
-    )
-    
-    if po_schedule.empty:
-        st.success("No purchase orders needed for the planning horizon based on current inventory and forecast.")
-        return
-    
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        total_pos = len(po_schedule)
-        st.metric("Planned POs", f"{total_pos}")
-    
-    with col2:
-        total_qty = po_schedule['Quantity'].sum()
-        st.metric("Total Quantity", f"{total_qty:,.0f}")
-    
-    with col3:
-        total_cost = po_schedule['Total_Cost'].sum()
-        st.metric("Total Cost", f"${total_cost:,.2f}")
-    
-    with col4:
-        avg_lead = po_schedule['Lead_Time_Days'].mean()
-        st.metric("Avg Lead Time", f"{avg_lead:.0f} days")
-    
-    st.markdown("---")
-    
-    # Timeline visualization
-    st.markdown("#### PO Timeline")
-    
-    fig = go.Figure()
-    
-    # Add PO markers
-    for _, row in po_schedule.iterrows():
-        # PO Date
-        fig.add_trace(go.Scatter(
-            x=[row['PO_Date']],
-            y=[1],
-            mode='markers+text',
-            marker=dict(size=15, color='#3498db', symbol='circle'),
-            text=[f"PO: {row['Quantity']:,.0f}"],
-            textposition='top center',
-            name='PO Date',
-            showlegend=False
-        ))
+    try:
+        from .sop_data_loader import (
+            load_inventory, load_items, get_topdown_item_forecast
+        )
         
-        # Arrival Date
-        fig.add_trace(go.Scatter(
-            x=[row['Arrival_Date']],
-            y=[1],
-            mode='markers+text',
-            marker=dict(size=15, color='#2ecc71', symbol='diamond'),
-            text=[f"Arrive"],
-            textposition='top center',
-            name='Arrival',
-            showlegend=False
-        ))
+        # Load data
+        inventory = load_inventory()
+        items = load_items()
+        item_forecast = get_topdown_item_forecast()
         
-        # Payment Date
-        fig.add_trace(go.Scatter(
-            x=[row['Payment_Due']],
-            y=[1],
-            mode='markers+text',
-            marker=dict(size=15, color='#e74c3c', symbol='square'),
-            text=[f"Pay: ${row['Total_Cost']:,.0f}"],
-            textposition='top center',
-            name='Payment',
-            showlegend=False
-        ))
+        if item_forecast is None or item_forecast.empty:
+            st.info("No forecast data available. Configure the Revenue Forecast in the Operations view first.")
+            return
         
-        # Connect with lines
-        fig.add_trace(go.Scatter(
-            x=[row['PO_Date'], row['Arrival_Date'], row['Payment_Due']],
-            y=[1, 1, 1],
-            mode='lines',
-            line=dict(color='#bdc3c7', width=1),
-            showlegend=False
+        # Find columns
+        inv_item_col = find_column(inventory, ['item', 'sku', 'name']) if inventory is not None else None
+        inv_qty_col = find_column(inventory, ['qty', 'quantity', 'on hand', 'available']) if inventory is not None else None
+        
+        items_item_col = find_column(items, ['item', 'sku', 'name']) if items is not None else None
+        lead_time_col = find_column(items, ['lead time', 'leadtime', 'lead_time']) if items is not None else None
+        vendor_col = find_column(items, ['vendor', 'supplier']) if items is not None else None
+        cost_col = find_column(items, ['cost', 'unit cost', 'price']) if items is not None else None
+        
+        # Build inventory lookup
+        inventory_lookup = {}
+        if inventory is not None and inv_item_col and inv_qty_col:
+            inv_items = get_column_as_series(inventory, inv_item_col)
+            inv_qty = get_column_as_series(inventory, inv_qty_col)
+            if inv_items is not None and inv_qty is not None:
+                for item, qty in zip(inv_items, inv_qty):
+                    if pd.notna(item):
+                        inventory_lookup[str(item).strip()] = safe_int(qty)
+        
+        # Build items lookup (lead time, vendor, cost)
+        items_lookup = {}
+        if items is not None and items_item_col:
+            for _, row in items.iterrows():
+                item_name = row.get(items_item_col)
+                if pd.notna(item_name):
+                    item_key = str(item_name).strip()
+                    items_lookup[item_key] = {
+                        'lead_time': safe_int(row.get(lead_time_col, 30)) if lead_time_col else 30,
+                        'vendor': str(row.get(vendor_col, 'Unknown')) if vendor_col else 'Unknown',
+                        'cost': safe_float(row.get(cost_col, 0)) if cost_col else 0
+                    }
+        
+        # Calculate PO requirements
+        po_schedule = []
+        
+        for _, row in item_forecast.iterrows():
+            item = str(row.get('Item', '')).strip()
+            category = str(row.get('Category', '')).strip()
+            period = str(row.get('Period', ''))
+            forecast_units = safe_int(row.get('Forecast_Units', 0))
+            forecast_revenue = safe_float(row.get('Forecast_Revenue', 0))
+            
+            if not item or forecast_units <= 0:
+                continue
+            
+            # Get current inventory
+            current_inventory = inventory_lookup.get(item, 0)
+            
+            # Get item details
+            item_info = items_lookup.get(item, {
+                'lead_time': 30,
+                'vendor': 'Unknown',
+                'cost': 0
+            })
+            
+            # Calculate net requirement
+            net_requirement = max(0, forecast_units - current_inventory)
+            
+            # Calculate order date based on lead time
+            try:
+                if '-' in period:
+                    parts = period.split('-')
+                    if len(parts) == 2:
+                        year = int(parts[0])
+                        month = int(parts[1])
+                        need_date = datetime(year, month, 1)
+                    else:
+                        need_date = datetime.now() + timedelta(days=30)
+                else:
+                    need_date = datetime.now() + timedelta(days=30)
+            except:
+                need_date = datetime.now() + timedelta(days=30)
+            
+            # Calculate order date (need_date - lead_time)
+            lead_time_days = safe_int(item_info['lead_time'], 30)
+            order_date = need_date - timedelta(days=lead_time_days)
+            
+            # Calculate PO value
+            unit_cost = safe_float(item_info['cost'], 0)
+            po_value = net_requirement * unit_cost
+            
+            if net_requirement > 0:
+                po_schedule.append({
+                    'Item': item,
+                    'Category': category,
+                    'Period': period,
+                    'Forecast Units': forecast_units,
+                    'Current Inventory': current_inventory,
+                    'Net Requirement': net_requirement,
+                    'Lead Time (Days)': lead_time_days,
+                    'Order Date': order_date.strftime('%Y-%m-%d'),
+                    'Need Date': need_date.strftime('%Y-%m-%d'),
+                    'Vendor': item_info['vendor'],
+                    'Unit Cost': unit_cost,
+                    'PO Value': po_value
+                })
+        
+        if not po_schedule:
+            st.info("No purchase orders needed based on current forecast and inventory levels.")
+            return
+        
+        po_df = pd.DataFrame(po_schedule)
+        
+        # Summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total PO Lines", f"{len(po_df):,}")
+        with col2:
+            st.metric("Total Units", f"{po_df['Net Requirement'].sum():,.0f}")
+        with col3:
+            st.metric("Total PO Value", f"${po_df['PO Value'].sum():,.0f}")
+        with col4:
+            st.metric("Unique Items", f"{po_df['Item'].nunique()}")
+        
+        # Format display
+        display_df = po_df.copy()
+        display_df['Unit Cost'] = display_df['Unit Cost'].apply(lambda x: f"${x:,.2f}" if x > 0 else "-")
+        display_df['PO Value'] = display_df['PO Value'].apply(lambda x: f"${x:,.0f}" if x > 0 else "-")
+        display_df['Net Requirement'] = display_df['Net Requirement'].apply(lambda x: f"{x:,.0f}")
+        display_df['Forecast Units'] = display_df['Forecast Units'].apply(lambda x: f"{x:,.0f}")
+        display_df['Current Inventory'] = display_df['Current Inventory'].apply(lambda x: f"{x:,.0f}")
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True, height=500)
+        
+        # Timeline chart
+        st.markdown("### 📅 Order Timeline")
+        
+        timeline_df = po_df.groupby('Order Date')['PO Value'].sum().reset_index()
+        timeline_df = timeline_df.sort_values('Order Date')
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=timeline_df['Order Date'],
+            y=timeline_df['PO Value'],
+            marker_color='#0033A1',
+            hovertemplate='<b>Order Date</b>: %{x}<br><b>PO Value</b>: $%{y:,.0f}<extra></extra>'
         ))
-    
-    fig.update_layout(
-        title="Purchase Order Timeline",
-        height=250,
-        showlegend=False,
-        yaxis=dict(visible=False),
-        xaxis_title="Date"
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # PO Schedule Table
-    st.markdown("#### Detailed PO Schedule")
-    
-    display_df = po_schedule.copy()
-    display_df['PO_Date'] = display_df['PO_Date'].dt.strftime('%Y-%m-%d')
-    display_df['Arrival_Date'] = display_df['Arrival_Date'].dt.strftime('%Y-%m-%d')
-    display_df['Payment_Due'] = display_df['Payment_Due'].dt.strftime('%Y-%m-%d')
-    display_df['Quantity'] = display_df['Quantity'].apply(lambda x: f"{x:,.0f}")
-    display_df['Unit_Cost'] = display_df['Unit_Cost'].apply(lambda x: f"${x:,.2f}")
-    display_df['Total_Cost'] = display_df['Total_Cost'].apply(lambda x: f"${x:,.2f}")
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+        fig.update_layout(
+            title='Purchase Order Value by Order Date',
+            xaxis_title='Order Date',
+            yaxis_title='PO Value ($)',
+            height=400
+        )
+        fig.update_yaxes(tickformat='$,.0f')
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"Error generating PO schedule: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 
-def render_cash_flow_impact(
-    invoice_lines: pd.DataFrame,
-    items: pd.DataFrame,
-    inventory: pd.DataFrame,
-    horizon: int,
-    safety_stock_days: int,
-    reorder_point_days: int,
-    payment_terms: int,
-    use_approved: bool,
-    approved_scenario: str,
-    scenarios: Dict
-):
-    """Render cash flow impact analysis."""
+def render_cash_flow_tab():
+    """Render Cash Flow Impact tab."""
     
     st.markdown("### 💰 Cash Flow Impact")
     
-    # Get forecast and PO schedule
-    historical, forecast = calculate_demand_forecast(
-        invoice_lines, horizon, use_approved, approved_scenario, scenarios
-    )
-    
-    po_schedule = generate_po_schedule(
-        forecast, items, inventory,
-        safety_stock_days, reorder_point_days, payment_terms
-    )
-    
-    if po_schedule.empty:
-        st.info("No POs planned - no cash flow impact to display.")
-        return
-    
-    # Group payments by month
-    po_schedule['Payment_Month'] = pd.to_datetime(po_schedule['Payment_Due']).dt.to_period('M').astype(str)
-    
-    monthly_payments = po_schedule.groupby('Payment_Month')['Total_Cost'].sum().reset_index()
-    monthly_payments.columns = ['Month', 'Payment_Amount']
-    monthly_payments = monthly_payments.sort_values('Month')
-    
-    # Calculate cumulative
-    monthly_payments['Cumulative'] = monthly_payments['Payment_Amount'].cumsum()
-    
-    # Chart
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-    
-    fig.add_trace(
-        go.Bar(
-            x=monthly_payments['Month'],
-            y=monthly_payments['Payment_Amount'],
-            name='Monthly Payments',
-            marker_color='#e74c3c'
-        ),
-        secondary_y=False
-    )
-    
-    fig.add_trace(
-        go.Scatter(
-            x=monthly_payments['Month'],
-            y=monthly_payments['Cumulative'],
-            mode='lines+markers',
+    try:
+        from .sop_data_loader import load_items, get_topdown_item_forecast
+        
+        items = load_items()
+        item_forecast = get_topdown_item_forecast()
+        
+        if item_forecast is None or item_forecast.empty:
+            st.info("No forecast data available.")
+            return
+        
+        # Find cost column in items
+        items_item_col = find_column(items, ['item', 'sku', 'name']) if items is not None else None
+        cost_col = find_column(items, ['cost', 'unit cost', 'price']) if items is not None else None
+        
+        # Build cost lookup
+        cost_lookup = {}
+        if items is not None and items_item_col and cost_col:
+            for _, row in items.iterrows():
+                item_name = row.get(items_item_col)
+                if pd.notna(item_name):
+                    cost_lookup[str(item_name).strip()] = safe_float(row.get(cost_col, 0))
+        
+        # Calculate cash requirements by period
+        cash_by_period = []
+        
+        for _, row in item_forecast.iterrows():
+            item = str(row.get('Item', '')).strip()
+            period = str(row.get('Period', ''))
+            forecast_units = safe_int(row.get('Forecast_Units', 0))
+            
+            unit_cost = cost_lookup.get(item, 0)
+            cash_required = forecast_units * unit_cost
+            
+            cash_by_period.append({
+                'Period': period,
+                'Cash Required': cash_required
+            })
+        
+        cash_df = pd.DataFrame(cash_by_period)
+        cash_summary = cash_df.groupby('Period')['Cash Required'].sum().reset_index()
+        cash_summary = cash_summary.sort_values('Period')
+        
+        # Cumulative cash flow
+        cash_summary['Cumulative'] = cash_summary['Cash Required'].cumsum()
+        
+        # Chart
+        fig = go.Figure()
+        
+        fig.add_trace(go.Bar(
+            x=cash_summary['Period'],
+            y=cash_summary['Cash Required'],
+            name='Period Cash Requirement',
+            marker_color='#0033A1',
+            hovertemplate='<b>Period</b>: %{x}<br><b>Cash Required</b>: $%{y:,.0f}<extra></extra>'
+        ))
+        
+        fig.add_trace(go.Scatter(
+            x=cash_summary['Period'],
+            y=cash_summary['Cumulative'],
             name='Cumulative',
-            line=dict(color='#3498db', width=2)
-        ),
-        secondary_y=True
-    )
-    
-    fig.update_layout(
-        title="PO Payment Cash Flow",
-        height=400,
-        hovermode='x unified',
-        legend=dict(orientation='h', y=1.1)
-    )
-    fig.update_xaxes(title_text="Month")
-    fig.update_yaxes(title_text="Monthly Payment ($)", secondary_y=False)
-    fig.update_yaxes(title_text="Cumulative ($)", secondary_y=True)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Summary table
-    st.markdown("#### Monthly Cash Requirements")
-    
-    display_df = monthly_payments.copy()
-    display_df['Payment_Amount'] = display_df['Payment_Amount'].apply(lambda x: f"${x:,.2f}")
-    display_df['Cumulative'] = display_df['Cumulative'].apply(lambda x: f"${x:,.2f}")
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-    
-    # Key insights
-    st.markdown("---")
-    st.markdown("#### 💡 Key Insights")
-    
-    total_cash_needed = po_schedule['Total_Cost'].sum()
-    peak_month = monthly_payments.loc[monthly_payments['Payment_Amount'].idxmax()]
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown(f"**Total Cash Required:** ${total_cash_needed:,.2f}")
-        st.markdown(f"**Peak Payment Month:** {peak_month['Month']}")
-    
-    with col2:
-        avg_monthly = total_cash_needed / len(monthly_payments)
-        st.markdown(f"**Average Monthly:** ${avg_monthly:,.2f}")
-        st.markdown(f"**Payment Terms:** Net {payment_terms}")
-
-
-def render_sku_po_analysis(
-    invoice_lines: pd.DataFrame,
-    items: pd.DataFrame,
-    inventory: pd.DataFrame,
-    horizon: int,
-    use_approved: bool,
-    approved_scenario: str,
-    scenarios: Dict
-):
-    """Render SKU-level PO analysis."""
-    
-    st.markdown("### 📊 SKU-Level Analysis")
-    
-    if 'Item' not in invoice_lines.columns:
-        st.warning("Item column not found in data.")
-        return
-    
-    df = invoice_lines.copy()
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df = df.dropna(subset=['Date'])
-    
-    # Calculate metrics by SKU
-    last_90_days = datetime.now() - timedelta(days=90)
-    recent_df = df[df['Date'] >= last_90_days]
-    
-    sku_analysis = recent_df.groupby('Item').agg({
-        'Quantity': 'sum',
-        'Amount': 'sum',
-        'Document Number': 'nunique'
-    }).reset_index()
-    sku_analysis.columns = ['SKU', 'Qty_90d', 'Revenue_90d', 'Orders_90d']
-    
-    # Add inventory info
-    if inventory is not None and 'Name' in inventory.columns and 'On Hand' in inventory.columns:
-        inv_dict = inventory.set_index('Name')['On Hand'].to_dict()
-        sku_analysis['On_Hand'] = sku_analysis['SKU'].map(inv_dict).fillna(0)
-    else:
-        sku_analysis['On_Hand'] = 0
-    
-    # Calculate days of supply
-    sku_analysis['Daily_Demand'] = sku_analysis['Qty_90d'] / 90
-    sku_analysis['Days_of_Supply'] = np.where(
-        sku_analysis['Daily_Demand'] > 0,
-        sku_analysis['On_Hand'] / sku_analysis['Daily_Demand'],
-        999
-    )
-    
-    # Flag items needing reorder
-    sku_analysis['Needs_Reorder'] = sku_analysis['Days_of_Supply'] < 30
-    
-    # Sort by days of supply
-    sku_analysis = sku_analysis.sort_values('Days_of_Supply')
-    
-    # Summary
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        needs_reorder = sku_analysis['Needs_Reorder'].sum()
-        st.metric("SKUs Need Reorder", f"{needs_reorder}")
-    
-    with col2:
-        low_stock = (sku_analysis['Days_of_Supply'] < 14).sum()
-        st.metric("Critical (< 14 days)", f"{low_stock}")
-    
-    with col3:
-        total_skus = len(sku_analysis)
-        st.metric("Total Active SKUs", f"{total_skus}")
-    
-    st.markdown("---")
-    
-    # Chart: Days of Supply by SKU
-    top_20 = sku_analysis.head(20)
-    
-    fig = px.bar(
-        top_20,
-        x='SKU',
-        y='Days_of_Supply',
-        color='Needs_Reorder',
-        color_discrete_map={True: '#e74c3c', False: '#2ecc71'},
-        title="Days of Supply by SKU (Top 20 Lowest)"
-    )
-    fig.add_hline(y=30, line_dash="dash", line_color="orange", annotation_text="30 Day Threshold")
-    fig.update_layout(height=400)
-    fig.update_xaxes(tickangle=-45)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Detailed table
-    st.markdown("#### SKU Inventory Status")
-    
-    display_df = sku_analysis[['SKU', 'On_Hand', 'Qty_90d', 'Daily_Demand', 'Days_of_Supply', 'Needs_Reorder']].copy()
-    display_df['On_Hand'] = display_df['On_Hand'].apply(lambda x: f"{x:,.0f}")
-    display_df['Qty_90d'] = display_df['Qty_90d'].apply(lambda x: f"{x:,.0f}")
-    display_df['Daily_Demand'] = display_df['Daily_Demand'].apply(lambda x: f"{x:,.1f}")
-    display_df['Days_of_Supply'] = display_df['Days_of_Supply'].apply(lambda x: f"{x:,.0f}" if x < 999 else "∞")
-    display_df['Needs_Reorder'] = display_df['Needs_Reorder'].apply(lambda x: "🔴 Yes" if x else "✅ No")
-    
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-
-def render_po_export(
-    invoice_lines: pd.DataFrame,
-    items: pd.DataFrame,
-    inventory: pd.DataFrame,
-    vendors: pd.DataFrame,
-    horizon: int,
-    safety_stock_days: int,
-    reorder_point_days: int,
-    payment_terms: int,
-    use_approved: bool,
-    approved_scenario: str,
-    scenarios: Dict
-):
-    """Render PO export functionality."""
-    
-    st.markdown("### 📥 Export PO Forecast")
-    
-    # Get forecast and PO schedule
-    historical, forecast = calculate_demand_forecast(
-        invoice_lines, horizon, use_approved, approved_scenario, scenarios
-    )
-    
-    po_schedule = generate_po_schedule(
-        forecast, items, inventory,
-        safety_stock_days, reorder_point_days, payment_terms
-    )
-    
-    if po_schedule.empty:
-        st.info("No POs to export.")
-        return
-    
-    st.markdown("#### Export Options")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**PO Schedule Export**")
-        st.markdown("Complete purchase order schedule with dates, quantities, and costs")
+            mode='lines+markers',
+            line=dict(color='#F59E0B', width=3),
+            hovertemplate='<b>Period</b>: %{x}<br><b>Cumulative</b>: $%{y:,.0f}<extra></extra>'
+        ))
         
-        export_df = po_schedule.copy()
-        export_df['PO_Date'] = export_df['PO_Date'].dt.strftime('%Y-%m-%d')
-        export_df['Arrival_Date'] = export_df['Arrival_Date'].dt.strftime('%Y-%m-%d')
-        export_df['Payment_Due'] = export_df['Payment_Due'].dt.strftime('%Y-%m-%d')
+        fig.update_layout(
+            title='Cash Flow Requirements by Period',
+            xaxis_title='Period',
+            yaxis_title='Amount ($)',
+            height=450,
+            legend=dict(orientation='h', yanchor='bottom', y=1.02)
+        )
+        fig.update_yaxes(tickformat='$,.0f')
         
-        csv = export_df.to_csv(index=False)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Summary
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Cash Required", f"${cash_summary['Cash Required'].sum():,.0f}")
+        with col2:
+            avg_per_period = cash_summary['Cash Required'].mean()
+            st.metric("Average per Period", f"${avg_per_period:,.0f}")
+        
+        st.dataframe(cash_summary, use_container_width=True, hide_index=True)
+        
+    except Exception as e:
+        st.error(f"Error calculating cash flow: {str(e)}")
+
+
+def render_sku_analysis_tab():
+    """Render SKU Analysis tab."""
+    
+    st.markdown("### 📊 SKU Analysis")
+    
+    try:
+        from .sop_data_loader import get_topdown_item_forecast
+        
+        item_forecast = get_topdown_item_forecast()
+        
+        if item_forecast is None or item_forecast.empty:
+            st.info("No forecast data available.")
+            return
+        
+        # Aggregate by SKU
+        sku_summary = item_forecast.groupby(['Item', 'Category']).agg({
+            'Forecast_Units': 'sum',
+            'Forecast_Revenue': 'sum',
+            'Period': 'count'
+        }).reset_index()
+        sku_summary.columns = ['Item', 'Category', 'Total Units', 'Total Revenue', 'Periods']
+        sku_summary = sku_summary.sort_values('Total Revenue', ascending=False)
+        
+        # Top 20 chart
+        top_20 = sku_summary.head(20)
+        
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=top_20['Item'],
+            y=top_20['Total Revenue'],
+            marker_color='#0033A1',
+            hovertemplate='<b>%{x}</b><br>Revenue: $%{y:,.0f}<extra></extra>'
+        ))
+        fig.update_layout(
+            title='Top 20 SKUs by Forecasted Revenue',
+            xaxis_title='Item',
+            yaxis_title='Forecasted Revenue ($)',
+            height=450
+        )
+        fig.update_xaxes(tickangle=45)
+        fig.update_yaxes(tickformat='$,.0f')
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Format display
+        display_df = sku_summary.copy()
+        display_df['Total Revenue'] = display_df['Total Revenue'].apply(lambda x: f"${x:,.0f}")
+        display_df['Total Units'] = display_df['Total Units'].apply(lambda x: f"{x:,.0f}")
+        
+        st.dataframe(display_df, use_container_width=True, hide_index=True, height=400)
+        
+    except Exception as e:
+        st.error(f"Error in SKU analysis: {str(e)}")
+
+
+def render_export_tab():
+    """Render Export tab."""
+    
+    st.markdown("### 📤 Export Data")
+    
+    try:
+        from .sop_data_loader import get_topdown_item_forecast
+        
+        item_forecast = get_topdown_item_forecast()
+        
+        if item_forecast is None or item_forecast.empty:
+            st.info("No forecast data available to export.")
+            return
+        
+        st.markdown("Download forecast data for further analysis or import into other systems.")
+        
+        # Convert to CSV
+        csv = item_forecast.to_csv(index=False)
+        
         st.download_button(
-            label="📥 Download PO Schedule (CSV)",
+            label="📥 Download Forecast CSV",
             data=csv,
-            file_name=f"po_schedule_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True
+            file_name=f"po_forecast_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
         )
-    
-    with col2:
-        st.markdown("**Cash Flow Export**")
-        st.markdown("Monthly cash requirements for Finance planning")
         
-        po_schedule['Payment_Month'] = pd.to_datetime(po_schedule['Payment_Due']).dt.to_period('M').astype(str)
-        monthly_payments = po_schedule.groupby('Payment_Month')['Total_Cost'].sum().reset_index()
-        monthly_payments.columns = ['Month', 'Payment_Amount']
-        monthly_payments['Cumulative'] = monthly_payments['Payment_Amount'].cumsum()
+        st.markdown("---")
+        st.markdown("**Data Preview:**")
+        st.dataframe(item_forecast.head(50), use_container_width=True, hide_index=True)
         
-        csv_cf = monthly_payments.to_csv(index=False)
-        st.download_button(
-            label="📥 Download Cash Flow (CSV)",
-            data=csv_cf,
-            file_name=f"po_cash_flow_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-    
-    # Preview
-    st.markdown("---")
-    st.markdown("#### Export Preview")
-    
-    with st.expander("PO Schedule Preview"):
-        st.dataframe(export_df, use_container_width=True, hide_index=True)
-    
-    with st.expander("Cash Flow Preview"):
-        st.dataframe(monthly_payments, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.error(f"Error preparing export: {str(e)}")
