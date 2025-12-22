@@ -9,7 +9,8 @@ Features:
 - Provides data preparation functions
 
 Author: Xander @ Calyx Containers
-Version: 3.1.0
+Version: 3.2.0
+Last Updated: 2025-12-22 15:40 MST
 """
 
 import streamlit as st
@@ -22,6 +23,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 logger = logging.getLogger(__name__)
+
+# Version info
+VERSION = "3.2.0"
+LAST_UPDATED = "2025-12-22 15:40 MST"
 
 # =============================================================================
 # GOOGLE SHEETS CONNECTION
@@ -1482,79 +1487,111 @@ def allocate_topdown_forecast(revenue_forecast: pd.DataFrame = None,
     available_categories = item_mix['Category'].unique().tolist() if 'Category' in item_mix.columns else []
     
     for _, forecast_row in revenue_forecast.iterrows():
-        category = str(forecast_row['Category']).strip()
-        period = forecast_row['Period']
-        cat_forecast_revenue = forecast_row['Forecast_Revenue']
-        
-        if pd.isna(cat_forecast_revenue) or cat_forecast_revenue <= 0:
+        try:
+            category = str(forecast_row.get('Category', '')).strip()
+            period = str(forecast_row.get('Period', ''))
+            
+            # SAFE: Convert revenue to float
+            cat_forecast_revenue_raw = forecast_row.get('Forecast_Revenue', 0)
+            try:
+                if pd.isna(cat_forecast_revenue_raw):
+                    cat_forecast_revenue = 0.0
+                elif isinstance(cat_forecast_revenue_raw, str):
+                    cat_forecast_revenue = float(cat_forecast_revenue_raw.replace('$', '').replace(',', '').strip() or 0)
+                else:
+                    cat_forecast_revenue = float(cat_forecast_revenue_raw)
+            except (ValueError, TypeError):
+                cat_forecast_revenue = 0.0
+            
+            if cat_forecast_revenue <= 0:
+                continue
+            
+            # Try to find matching category in item_mix
+            cat_items = item_mix[item_mix['Category'] == category].copy()
+            
+            # If no exact match, try case-insensitive
+            if cat_items.empty:
+                category_lower = category.lower()
+                for avail_cat in available_categories:
+                    if str(avail_cat).lower() == category_lower:
+                        cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
+                        break
+            
+            # If still no match, try partial match
+            if cat_items.empty:
+                for avail_cat in available_categories:
+                    if category_lower in str(avail_cat).lower() or str(avail_cat).lower() in category_lower:
+                        cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
+                        break
+            
+            if cat_items.empty:
+                # No historical data - keep at category level
+                result_rows.append({
+                    'Item': f'{category} (Unallocated)',
+                    'Category': category,
+                    'Period': period,
+                    'Forecast_Revenue': float(cat_forecast_revenue),
+                    'Forecast_Units': 0.0,
+                    'Mix_Pct': 100.0,
+                    'ASP': 0.0
+                })
+                continue
+            
+            # Normalize mix percentages to sum to 100%
+            # SAFE: Ensure Mix_Pct is numeric
+            cat_items['Mix_Pct'] = pd.to_numeric(cat_items['Mix_Pct'], errors='coerce').fillna(0)
+            total_mix = cat_items['Mix_Pct'].sum()
+            if total_mix > 0:
+                cat_items['Mix_Pct_Normalized'] = cat_items['Mix_Pct'] / total_mix * 100
+            else:
+                cat_items['Mix_Pct_Normalized'] = 100 / len(cat_items)
+            
+            # Allocate to each item
+            for _, item_row in cat_items.iterrows():
+                try:
+                    item_name = str(item_row.get('Item', '')).strip()
+                    
+                    # SAFE: Get mix percentage as float
+                    mix_pct_raw = item_row.get('Mix_Pct_Normalized', 0)
+                    try:
+                        mix_pct = float(mix_pct_raw) / 100.0 if pd.notna(mix_pct_raw) else 0
+                    except (ValueError, TypeError):
+                        mix_pct = 0
+                    
+                    # Item's share of category revenue (all floats)
+                    item_forecast_revenue = float(cat_forecast_revenue) * float(mix_pct)
+                    
+                    # Get ASP for this item
+                    asp = 0.0
+                    forecast_units = 0.0
+                    
+                    if item_asp is not None and not item_asp.empty:
+                        item_asp_row = item_asp[item_asp['Item'] == item_name]
+                        if not item_asp_row.empty:
+                            asp_raw = item_asp_row['ASP'].iloc[0]
+                            try:
+                                asp = float(asp_raw) if pd.notna(asp_raw) else 0.0
+                            except (ValueError, TypeError):
+                                asp = 0.0
+                            if asp > 0:
+                                forecast_units = float(item_forecast_revenue) / float(asp)
+                    
+                    result_rows.append({
+                        'Item': item_name,
+                        'Category': category,
+                        'Period': period,
+                        'Forecast_Revenue': round(float(item_forecast_revenue), 2),
+                        'Forecast_Units': round(float(forecast_units), 0),
+                        'Mix_Pct': round(float(mix_pct_raw) if pd.notna(mix_pct_raw) else 0, 2),
+                        'ASP': round(float(asp), 2)
+                    })
+                except Exception as e:
+                    logger.warning(f"Error allocating item {item_row.get('Item', 'unknown')}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.warning(f"Error processing forecast row: {e}")
             continue
-        
-        # Try to find matching category in item_mix
-        cat_items = item_mix[item_mix['Category'] == category].copy()
-        
-        # If no exact match, try case-insensitive
-        if cat_items.empty:
-            category_lower = category.lower()
-            for avail_cat in available_categories:
-                if str(avail_cat).lower() == category_lower:
-                    cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
-                    break
-        
-        # If still no match, try partial match
-        if cat_items.empty:
-            for avail_cat in available_categories:
-                if category_lower in str(avail_cat).lower() or str(avail_cat).lower() in category_lower:
-                    cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
-                    break
-        
-        if cat_items.empty:
-            # No historical data - keep at category level
-            result_rows.append({
-                'Item': f'{category} (Unallocated)',
-                'Category': category,
-                'Period': period,
-                'Forecast_Revenue': cat_forecast_revenue,
-                'Forecast_Units': 0,
-                'Mix_Pct': 100,
-                'ASP': 0
-            })
-            continue
-        
-        # Normalize mix percentages to sum to 100%
-        total_mix = cat_items['Mix_Pct'].sum()
-        if total_mix > 0:
-            cat_items['Mix_Pct_Normalized'] = cat_items['Mix_Pct'] / total_mix * 100
-        else:
-            cat_items['Mix_Pct_Normalized'] = 100 / len(cat_items)
-        
-        # Allocate to each item
-        for _, item_row in cat_items.iterrows():
-            item_name = item_row['Item']
-            mix_pct = item_row['Mix_Pct_Normalized'] / 100  # Convert to decimal
-            
-            # Item's share of category revenue
-            item_forecast_revenue = cat_forecast_revenue * mix_pct
-            
-            # Get ASP for this item
-            asp = 0
-            forecast_units = 0
-            
-            if item_asp is not None and not item_asp.empty:
-                item_asp_row = item_asp[item_asp['Item'] == item_name]
-                if not item_asp_row.empty:
-                    asp = item_asp_row['ASP'].iloc[0]
-                    if asp > 0:
-                        forecast_units = item_forecast_revenue / asp
-            
-            result_rows.append({
-                'Item': item_name,
-                'Category': category,
-                'Period': period,
-                'Forecast_Revenue': round(item_forecast_revenue, 2),
-                'Forecast_Units': round(forecast_units, 0),
-                'Mix_Pct': round(item_row['Mix_Pct_Normalized'], 2),
-                'ASP': round(asp, 2)
-            })
     
     return pd.DataFrame(result_rows)
 
