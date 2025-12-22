@@ -3,7 +3,8 @@ Operations/Supply Chain View Module for S&OP Dashboard
 Demand planning, pipeline analysis, and coverage tracking
 
 Author: Xander @ Calyx Containers
-Version: 4.1.0 - Performance Optimized
+Version: 4.2.0
+Last Updated: 2025-12-22 15:40 MST
 """
 
 import streamlit as st
@@ -14,6 +15,10 @@ from datetime import datetime, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Version info
+VERSION = "4.2.0"
+LAST_UPDATED = "2025-12-22 15:40 MST"
 
 # =============================================================================
 # PERFORMANCE: Cache expensive computations
