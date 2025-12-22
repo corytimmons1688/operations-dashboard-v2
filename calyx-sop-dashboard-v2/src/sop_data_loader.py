@@ -25,8 +25,8 @@ from google.oauth2.service_account import Credentials
 logger = logging.getLogger(__name__)
 
 # Version info
-VERSION = "3.2.0"
-LAST_UPDATED = "2025-12-22 15:40 MST"
+VERSION = "3.3.0"
+LAST_UPDATED = "2025-12-22 15:50 MST"
 
 # =============================================================================
 # GOOGLE SHEETS CONNECTION
@@ -246,6 +246,19 @@ def load_items() -> Optional[pd.DataFrame]:
     if product_type_col:
         df['Calyx Product Type'] = df[product_type_col].fillna('Unknown').replace('', 'Unknown')
     
+    # Find Stock Item column
+    stock_item_col = None
+    for col in df.columns:
+        col_lower = col.lower().strip()
+        if col_lower == 'stock item' or col_lower == 'stockitem' or col_lower == 'stock_item':
+            stock_item_col = col
+            break
+    
+    if stock_item_col:
+        df['Stock Item'] = df[stock_item_col].fillna('').astype(str).str.strip()
+    else:
+        df['Stock Item'] = ''  # Default to blank if column not found
+    
     # Also keep original column mapping
     col_mapping = {}
     for col in df.columns:
@@ -258,6 +271,32 @@ def load_items() -> Optional[pd.DataFrame]:
     
     df = df.rename(columns=col_mapping)
     
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_stock_items() -> Optional[pd.DataFrame]:
+    """
+    Load Raw_Items data filtered to only include Stock Items.
+    Excludes items where Stock Item = 'No' or blank.
+    
+    Returns only items where Stock Item = 'Yes'
+    """
+    df = load_items()
+    
+    if df is None or df.empty:
+        return df
+    
+    # Filter to only stock items (Yes)
+    if 'Stock Item' in df.columns:
+        # Keep only rows where Stock Item is 'Yes' (case insensitive)
+        stock_item_series = df['Stock Item'].astype(str).str.strip().str.lower()
+        df_filtered = df[stock_item_series == 'yes'].copy()
+        
+        logger.info(f"Filtered items: {len(df)} total -> {len(df_filtered)} stock items")
+        return df_filtered
+    
+    # If no Stock Item column, return all items
     return df
 
 
