@@ -3,9 +3,11 @@ Purchase Order Forecast Module for S&OP Dashboard
 Plan purchase orders based on demand forecast and inventory requirements
 
 Author: Xander @ Calyx Containers
-Version: 3.0.0
-Last Updated: 2025-12-22 15:35 MST
-Changes: Added extensive type safety and debugging
+Version: 3.1.0
+Last Updated: 2025-12-22 15:50 MST
+Changes: 
+- Added extensive type safety and debugging
+- Excludes items where Stock Item = No or blank from PO forecasting and cashflow
 """
 
 import streamlit as st
@@ -19,8 +21,8 @@ import traceback
 logger = logging.getLogger(__name__)
 
 # Version info for tracking deployments
-VERSION = "3.0.0"
-LAST_UPDATED = "2025-12-22 15:35 MST"
+VERSION = "3.1.0"
+LAST_UPDATED = "2025-12-22 15:50 MST"
 
 
 def safe_int(value, default=0):
@@ -122,12 +124,13 @@ def render_po_schedule_tab():
     """Render Planned Purchase Order Schedule tab."""
     
     st.markdown("### 📋 Planned Purchase Order Schedule")
+    st.markdown("*Note: Only includes items where Stock Item = Yes*")
     
     try:
         # Import with error handling
         try:
             from .sop_data_loader import (
-                load_inventory, load_items, get_topdown_item_forecast
+                load_inventory, load_items, load_stock_items, get_topdown_item_forecast
             )
         except ImportError as e:
             st.error(f"Import error: {e}")
@@ -144,11 +147,12 @@ def render_po_schedule_tab():
             st.warning(f"Could not load inventory: {e}")
             inventory = None
         
+        # Load STOCK ITEMS only (excludes Stock Item = No or blank)
         try:
-            items = load_items()
-            st.write(f"✓ Items loaded: {len(items) if items is not None else 0} rows")
+            items = load_stock_items()
+            st.write(f"✓ Stock Items loaded: {len(items) if items is not None else 0} rows (filtered to Stock Item = Yes)")
         except Exception as e:
-            st.warning(f"Could not load items: {e}")
+            st.warning(f"Could not load stock items: {e}")
             items = None
         
         try:
@@ -163,9 +167,33 @@ def render_po_schedule_tab():
             st.info("No forecast data available. Configure the Revenue Forecast in the Operations view first.")
             return
         
+        # Build set of stock item names for filtering
+        stock_item_names = set()
+        if items is not None and not items.empty:
+            item_col = None
+            for col in items.columns:
+                if col.lower() in ['item', 'sku', 'name', 'item name']:
+                    item_col = col
+                    break
+            if item_col:
+                stock_item_names = set(items[item_col].astype(str).str.strip().tolist())
+        
+        st.write(f"Stock item names for filtering: {len(stock_item_names)} items")
+        
+        # Filter forecast to only include stock items
+        if stock_item_names:
+            original_count = len(item_forecast)
+            item_forecast = item_forecast[item_forecast['Item'].astype(str).str.strip().isin(stock_item_names)].copy()
+            st.write(f"Filtered forecast: {original_count} -> {len(item_forecast)} rows (stock items only)")
+        
+        if item_forecast.empty:
+            st.info("No forecast data for stock items. Check that your items are marked as Stock Item = Yes in Raw_Items.")
+            return
+        
         # Show forecast columns for debugging
-        st.write(f"Forecast columns: {list(item_forecast.columns)}")
-        st.write(f"Forecast dtypes: {item_forecast.dtypes.to_dict()}")
+        with st.expander("Debug Info", expanded=False):
+            st.write(f"Forecast columns: {list(item_forecast.columns)}")
+            st.write(f"Forecast dtypes: {item_forecast.dtypes.to_dict()}")
         
         # Find columns
         inv_item_col = find_column(inventory, ['item', 'sku', 'name']) if inventory is not None else None
@@ -176,9 +204,6 @@ def render_po_schedule_tab():
         vendor_col = find_column(items, ['vendor', 'supplier']) if items is not None else None
         cost_col = find_column(items, ['cost', 'unit cost', 'price']) if items is not None else None
         
-        st.write(f"Column mappings - inv_item: {inv_item_col}, inv_qty: {inv_qty_col}")
-        st.write(f"Column mappings - items_item: {items_item_col}, lead_time: {lead_time_col}, vendor: {vendor_col}, cost: {cost_col}")
-        
         # Build inventory lookup
         inventory_lookup = {}
         if inventory is not None and inv_item_col and inv_qty_col:
@@ -188,8 +213,6 @@ def render_po_schedule_tab():
                 for i, (item, qty) in enumerate(zip(inv_items, inv_qty)):
                     if pd.notna(item):
                         inventory_lookup[safe_str(item)] = safe_int(qty)
-        
-        st.write(f"Inventory lookup built: {len(inventory_lookup)} items")
         
         # Build items lookup (lead time, vendor, cost)
         items_lookup = {}
@@ -205,10 +228,7 @@ def render_po_schedule_tab():
                             'cost': safe_float(row.get(cost_col, 0) if cost_col else 0, 0)
                         }
                 except Exception as e:
-                    st.warning(f"Error processing item row {idx}: {e}")
                     continue
-        
-        st.write(f"Items lookup built: {len(items_lookup)} items")
         
         # Calculate PO requirements
         po_schedule = []
@@ -354,15 +374,35 @@ def render_cash_flow_tab():
     """Render Cash Flow Impact tab."""
     
     st.markdown("### 💰 Cash Flow Impact")
+    st.markdown("*Note: Only includes items where Stock Item = Yes*")
     
     try:
-        from .sop_data_loader import load_items, get_topdown_item_forecast
+        from .sop_data_loader import load_stock_items, get_topdown_item_forecast
         
-        items = load_items()
+        items = load_stock_items()  # Use stock items only
         item_forecast = get_topdown_item_forecast()
         
         if item_forecast is None or item_forecast.empty:
             st.info("No forecast data available.")
+            return
+        
+        # Build set of stock item names for filtering
+        stock_item_names = set()
+        if items is not None and not items.empty:
+            item_col = None
+            for col in items.columns:
+                if col.lower() in ['item', 'sku', 'name', 'item name']:
+                    item_col = col
+                    break
+            if item_col:
+                stock_item_names = set(items[item_col].astype(str).str.strip().tolist())
+        
+        # Filter forecast to only include stock items
+        if stock_item_names:
+            item_forecast = item_forecast[item_forecast['Item'].astype(str).str.strip().isin(stock_item_names)].copy()
+        
+        if item_forecast.empty:
+            st.info("No forecast data for stock items.")
             return
         
         # Find cost column in items
