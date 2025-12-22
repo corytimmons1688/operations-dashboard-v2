@@ -3,7 +3,9 @@ Purchase Order Forecast Module for S&OP Dashboard
 Plan purchase orders based on demand forecast and inventory requirements
 
 Author: Xander @ Calyx Containers
-Version: 2.0.0 - Fixed type handling
+Version: 3.0.0
+Last Updated: 2025-12-22 15:35 MST
+Changes: Added extensive type safety and debugging
 """
 
 import streamlit as st
@@ -12,15 +14,27 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import logging
+import traceback
 
 logger = logging.getLogger(__name__)
+
+# Version info for tracking deployments
+VERSION = "3.0.0"
+LAST_UPDATED = "2025-12-22 15:35 MST"
 
 
 def safe_int(value, default=0):
     """Safely convert a value to integer."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return default
     if pd.isna(value):
         return default
     try:
+        # Handle string numbers
+        if isinstance(value, str):
+            value = value.replace(',', '').replace('$', '').strip()
+            if value == '' or value.lower() in ['nan', 'none', 'null']:
+                return default
         return int(float(value))
     except (ValueError, TypeError):
         return default
@@ -28,14 +42,25 @@ def safe_int(value, default=0):
 
 def safe_float(value, default=0.0):
     """Safely convert a value to float."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return default
     if pd.isna(value):
         return default
     try:
         if isinstance(value, str):
             value = value.replace('$', '').replace(',', '').strip()
+            if value == '' or value.lower() in ['nan', 'none', 'null']:
+                return default
         return float(value)
     except (ValueError, TypeError):
         return default
+
+
+def safe_str(value, default=''):
+    """Safely convert a value to string."""
+    if value is None or pd.isna(value):
+        return default
+    return str(value).strip()
 
 
 def get_column_as_series(df, col_name):
@@ -67,6 +92,11 @@ def render_po_forecast():
     st.markdown("## 📦 Purchase Order Forecast")
     st.markdown("Plan purchase orders based on demand forecast and inventory requirements")
     
+    # Show version info in expander
+    with st.expander("ℹ️ Module Info", expanded=False):
+        st.write(f"**Version:** {VERSION}")
+        st.write(f"**Last Updated:** {LAST_UPDATED}")
+    
     # Create tabs
     tab1, tab2, tab3, tab4 = st.tabs([
         "📋 PO Schedule",
@@ -94,18 +124,48 @@ def render_po_schedule_tab():
     st.markdown("### 📋 Planned Purchase Order Schedule")
     
     try:
-        from .sop_data_loader import (
-            load_inventory, load_items, get_topdown_item_forecast
-        )
+        # Import with error handling
+        try:
+            from .sop_data_loader import (
+                load_inventory, load_items, get_topdown_item_forecast
+            )
+        except ImportError as e:
+            st.error(f"Import error: {e}")
+            st.code(traceback.format_exc())
+            return
         
-        # Load data
-        inventory = load_inventory()
-        items = load_items()
-        item_forecast = get_topdown_item_forecast()
+        # Load data with debugging
+        st.write("Loading data...")
+        
+        try:
+            inventory = load_inventory()
+            st.write(f"✓ Inventory loaded: {len(inventory) if inventory is not None else 0} rows")
+        except Exception as e:
+            st.warning(f"Could not load inventory: {e}")
+            inventory = None
+        
+        try:
+            items = load_items()
+            st.write(f"✓ Items loaded: {len(items) if items is not None else 0} rows")
+        except Exception as e:
+            st.warning(f"Could not load items: {e}")
+            items = None
+        
+        try:
+            item_forecast = get_topdown_item_forecast()
+            st.write(f"✓ Item forecast loaded: {len(item_forecast) if item_forecast is not None else 0} rows")
+        except Exception as e:
+            st.error(f"Could not load item forecast: {e}")
+            st.code(traceback.format_exc())
+            item_forecast = None
         
         if item_forecast is None or item_forecast.empty:
             st.info("No forecast data available. Configure the Revenue Forecast in the Operations view first.")
             return
+        
+        # Show forecast columns for debugging
+        st.write(f"Forecast columns: {list(item_forecast.columns)}")
+        st.write(f"Forecast dtypes: {item_forecast.dtypes.to_dict()}")
         
         # Find columns
         inv_item_col = find_column(inventory, ['item', 'sku', 'name']) if inventory is not None else None
@@ -116,93 +176,120 @@ def render_po_schedule_tab():
         vendor_col = find_column(items, ['vendor', 'supplier']) if items is not None else None
         cost_col = find_column(items, ['cost', 'unit cost', 'price']) if items is not None else None
         
+        st.write(f"Column mappings - inv_item: {inv_item_col}, inv_qty: {inv_qty_col}")
+        st.write(f"Column mappings - items_item: {items_item_col}, lead_time: {lead_time_col}, vendor: {vendor_col}, cost: {cost_col}")
+        
         # Build inventory lookup
         inventory_lookup = {}
         if inventory is not None and inv_item_col and inv_qty_col:
             inv_items = get_column_as_series(inventory, inv_item_col)
             inv_qty = get_column_as_series(inventory, inv_qty_col)
             if inv_items is not None and inv_qty is not None:
-                for item, qty in zip(inv_items, inv_qty):
+                for i, (item, qty) in enumerate(zip(inv_items, inv_qty)):
                     if pd.notna(item):
-                        inventory_lookup[str(item).strip()] = safe_int(qty)
+                        inventory_lookup[safe_str(item)] = safe_int(qty)
+        
+        st.write(f"Inventory lookup built: {len(inventory_lookup)} items")
         
         # Build items lookup (lead time, vendor, cost)
         items_lookup = {}
         if items is not None and items_item_col:
-            for _, row in items.iterrows():
-                item_name = row.get(items_item_col)
-                if pd.notna(item_name):
-                    item_key = str(item_name).strip()
-                    items_lookup[item_key] = {
-                        'lead_time': safe_int(row.get(lead_time_col, 30)) if lead_time_col else 30,
-                        'vendor': str(row.get(vendor_col, 'Unknown')) if vendor_col else 'Unknown',
-                        'cost': safe_float(row.get(cost_col, 0)) if cost_col else 0
-                    }
+            for idx, row in items.iterrows():
+                try:
+                    item_name = row.get(items_item_col) if items_item_col else None
+                    if pd.notna(item_name):
+                        item_key = safe_str(item_name)
+                        items_lookup[item_key] = {
+                            'lead_time': safe_int(row.get(lead_time_col, 30) if lead_time_col else 30, 30),
+                            'vendor': safe_str(row.get(vendor_col, 'Unknown') if vendor_col else 'Unknown', 'Unknown'),
+                            'cost': safe_float(row.get(cost_col, 0) if cost_col else 0, 0)
+                        }
+                except Exception as e:
+                    st.warning(f"Error processing item row {idx}: {e}")
+                    continue
+        
+        st.write(f"Items lookup built: {len(items_lookup)} items")
         
         # Calculate PO requirements
         po_schedule = []
+        errors = []
         
-        for _, row in item_forecast.iterrows():
-            item = str(row.get('Item', '')).strip()
-            category = str(row.get('Category', '')).strip()
-            period = str(row.get('Period', ''))
-            forecast_units = safe_int(row.get('Forecast_Units', 0))
-            forecast_revenue = safe_float(row.get('Forecast_Revenue', 0))
-            
-            if not item or forecast_units <= 0:
-                continue
-            
-            # Get current inventory
-            current_inventory = inventory_lookup.get(item, 0)
-            
-            # Get item details
-            item_info = items_lookup.get(item, {
-                'lead_time': 30,
-                'vendor': 'Unknown',
-                'cost': 0
-            })
-            
-            # Calculate net requirement
-            net_requirement = max(0, forecast_units - current_inventory)
-            
-            # Calculate order date based on lead time
+        for idx, row in item_forecast.iterrows():
             try:
-                if '-' in period:
-                    parts = period.split('-')
-                    if len(parts) == 2:
-                        year = int(parts[0])
-                        month = int(parts[1])
-                        need_date = datetime(year, month, 1)
+                # Extract values with safe conversion
+                item = safe_str(row.get('Item', ''))
+                category = safe_str(row.get('Category', ''))
+                period = safe_str(row.get('Period', ''))
+                forecast_units = safe_int(row.get('Forecast_Units', 0))
+                forecast_revenue = safe_float(row.get('Forecast_Revenue', 0))
+                
+                if not item or forecast_units <= 0:
+                    continue
+                
+                # Get current inventory (safe)
+                current_inventory = safe_int(inventory_lookup.get(item, 0))
+                
+                # Get item details (safe)
+                item_info = items_lookup.get(item, {
+                    'lead_time': 30,
+                    'vendor': 'Unknown',
+                    'cost': 0.0
+                })
+                
+                # Calculate net requirement (all ints now)
+                net_requirement = max(0, forecast_units - current_inventory)
+                
+                # Calculate order date based on lead time
+                try:
+                    if '-' in period:
+                        parts = period.split('-')
+                        if len(parts) == 2:
+                            year = safe_int(parts[0], datetime.now().year)
+                            month = safe_int(parts[1], 1)
+                            if month < 1:
+                                month = 1
+                            if month > 12:
+                                month = 12
+                            need_date = datetime(year, month, 1)
+                        else:
+                            need_date = datetime.now() + timedelta(days=30)
                     else:
                         need_date = datetime.now() + timedelta(days=30)
-                else:
+                except Exception:
                     need_date = datetime.now() + timedelta(days=30)
-            except:
-                need_date = datetime.now() + timedelta(days=30)
-            
-            # Calculate order date (need_date - lead_time)
-            lead_time_days = safe_int(item_info['lead_time'], 30)
-            order_date = need_date - timedelta(days=lead_time_days)
-            
-            # Calculate PO value
-            unit_cost = safe_float(item_info['cost'], 0)
-            po_value = net_requirement * unit_cost
-            
-            if net_requirement > 0:
-                po_schedule.append({
-                    'Item': item,
-                    'Category': category,
-                    'Period': period,
-                    'Forecast Units': forecast_units,
-                    'Current Inventory': current_inventory,
-                    'Net Requirement': net_requirement,
-                    'Lead Time (Days)': lead_time_days,
-                    'Order Date': order_date.strftime('%Y-%m-%d'),
-                    'Need Date': need_date.strftime('%Y-%m-%d'),
-                    'Vendor': item_info['vendor'],
-                    'Unit Cost': unit_cost,
-                    'PO Value': po_value
-                })
+                
+                # Calculate order date (need_date - lead_time)
+                lead_time_days = safe_int(item_info.get('lead_time', 30), 30)
+                order_date = need_date - timedelta(days=lead_time_days)
+                
+                # Calculate PO value (all floats now)
+                unit_cost = safe_float(item_info.get('cost', 0), 0)
+                po_value = float(net_requirement) * float(unit_cost)
+                
+                if net_requirement > 0:
+                    po_schedule.append({
+                        'Item': item,
+                        'Category': category,
+                        'Period': period,
+                        'Forecast Units': int(forecast_units),
+                        'Current Inventory': int(current_inventory),
+                        'Net Requirement': int(net_requirement),
+                        'Lead Time (Days)': int(lead_time_days),
+                        'Order Date': order_date.strftime('%Y-%m-%d'),
+                        'Need Date': need_date.strftime('%Y-%m-%d'),
+                        'Vendor': safe_str(item_info.get('vendor', 'Unknown'), 'Unknown'),
+                        'Unit Cost': float(unit_cost),
+                        'PO Value': float(po_value)
+                    })
+                    
+            except Exception as e:
+                errors.append(f"Row {idx}: {e}")
+                continue
+        
+        if errors:
+            with st.expander(f"⚠️ {len(errors)} rows had errors", expanded=False):
+                for err in errors[:20]:
+                    st.write(err)
         
         if not po_schedule:
             st.info("No purchase orders needed based on current forecast and inventory levels.")
@@ -216,11 +303,14 @@ def render_po_schedule_tab():
         with col1:
             st.metric("Total PO Lines", f"{len(po_df):,}")
         with col2:
-            st.metric("Total Units", f"{po_df['Net Requirement'].sum():,.0f}")
+            total_units = po_df['Net Requirement'].sum()
+            st.metric("Total Units", f"{total_units:,.0f}")
         with col3:
-            st.metric("Total PO Value", f"${po_df['PO Value'].sum():,.0f}")
+            total_value = po_df['PO Value'].sum()
+            st.metric("Total PO Value", f"${total_value:,.0f}")
         with col4:
-            st.metric("Unique Items", f"{po_df['Item'].nunique()}")
+            unique_items = po_df['Item'].nunique()
+            st.metric("Unique Items", f"{unique_items}")
         
         # Format display
         display_df = po_df.copy()
@@ -257,7 +347,6 @@ def render_po_schedule_tab():
         
     except Exception as e:
         st.error(f"Error generating PO schedule: {str(e)}")
-        import traceback
         st.code(traceback.format_exc())
 
 
@@ -286,18 +375,18 @@ def render_cash_flow_tab():
             for _, row in items.iterrows():
                 item_name = row.get(items_item_col)
                 if pd.notna(item_name):
-                    cost_lookup[str(item_name).strip()] = safe_float(row.get(cost_col, 0))
+                    cost_lookup[safe_str(item_name)] = safe_float(row.get(cost_col, 0))
         
         # Calculate cash requirements by period
         cash_by_period = []
         
         for _, row in item_forecast.iterrows():
-            item = str(row.get('Item', '')).strip()
-            period = str(row.get('Period', ''))
+            item = safe_str(row.get('Item', ''))
+            period = safe_str(row.get('Period', ''))
             forecast_units = safe_int(row.get('Forecast_Units', 0))
             
-            unit_cost = cost_lookup.get(item, 0)
-            cash_required = forecast_units * unit_cost
+            unit_cost = safe_float(cost_lookup.get(item, 0))
+            cash_required = float(forecast_units) * float(unit_cost)
             
             cash_by_period.append({
                 'Period': period,
@@ -354,6 +443,7 @@ def render_cash_flow_tab():
         
     except Exception as e:
         st.error(f"Error calculating cash flow: {str(e)}")
+        st.code(traceback.format_exc())
 
 
 def render_sku_analysis_tab():
@@ -409,6 +499,7 @@ def render_sku_analysis_tab():
         
     except Exception as e:
         st.error(f"Error in SKU analysis: {str(e)}")
+        st.code(traceback.format_exc())
 
 
 def render_export_tab():
@@ -443,3 +534,4 @@ def render_export_tab():
         
     except Exception as e:
         st.error(f"Error preparing export: {str(e)}")
+        st.code(traceback.format_exc())
