@@ -29,7 +29,14 @@ from zoneinfo import ZoneInfo
 import time
 import base64
 import numpy as np
-import claude_insights
+
+# Optional: Claude insights module (if available)
+try:
+    import claude_insights
+    CLAUDE_INSIGHTS_AVAILABLE = True
+except ImportError:
+    CLAUDE_INSIGHTS_AVAILABLE = False
+
 # Optional: Commission calculator module (if available)
 try:
     import commission_calculator
@@ -5727,11 +5734,19 @@ def render_q4_revenue_snapshot():
             st.error("No rep data available")
     elif view_mode == "AI Insights":
         # Calculate team metrics for Claude to use
-        team_metrics = calculate_team_metrics(deals_df, dashboard_df)
-        claude_insights.display_insights_dashboard(deals_df, dashboard_df, team_metrics)
+        if CLAUDE_INSIGHTS_AVAILABLE:
+            team_metrics = calculate_team_metrics(deals_df, dashboard_df)
+            claude_insights.display_insights_dashboard(deals_df, dashboard_df, team_metrics)
+        else:
+            st.error("❌ AI Insights module not found.")
+            st.info("Make sure claude_insights.py is in your repository.")
     elif view_mode == "💰 Commission":
         # Commission calculator view (password protected)
-        commission_calculator.display_commission_section(invoices_df, sales_orders_df)
+        if COMMISSION_AVAILABLE:
+            commission_calculator.display_commission_section(invoices_df, sales_orders_df)
+        else:
+            st.error("❌ Commission Calculator module not found.")
+            st.info("Make sure commission_calculator.py is in your repository.")
     elif view_mode == "🧪 Concentrate Jar Forecast":
         # Concentrate Jar Forecasting view
         if SHIPPING_PLANNING_AVAILABLE:
