@@ -891,12 +891,6 @@ def load_all_data():
     # Extended range to include Quarter column (column R)
     deals_df = load_google_sheets_data("deals", "A2:R", version=CACHE_VERSION)
     
-    # DEBUG: Show what columns we got from deals tab
-    if not deals_df.empty:
-        st.sidebar.markdown("### 🔍 Deals Tab Columns (Raw)")
-        st.sidebar.code(", ".join(deals_df.columns.tolist()))
-        st.sidebar.caption(f"{len(deals_df)} rows loaded")
-    
     # Load dashboard info (rep quotas and orders)
     dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
     
@@ -969,25 +963,17 @@ def load_all_data():
                 if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
                     deals_df['Deal Owner'] = deals_df['Deal Owner First Name'].fillna('') + ' ' + deals_df['Deal Owner Last Name'].fillna('')
                     deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-                    st.sidebar.success("✅ Created Deal Owner from First + Last Name")
                 else:
                     # Try to find any column containing 'owner' (case insensitive)
                     owner_cols = [c for c in deals_df.columns if 'owner' in c.lower()]
                     if owner_cols:
-                        st.sidebar.info(f"📌 Found owner-related columns: {owner_cols}")
                         # Use the first one found
                         deals_df['Deal Owner'] = deals_df[owner_cols[0]].astype(str).str.strip()
-                        st.sidebar.success(f"✅ Used '{owner_cols[0]}' as Deal Owner")
                     else:
-                        st.sidebar.error("❌ No Deal Owner column found! Available columns shown above.")
+                        st.sidebar.error("❌ No Deal Owner column found!")
             else:
-                st.sidebar.success("✅ Deal Owner column exists")
                 # Clean up the Deal Owner field
                 deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-            
-            # Show what we have after renaming
-            st.sidebar.markdown("### 📋 Deals Columns After Processing")
-            st.sidebar.code(", ".join(deals_df.columns.tolist()))
             
             # Check if we have required columns
             required_cols = ['Deal Name', 'Status', 'Close Date', 'Deal Owner', 'Amount', 'Pipeline']
@@ -5490,23 +5476,18 @@ def render_q4_revenue_snapshot():
         </style>
         """, unsafe_allow_html=True)
         
-        # Create navigation options
+        # Create navigation options - Simplified to core views only
         view_mode = st.radio(
             "Select View:",
-            ["👥 Team Overview", "👤 Individual Rep", "🔍 Reconciliation", "🤖 AI Insights", "💰 Commission", "🧪 Concentrate Jar Forecast", "📦 All Products Forecast"],
+            ["👥 Team Overview", "👤 Individual Rep"],
             label_visibility="collapsed",
-            key="nav_selector"
+            key="q4_nav_selector"
         )
         
         # Map display names back to internal names
         view_mapping = {
             "👥 Team Overview": "Team Overview",
-            "👤 Individual Rep": "Individual Rep",
-            "🔍 Reconciliation": "Reconciliation",
-            "🤖 AI Insights": "AI Insights",
-            "💰 Commission": "💰 Commission",
-            "🧪 Concentrate Jar Forecast": "🧪 Concentrate Jar Forecast",
-            "📦 All Products Forecast": "📦 All Products Forecast"
+            "👤 Individual Rep": "Individual Rep"
         }
         
         view_mode = view_mapping.get(view_mode, "Team Overview")
@@ -5655,77 +5636,19 @@ def render_q4_revenue_snapshot():
         display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
     elif view_mode == "Individual Rep":
         if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
-            # FIX: Added key="rep_selector" to preserve selection across refreshes
-            rep_name = st.selectbox(
-                "Select Rep:",
-                options=dashboard_df['Rep Name'].tolist(),
-                key="rep_selector"
-            )
+            # Rep selector in sidebar for better UX
+            with st.sidebar:
+                st.markdown("### 👤 Select Rep")
+                rep_name = st.selectbox(
+                    "Rep:",
+                    options=dashboard_df['Rep Name'].tolist(),
+                    key="rep_selector",
+                    label_visibility="collapsed"
+                )
             if rep_name:
                 display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
         else:
             st.error("No rep data available - check Dashboard Info sheet has 'Rep Name' column")
-    elif view_mode == "AI Insights":
-        # Calculate team metrics for Claude to use
-        if CLAUDE_INSIGHTS_AVAILABLE:
-            team_metrics = calculate_team_metrics(deals_df, dashboard_df)
-            claude_insights.display_insights_dashboard(deals_df, dashboard_df, team_metrics)
-        else:
-            st.error("❌ AI Insights module not found.")
-            st.info("Make sure claude_insights.py is in your repository.")
-    elif view_mode == "💰 Commission":
-        # Commission calculator view (password protected)
-        if COMMISSION_AVAILABLE:
-            commission_calculator.display_commission_section(invoices_df, sales_orders_df)
-        else:
-            st.error("❌ Commission Calculator module not found.")
-            st.info("Make sure commission_calculator.py is in your repository.")
-    elif view_mode == "🧪 Concentrate Jar Forecast":
-        # Concentrate Jar Forecasting view
-        if SHIPPING_PLANNING_AVAILABLE:
-            shipping_planning.main()
-        else:
-            st.error("❌ Concentrate Jar Forecasting module not found.")
-            if 'SHIPPING_PLANNING_ERROR' in globals():
-                st.error(f"Error details: {SHIPPING_PLANNING_ERROR}")
-            st.info("Make sure shipping_planning.py is in your repository at the same level as this dashboard file.")
-            st.code("Expected file location: shipping_planning.py")
-            
-            # Debug info
-            with st.expander("🔧 Debug Information"):
-                st.write("**Current working directory:**")
-                import os
-                st.code(os.getcwd())
-                st.write("**Files in current directory:**")
-                try:
-                    files = os.listdir('.')
-                    st.code('\n'.join([f for f in files if f.endswith('.py')]))
-                except Exception as e:
-                    st.error(f"Cannot list files: {e}")
-    elif view_mode == "📦 All Products Forecast":
-        # All Products Forecasting view
-        if ALL_PRODUCTS_FORECAST_AVAILABLE:
-            all_products_forecast.main()
-        else:
-            st.error("❌ All Products Forecast module not found.")
-            if 'ALL_PRODUCTS_FORECAST_ERROR' in globals():
-                st.error(f"Error details: {ALL_PRODUCTS_FORECAST_ERROR}")
-            st.info("Make sure all_products_forecast.py is in your repository at the same level as this dashboard file.")
-            st.code("Expected file location: all_products_forecast.py")
-            
-            # Debug info
-            with st.expander("🔧 Debug Information"):
-                st.write("**Current working directory:**")
-                import os
-                st.code(os.getcwd())
-                st.write("**Files in current directory:**")
-                try:
-                    files = os.listdir('.')
-                    st.code('\n'.join([f for f in files if f.endswith('.py')]))
-                except Exception as e:
-                    st.error(f"Cannot list files: {e}")
-    else:  # Reconciliation view
-        display_reconciliation_view(deals_df, dashboard_df, sales_orders_df)
 
 if __name__ == "__main__":
     # For standalone testing - requires st.set_page_config() to be uncommented above
