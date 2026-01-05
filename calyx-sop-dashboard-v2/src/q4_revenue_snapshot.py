@@ -716,7 +716,9 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Google Sheets Configuration
-SPREADSHEET_ID = "12s-BanWrT_N8SuB3IXFp5JF-xPYB2I-YjmYAYaWsxJk"
+# Spreadsheet ID for Demand_planning_DB_aistudio
+# Reads from st.secrets["SPREADSHEET_ID"] if available, otherwise uses default
+DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # Cache version for manual refresh control
@@ -729,13 +731,16 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
     Load data from Google Sheets with caching and enhanced error handling
     """
     try:
+        # Get SPREADSHEET_ID from secrets or use default
+        spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
+        
         # Check if secrets exist
-        if "gcp_service_account" not in st.secrets:
+        if "service_account" not in st.secrets:
             st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
             return pd.DataFrame()
         
         # Load credentials from Streamlit secrets
-        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds_dict = dict(st.secrets["service_account"])
         
         # Create credentials
         creds = service_account.Credentials.from_service_account_info(
@@ -748,7 +753,7 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
         
         # Fetch data
         result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
+            spreadsheetId=spreadsheet_id,
             range=f"{sheet_name}!{range_name}"
         ).execute()
         
@@ -5654,12 +5659,13 @@ def render_q4_revenue_snapshot():
         # Sync Status - collapsed by default, for Xander
         with st.expander("🔧 Sync Status (for Xander)"):
             st.write("**Spreadsheet ID:**")
-            st.code(SPREADSHEET_ID)
+            current_spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
+            st.code(current_spreadsheet_id)
             
-            if "gcp_service_account" in st.secrets:
+            if "service_account" in st.secrets:
                 st.success("✅ GCP credentials found")
                 try:
-                    creds_dict = dict(st.secrets["gcp_service_account"])
+                    creds_dict = dict(st.secrets["service_account"])
                     if 'client_email' in creds_dict:
                         st.info(f"Service account: {creds_dict['client_email']}")
                         st.caption("Make sure this email has 'Viewer' access to your Google Sheet")
