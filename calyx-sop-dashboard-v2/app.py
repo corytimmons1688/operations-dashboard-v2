@@ -47,6 +47,7 @@ except ImportError as e:
 # =============================================================================
 # REVENUE MODULE IMPORTS
 # =============================================================================
+Q4_IMPORT_ERROR = None
 try:
     from src.q4_revenue_snapshot import render_q4_revenue_snapshot
     Q4_MODULE_LOADED = True
@@ -54,6 +55,7 @@ except ImportError as e:
     Q4_MODULE_LOADED = False
     Q4_IMPORT_ERROR = str(e)
 
+Q1_IMPORT_ERROR = None
 try:
     from src.q1_revenue_snapshot import render_q1_revenue_snapshot
     Q1_MODULE_LOADED = True
@@ -61,6 +63,7 @@ except ImportError as e:
     Q1_MODULE_LOADED = False
     Q1_IMPORT_ERROR = str(e)
 
+YEARLY_IMPORT_ERROR = None
 try:
     from src.yearly_planning_2026 import render_yearly_planning_2026
     YEARLY_MODULE_LOADED = True
@@ -648,9 +651,7 @@ def render_quality_pareto_tab():
 # =============================================================================
 def render_q4_revenue_section():
     """Render Q4 Revenue Snapshot section."""
-    st.markdown('<h1 class="main-header">📊 Q4 Revenue Snapshot</h1>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">Q4 2025 Performance Analysis • Revenue Tracking • Actuals vs Forecast</p>', unsafe_allow_html=True)
-    
+    # Note: The Q4 module handles its own header and layout
     if Q4_MODULE_LOADED:
         try:
             render_q4_revenue_snapshot()
@@ -659,18 +660,13 @@ def render_q4_revenue_section():
             import traceback
             st.code(traceback.format_exc())
     else:
-        st.info("📌 **Q4 Revenue Snapshot module not yet loaded.**")
+        st.markdown('<h1 class="main-header">📊 Q4 Revenue Snapshot</h1>', unsafe_allow_html=True)
+        st.error(f"❌ Q4 Revenue Snapshot module failed to load: {Q4_IMPORT_ERROR}")
         st.markdown("""
-        This section will display Q4 2025 revenue performance data once the module is added.
-        
-        **Expected functionality:**
-        - Q4 revenue actuals vs forecast
-        - Monthly breakdown (October, November, December)
-        - Customer performance analysis
-        - Product category performance
-        - Rep performance metrics
-        
-        **To activate:** Add `q4_revenue_snapshot.py` to the `src/` folder with a `render_q4_revenue_snapshot()` function.
+        **Troubleshooting:**
+        1. Ensure `q4_revenue_snapshot.py` is in the `src/` folder
+        2. Check that all dependencies are installed (plotly, google-auth, etc.)
+        3. Verify the file has a `render_q4_revenue_snapshot()` function
         """)
 
 
