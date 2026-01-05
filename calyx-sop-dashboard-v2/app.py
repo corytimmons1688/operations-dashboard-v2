@@ -6,9 +6,10 @@ Unified Sales & Operations Planning and Quality Management System
 Sections:
 - S&OP: Sales Rep View, Operations View, Scenario Planning, PO Forecast, Deliveries
 - Quality: NC Dashboard (Status, Aging, Cost, Customer, Pareto Analysis)
+- Revenue Snapshots: Q4, Q1, 2026 Yearly Planning
 
 Author: Xander @ Calyx Containers
-Version: 3.0.0
+Version: 3.1.0
 """
 
 import streamlit as st
@@ -42,6 +43,30 @@ try:
 except ImportError as e:
     MODULES_LOADED = False
     IMPORT_ERROR = str(e)
+
+# =============================================================================
+# REVENUE MODULE IMPORTS
+# =============================================================================
+try:
+    from src.q4_revenue_snapshot import render_q4_revenue_snapshot
+    Q4_MODULE_LOADED = True
+except ImportError as e:
+    Q4_MODULE_LOADED = False
+    Q4_IMPORT_ERROR = str(e)
+
+try:
+    from src.q1_revenue_snapshot import render_q1_revenue_snapshot
+    Q1_MODULE_LOADED = True
+except ImportError as e:
+    Q1_MODULE_LOADED = False
+    Q1_IMPORT_ERROR = str(e)
+
+try:
+    from src.yearly_planning_2026 import render_yearly_planning_2026
+    YEARLY_MODULE_LOADED = True
+except ImportError as e:
+    YEARLY_MODULE_LOADED = False
+    YEARLY_IMPORT_ERROR = str(e)
 
 # Configure logging
 try:
@@ -256,7 +281,13 @@ def render_sidebar():
         
         section = st.radio(
             "Navigation",
-            options=["📈 S&OP Planning", "🎯 Quality Management"],
+            options=[
+                "📈 S&OP Planning", 
+                "🎯 Quality Management",
+                "📊 Q4 Revenue Snapshot",
+                "🎯 Q1 Revenue Snapshot & Planning",
+                "📅 2026 Yearly Planning"
+            ],
             label_visibility="collapsed"
         )
         
@@ -269,7 +300,7 @@ def render_sidebar():
         st.markdown("---")
         st.markdown('<p style="color: rgba(255,255,255,0.7); font-size: 0.75rem; font-weight: 600; letter-spacing: 2px; margin-bottom: 0.75rem;">DASHBOARD INFO</p>', unsafe_allow_html=True)
         st.markdown(f'<p style="color: rgba(255,255,255,0.9); font-size: 0.85rem;">Last Refresh: {datetime.now().strftime("%Y-%m-%d %H:%M")}</p>', unsafe_allow_html=True)
-        st.markdown('<p style="color: rgba(255,255,255,0.9); font-size: 0.85rem;">Version: 3.0.0</p>', unsafe_allow_html=True)
+        st.markdown('<p style="color: rgba(255,255,255,0.9); font-size: 0.85rem;">Version: 3.1.0</p>', unsafe_allow_html=True)
         
         st.markdown("---")
         with st.expander("📚 Help & Documentation"):
@@ -287,6 +318,11 @@ def render_sidebar():
             - Cost Analysis: Rework costs
             - Customer Impact: By customer
             - Pareto: Top issues
+            
+            **Revenue Snapshots:**
+            - Q4 Revenue: Q4 2025 performance
+            - Q1 Revenue: Q1 2026 planning
+            - 2026 Yearly: Annual planning
             """)
         
         st.markdown("---")
@@ -608,6 +644,94 @@ def render_quality_pareto_tab():
 
 
 # =============================================================================
+# REVENUE SNAPSHOT SECTIONS
+# =============================================================================
+def render_q4_revenue_section():
+    """Render Q4 Revenue Snapshot section."""
+    st.markdown('<h1 class="main-header">📊 Q4 Revenue Snapshot</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Q4 2025 Performance Analysis • Revenue Tracking • Actuals vs Forecast</p>', unsafe_allow_html=True)
+    
+    if Q4_MODULE_LOADED:
+        try:
+            render_q4_revenue_snapshot()
+        except Exception as e:
+            st.error(f"Error loading Q4 Revenue Snapshot: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    else:
+        st.info("📌 **Q4 Revenue Snapshot module not yet loaded.**")
+        st.markdown("""
+        This section will display Q4 2025 revenue performance data once the module is added.
+        
+        **Expected functionality:**
+        - Q4 revenue actuals vs forecast
+        - Monthly breakdown (October, November, December)
+        - Customer performance analysis
+        - Product category performance
+        - Rep performance metrics
+        
+        **To activate:** Add `q4_revenue_snapshot.py` to the `src/` folder with a `render_q4_revenue_snapshot()` function.
+        """)
+
+
+def render_q1_revenue_section():
+    """Render Q1 Revenue Snapshot & Planning section."""
+    st.markdown('<h1 class="main-header">🎯 Q1 Revenue Snapshot & Planning</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Q1 2026 Planning • Pipeline Analysis • Forecast Building</p>', unsafe_allow_html=True)
+    
+    if Q1_MODULE_LOADED:
+        try:
+            render_q1_revenue_snapshot()
+        except Exception as e:
+            st.error(f"Error loading Q1 Revenue Snapshot: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    else:
+        st.info("📌 **Q1 Revenue Snapshot & Planning module not yet loaded.**")
+        st.markdown("""
+        This section will display Q1 2026 revenue planning data once the module is added.
+        
+        **Expected functionality:**
+        - Q1 revenue forecast by month (January, February, March)
+        - Pipeline to revenue conversion analysis
+        - Reorder opportunity tracking
+        - Customer planning view
+        - Rep quota tracking
+        
+        **To activate:** Add `q1_revenue_snapshot.py` to the `src/` folder with a `render_q1_revenue_snapshot()` function.
+        """)
+
+
+def render_2026_yearly_planning_section():
+    """Render 2026 Yearly Planning section."""
+    st.markdown('<h1 class="main-header">📅 2026 Yearly Planning</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Annual Planning • Capacity Planning • Strategic Forecasting</p>', unsafe_allow_html=True)
+    
+    if YEARLY_MODULE_LOADED:
+        try:
+            render_yearly_planning_2026()
+        except Exception as e:
+            st.error(f"Error loading 2026 Yearly Planning: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    else:
+        st.info("📌 **2026 Yearly Planning module not yet loaded.**")
+        st.markdown("""
+        This section will display 2026 annual planning data once the module is added.
+        
+        **Expected functionality:**
+        - Full year revenue forecast by quarter
+        - Capacity planning projections
+        - Strategic customer growth targets
+        - Product mix evolution
+        - Market expansion planning
+        - Headcount and resource planning
+        
+        **To activate:** Add `yearly_planning_2026.py` to the `src/` folder with a `render_yearly_planning_2026()` function.
+        """)
+
+
+# =============================================================================
 # MAIN APPLICATION
 # =============================================================================
 def main():
@@ -617,12 +741,18 @@ def main():
     
     if section == "📈 S&OP Planning":
         render_sop_section()
-    else:
+    elif section == "🎯 Quality Management":
         render_quality_section_wrapper()
+    elif section == "📊 Q4 Revenue Snapshot":
+        render_q4_revenue_section()
+    elif section == "🎯 Q1 Revenue Snapshot & Planning":
+        render_q1_revenue_section()
+    elif section == "📅 2026 Yearly Planning":
+        render_2026_yearly_planning_section()
     
     st.markdown("""
     <div style="text-align: center; padding: 2rem 0 1rem 0; color: #999; font-size: 0.75rem; border-top: 1px solid #eee; margin-top: 3rem;">
-        Calyx Containers S&OP Dashboard v3.0 | Built with Streamlit | Data refreshes every 5 minutes
+        Calyx Containers S&OP Dashboard v3.1 | Built with Streamlit | Data refreshes every 5 minutes
     </div>
     """, unsafe_allow_html=True)
 
