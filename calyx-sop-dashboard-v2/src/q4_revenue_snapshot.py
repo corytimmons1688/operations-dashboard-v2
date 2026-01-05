@@ -1769,7 +1769,7 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
                 df = df.copy()
                 df['Amount_Numeric'] = pd.to_numeric(df.get('Amount', 0), errors='coerce')
                 # Use Q1 2026 Spillover column (now fixed in spreadsheet)
-                q4_deals = df[df.get('Q1 2026 Spillover') != 'Q1 2026']
+                q4_deals = df[df['Q1 2026 Spillover'] != 'Q1 2026'] if 'Q1 2026 Spillover' in df.columns else df
                 return q4_deals[q4_deals['Status'] == 'Expect']['Amount_Numeric'].sum()
             
             current_expect = get_expect_amount(deals_df)
@@ -1785,7 +1785,7 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
                 df = df.copy()
                 df['Amount_Numeric'] = pd.to_numeric(df.get('Amount', 0), errors='coerce')
                 # Use Q1 2026 Spillover column (now fixed in spreadsheet)
-                q4_deals = df[df.get('Q1 2026 Spillover') != 'Q1 2026']
+                q4_deals = df[df['Q1 2026 Spillover'] != 'Q1 2026'] if 'Q1 2026 Spillover' in df.columns else df
                 return q4_deals[q4_deals['Status'] == 'Best Case']['Amount_Numeric'].sum()
             
             current_bc = get_best_case_amount(deals_df)
@@ -1804,7 +1804,7 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
                 df = df.copy()
                 df['Amount_Numeric'] = pd.to_numeric(df.get('Amount', 0), errors='coerce')
                 # Use Q1 2026 Spillover column (now fixed in spreadsheet)
-                q4_deals = df[df.get('Q1 2026 Spillover') != 'Q1 2026']
+                q4_deals = df[df['Q1 2026 Spillover'] != 'Q1 2026'] if 'Q1 2026 Spillover' in df.columns else df
                 return q4_deals[q4_deals['Status'] == 'Opportunity']['Amount_Numeric'].sum()
             
             current_opp = get_opportunity_amount(deals_df)
@@ -2304,8 +2304,13 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         # Use the Q1 2026 Spillover column from Google Sheet (spreadsheet formula now handles PA date logic)
         # Q4 deals: NOT marked as Q1 spillover
         # Q1 deals: Explicitly marked as Q1 2026
-        q4 = hs_data.get('Q1 2026 Spillover') != 'Q1 2026'
-        q1 = hs_data.get('Q1 2026 Spillover') == 'Q1 2026'
+        if 'Q1 2026 Spillover' in hs_data.columns:
+            q4 = hs_data['Q1 2026 Spillover'] != 'Q1 2026'
+            q1 = hs_data['Q1 2026 Spillover'] == 'Q1 2026'
+        else:
+            # If column doesn't exist, treat all as Q4
+            q4 = pd.Series([True] * len(hs_data), index=hs_data.index)
+            q1 = pd.Series([False] * len(hs_data), index=hs_data.index)
         
         def format_hs_view(df):
             if df.empty: return df
@@ -3271,17 +3276,28 @@ def display_hubspot_deals_audit(deals_df, rep_name=None):
 def calculate_team_metrics(deals_df, dashboard_df):
     """Calculate overall team metrics"""
     
-    total_quota = dashboard_df['Quota'].sum()
-    total_orders = dashboard_df['NetSuite Orders'].sum()
+    # Handle empty dashboard_df
+    if dashboard_df.empty or 'Quota' not in dashboard_df.columns:
+        total_quota = 0
+        total_orders = 0
+    else:
+        total_quota = dashboard_df['Quota'].sum()
+        total_orders = dashboard_df['NetSuite Orders'].sum() if 'NetSuite Orders' in dashboard_df.columns else 0
     
     # Filter for Q4 fulfillment only (spreadsheet formula now handles PA date logic)
-    deals_q4 = deals_df[deals_df.get('Q1 2026 Spillover') != 'Q1 2026']
+    # Check if column exists before filtering
+    if not deals_df.empty and 'Q1 2026 Spillover' in deals_df.columns:
+        deals_q4 = deals_df[deals_df['Q1 2026 Spillover'] != 'Q1 2026']
+    else:
+        deals_q4 = deals_df
     
     # Calculate Expect/Commit forecast (Q4 only)
-    expect_commit = deals_q4[deals_q4['Status'].isin(['Expect', 'Commit'])]['Amount'].sum()
-    
-    # Calculate Best Case/Opportunity (Q4 only)
-    best_opp = deals_q4[deals_q4['Status'].isin(['Best Case', 'Opportunity'])]['Amount'].sum()
+    if not deals_q4.empty and 'Status' in deals_q4.columns and 'Amount' in deals_q4.columns:
+        expect_commit = deals_q4[deals_q4['Status'].isin(['Expect', 'Commit'])]['Amount'].sum()
+        best_opp = deals_q4[deals_q4['Status'].isin(['Best Case', 'Opportunity'])]['Amount'].sum()
+    else:
+        expect_commit = 0
+        best_opp = 0
     
     # Calculate gap
     gap = total_quota - expect_commit - total_orders
@@ -4081,7 +4097,7 @@ def create_status_breakdown_chart(deals_df, rep_name=None):
         deals_df = deals_df[deals_df['Deal Owner'] == rep_name]
     
     # Only show Q4 deals (spreadsheet formula now handles PA date logic)
-    deals_df = deals_df[deals_df.get('Q1 2026 Spillover') != 'Q1 2026']
+    deals_df = deals_df[deals_df['Q1 2026 Spillover'] != 'Q1 2026'] if 'Q1 2026 Spillover' in deals_df.columns else deals_df
     
     if deals_df.empty:
         return None
@@ -4117,7 +4133,7 @@ def create_pipeline_breakdown_chart(deals_df, rep_name=None):
         deals_df = deals_df[deals_df['Deal Owner'] == rep_name]
     
     # Only show Q4 deals (spreadsheet formula now handles PA date logic)
-    deals_df = deals_df[deals_df.get('Q1 2026 Spillover') != 'Q1 2026']
+    deals_df = deals_df[deals_df['Q1 2026 Spillover'] != 'Q1 2026'] if 'Q1 2026 Spillover' in deals_df.columns else deals_df
     
     if deals_df.empty:
         return None
@@ -4183,10 +4199,12 @@ def create_deals_timeline(deals_df, rep_name=None):
     timeline_df = timeline_df.sort_values('Close Date')
     
     # Add Q4/Q1 indicator to color map
-    timeline_df['Quarter'] = timeline_df.apply(
-        lambda x: 'Q4 2025' if x.get('Q1 2026 Spillover') != 'Q1 2026' else 'Q1 2026', 
-        axis=1
-    )
+    if 'Q1 2026 Spillover' in timeline_df.columns:
+        timeline_df['Quarter'] = timeline_df['Q1 2026 Spillover'].apply(
+            lambda x: 'Q1 2026' if x == 'Q1 2026' else 'Q4 2025'
+        )
+    else:
+        timeline_df['Quarter'] = 'Q4 2025'
     
     color_map = {
         'Expect': '#1E88E5',
@@ -4863,7 +4881,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     potential_attainment = ((base_forecast + team_best_opp) / team_quota * 100) if team_quota > 0 else 0
     
     # NEW: Calculate Best Case only (not Opportunity) for optimistic gap
-    deals_q4 = deals_df[deals_df.get('Q1 2026 Spillover') != 'Q1 2026'] if not deals_df.empty else pd.DataFrame()
+    deals_q4 = deals_df[deals_df['Q1 2026 Spillover'] != 'Q1 2026'] if 'Q1 2026 Spillover' in deals_df.columns else deals_df if not deals_df.empty else pd.DataFrame()
     team_best_case = deals_q4[deals_q4['Status'] == 'Best Case']['Amount'].sum() if not deals_q4.empty and 'Status' in deals_q4.columns else 0
     
     # NEW: Optimistic Gap = Quota - (High Confidence + Best Case + PF no date + PA no date + PA >2 weeks)
