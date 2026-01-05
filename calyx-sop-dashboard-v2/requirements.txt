@@ -1,4 +1,6 @@
-# NC Dashboard & S&OP Requirements
+# Calyx S&OP Dashboard - Combined Requirements
+# =============================================
+
 # Core Framework
 streamlit>=1.28.0
 
@@ -6,13 +8,14 @@ streamlit>=1.28.0
 gspread>=5.12.0
 google-auth>=2.23.0
 google-auth-oauthlib>=1.1.0
-google-api-python-client
-google-auth
-google-auth-oauthlib
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.80.0
 
 # Data Processing
 pandas>=2.0.0
 numpy>=1.24.0
+openpyxl>=3.0.0
+xlrd>=2.0.0
 
 # Visualization
 plotly>=5.18.0
@@ -31,11 +34,5 @@ python-dateutil>=2.8.2
 # Utilities
 requests>=2.31.0
 
-# Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
-
-# Code Quality
-black>=23.9.0
-flake8>=6.1.0
-mypy>=1.5.0
+# AI Integration (optional - for AI Insights feature)
+anthropic
