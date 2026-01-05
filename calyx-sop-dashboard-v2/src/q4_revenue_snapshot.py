@@ -726,9 +726,15 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 CACHE_VERSION = "v62_manual_refresh_only"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
-def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
+def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
     """
     Load data from Google Sheets with caching and enhanced error handling
+    
+    Args:
+        sheet_name: Name of the sheet/tab to load
+        range_name: Range to load (e.g., "A:R")
+        version: Cache version string
+        silent: If True, don't show error messages (for optional sheets)
     """
     try:
         # Get SPREADSHEET_ID from secrets or use default
@@ -736,7 +742,8 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
         
         # Check if secrets exist
         if "service_account" not in st.secrets:
-            st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
+            if not silent:
+                st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
             return pd.DataFrame()
         
         # Load credentials from Streamlit secrets
@@ -760,7 +767,8 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
         values = result.get('values', [])
         
         if not values:
-            st.warning(f"⚠️ No data found in {sheet_name}!{range_name}")
+            if not silent:
+                st.warning(f"⚠️ No data found in {sheet_name}!{range_name}")
             return pd.DataFrame()
         
         # Handle mismatched column counts - pad shorter rows with empty strings
@@ -777,29 +785,30 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
         
     except Exception as e:
         error_msg = str(e)
-        st.error(f"❌ Error loading data from {sheet_name}: {error_msg}")
+        if not silent:
+            st.error(f"❌ Error loading data from {sheet_name}: {error_msg}")
         
         # Provide specific troubleshooting based on error type
-        if "403" in error_msg or "permission" in error_msg.lower():
-            st.warning("""
-            **Permission Error:**
-            - Make sure you've shared the Google Sheet with your service account email
-            - The service account email looks like: `your-service-account@project.iam.gserviceaccount.com`
-            - Share the sheet with 'Viewer' access
-            """)
-        elif "404" in error_msg or "not found" in error_msg.lower():
-            st.warning("""
-            **Sheet Not Found:**
-            - Check that the spreadsheet ID is correct
-            - Check that the sheet name matches exactly (case-sensitive)
-            - Current spreadsheet ID: `12s-BanWrT_N8SuB3IXFp5JF-xPYB2I-YjmYAYaWsxJk`
-            """)
-        elif "401" in error_msg or "authentication" in error_msg.lower():
-            st.warning("""
-            **Authentication Error:**
-            - Your service account credentials may be invalid
-            - Try regenerating the service account key in Google Cloud Console
-            """)
+        if not silent:
+            if "403" in error_msg or "permission" in error_msg.lower():
+                st.warning("""
+                **Permission Error:**
+                - Make sure you've shared the Google Sheet with your service account email
+                - The service account email looks like: `your-service-account@project.iam.gserviceaccount.com`
+                - Share the sheet with 'Viewer' access
+                """)
+            elif "404" in error_msg or "not found" in error_msg.lower():
+                st.warning("""
+                **Sheet Not Found:**
+                - Check that the spreadsheet ID is correct
+                - Check that the sheet name matches exactly (case-sensitive)
+                """)
+            elif "401" in error_msg or "authentication" in error_msg.lower():
+                st.warning("""
+                **Authentication Error:**
+                - Your service account credentials may be invalid
+                - Try regenerating the service account key in Google Cloud Console
+                """)
         
         return pd.DataFrame()
 
@@ -903,7 +912,8 @@ def load_all_data():
     sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
     
     # Load Q4 Push planning status data (Deal/Order ID and Status)
-    q4_push_df = load_google_sheets_data("Q4 Push", "A:C", version=CACHE_VERSION)
+    # This is optional - returns empty DataFrame if tab doesn't exist
+    q4_push_df = load_google_sheets_data("Q4 Push", "A:C", version=CACHE_VERSION, silent=True)
     
     # Clean and process deals data - FIXED VERSION to match actual sheet
     if not deals_df.empty and len(deals_df.columns) >= 6:
@@ -1223,24 +1233,26 @@ def load_all_data():
             invoice_totals = invoices_df.groupby('Sales Rep')['Amount'].sum().reset_index()
             invoice_totals.columns = ['Rep Name', 'Invoice Total']
             
-            dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
-            
-            dashboard_df = dashboard_df.merge(invoice_totals, on='Rep Name', how='left')
-            dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
-            
-            dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
-            dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
-            
-            # Add Shopify ECommerce to dashboard if it has invoices but isn't in dashboard yet
-            if 'Shopify ECommerce' in invoice_totals['Rep Name'].values:
-                if 'Shopify ECommerce' not in dashboard_df['Rep Name'].values:
-                    shopify_total = invoice_totals[invoice_totals['Rep Name'] == 'Shopify ECommerce']['Invoice Total'].iloc[0]
-                    new_shopify_row = pd.DataFrame([{
-                        'Rep Name': 'Shopify ECommerce',
-                        'Quota': 0,
-                        'NetSuite Orders': shopify_total
-                    }])
-                    dashboard_df = pd.concat([dashboard_df, new_shopify_row], ignore_index=True)
+            # Only merge with dashboard_df if it has Rep Name column
+            if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
+                dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
+                
+                dashboard_df = dashboard_df.merge(invoice_totals, on='Rep Name', how='left')
+                dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
+                
+                dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
+                dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
+                
+                # Add Shopify ECommerce to dashboard if it has invoices but isn't in dashboard yet
+                if 'Shopify ECommerce' in invoice_totals['Rep Name'].values:
+                    if 'Shopify ECommerce' not in dashboard_df['Rep Name'].values:
+                        shopify_total = invoice_totals[invoice_totals['Rep Name'] == 'Shopify ECommerce']['Invoice Total'].iloc[0]
+                        new_shopify_row = pd.DataFrame([{
+                            'Rep Name': 'Shopify ECommerce',
+                            'Quota': 0,
+                            'NetSuite Orders': shopify_total
+                        }])
+                        dashboard_df = pd.concat([dashboard_df, new_shopify_row], ignore_index=True)
     
     # Process sales orders data with NEW LOGIC
     if not sales_orders_df.empty:
