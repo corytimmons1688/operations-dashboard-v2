@@ -886,19 +886,16 @@ def load_all_data():
     
     #st.sidebar.info("🔄 Loading data from Google Sheets...")
     
-    # Load deals data - extend range to include Q1 2026 Spillover column
-    # UPDATED: Changed from "All Reps All Pipelines" to "deals" for new Demand_planning_DB_aistudio sheet
-    deals_df = load_google_sheets_data("deals", "A:R", version=CACHE_VERSION)
+    # Load deals data from "deals" tab
+    # NOTE: Data starts on row 2 in this sheet (row 1 may be title/empty)
+    # Extended range to include Quarter column (column R)
+    deals_df = load_google_sheets_data("deals", "A2:R", version=CACHE_VERSION)
     
-    # DEBUG: Show what we got from HubSpot
+    # DEBUG: Show what columns we got from deals tab
     if not deals_df.empty:
-        pass  # Debug info removed
-        #st.sidebar.success(f"📊 HubSpot raw data: {len(deals_df)} rows, {len(deals_df.columns)} columns")
-        pass  # Debug info removed
-    else:
-        pass  # Debug info removed
-        #st.sidebar.error("❌ No HubSpot data loaded!")
-        pass
+        st.sidebar.markdown("### 🔍 Deals Tab Columns (Raw)")
+        st.sidebar.code(", ".join(deals_df.columns.tolist()))
+        st.sidebar.caption(f"{len(deals_df)} rows loaded")
     
     # Load dashboard info (rep quotas and orders)
     dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
@@ -959,6 +956,10 @@ def load_all_data():
                     rename_dict[col] = 'Average Leadtime'
                 elif col == 'Q1 2026 Spillover':
                     rename_dict[col] = 'Q1 2026 Spillover'
+                elif col == 'Quarter':
+                    # New spreadsheet uses "Quarter" instead of "Q1 2026 Spillover"
+                    # Map to same name for consistency in filtering logic
+                    rename_dict[col] = 'Q1 2026 Spillover'
             
             deals_df = deals_df.rename(columns=rename_dict)
             
@@ -968,25 +969,31 @@ def load_all_data():
                 if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
                     deals_df['Deal Owner'] = deals_df['Deal Owner First Name'].fillna('') + ' ' + deals_df['Deal Owner Last Name'].fillna('')
                     deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-                    #st.sidebar.success("✅ Created Deal Owner from First + Last Name")
+                    st.sidebar.success("✅ Created Deal Owner from First + Last Name")
                 else:
-                    pass  # Debug info removed
-                    #st.sidebar.error("❌ Missing Deal Owner column!")
+                    # Try to find any column containing 'owner' (case insensitive)
+                    owner_cols = [c for c in deals_df.columns if 'owner' in c.lower()]
+                    if owner_cols:
+                        st.sidebar.info(f"📌 Found owner-related columns: {owner_cols}")
+                        # Use the first one found
+                        deals_df['Deal Owner'] = deals_df[owner_cols[0]].astype(str).str.strip()
+                        st.sidebar.success(f"✅ Used '{owner_cols[0]}' as Deal Owner")
+                    else:
+                        st.sidebar.error("❌ No Deal Owner column found! Available columns shown above.")
             else:
-                pass  # Debug info removed
-                #st.sidebar.success("✅ Deal Owner column already exists")
+                st.sidebar.success("✅ Deal Owner column exists")
                 # Clean up the Deal Owner field
                 deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
             
             # Show what we have after renaming
-            #st.sidebar.success(f"✅ Columns after rename: {', '.join([c for c in deals_df.columns.tolist()[:10] if c])}")
+            st.sidebar.markdown("### 📋 Deals Columns After Processing")
+            st.sidebar.code(", ".join(deals_df.columns.tolist()))
             
             # Check if we have required columns
             required_cols = ['Deal Name', 'Status', 'Close Date', 'Deal Owner', 'Amount', 'Pipeline']
             missing_cols = [col for col in required_cols if col not in deals_df.columns]
             if missing_cols:
-                pass  # Debug info removed
-                #st.sidebar.error(f"❌ Missing required columns: {missing_cols}")
+                st.sidebar.error(f"❌ Missing required columns: {missing_cols}")
             
             # Clean and convert amount to numeric
             def clean_numeric(value):
@@ -1157,8 +1164,8 @@ def load_all_data():
             
             invoices_df = invoices_df.rename(columns=rename_dict)
             
-            # CRITICAL: Replace Sales Rep with Rep Master and Customer with Corrected Customer Name
-            # This fixes the Shopify eCommerce invoices that weren't being applied to reps correctly
+            # OPTIONAL: Replace Sales Rep with Rep Master and Customer with Corrected Customer Name
+            # These columns may not exist in all spreadsheets
             if 'Rep Master' in invoices_df.columns:
                 # Rep Master is the ONLY source of truth - completely replace Sales Rep
                 invoices_df['Rep Master'] = invoices_df['Rep Master'].astype(str).str.strip()
@@ -1174,8 +1181,7 @@ def load_all_data():
                 invoices_df['Sales Rep'] = invoices_df['Rep Master']
                 # Drop the Rep Master column since we've copied it to Sales Rep
                 invoices_df = invoices_df.drop(columns=['Rep Master'])
-            else:
-                st.sidebar.warning("⚠️ Rep Master column not found in invoices!")
+            # else: Use Sales Rep column directly (no Rep Master column available)
             
             if 'Corrected Customer Name' in invoices_df.columns:
                 # Corrected Customer Name takes priority - replace Customer with corrected values
@@ -3533,19 +3539,25 @@ def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None
     """Calculate metrics for a specific rep with detailed order lists for drill-down"""
     
     # Get rep's quota and orders
+    if 'Rep Name' not in dashboard_df.columns:
+        return None
     rep_info = dashboard_df[dashboard_df['Rep Name'] == rep_name]
     
     if rep_info.empty:
         return None
     
-    quota = rep_info['Quota'].iloc[0]
-    orders = rep_info['NetSuite Orders'].iloc[0]
+    quota = rep_info['Quota'].iloc[0] if 'Quota' in rep_info.columns else 0
+    orders = rep_info['NetSuite Orders'].iloc[0] if 'NetSuite Orders' in rep_info.columns else 0
     
     # Filter deals for this rep - ALL Q4 2025 deals (regardless of spillover)
-    rep_deals = deals_df[deals_df['Deal Owner'] == rep_name].copy()
+    # Check if Deal Owner column exists
+    if deals_df.empty or 'Deal Owner' not in deals_df.columns:
+        rep_deals = pd.DataFrame()
+    else:
+        rep_deals = deals_df[deals_df['Deal Owner'] == rep_name].copy()
     
     # Check if we have the Q1 2026 Spillover column (spreadsheet formula now handles PA date logic)
-    has_spillover_column = 'Q1 2026 Spillover' in rep_deals.columns
+    has_spillover_column = not rep_deals.empty and 'Q1 2026 Spillover' in rep_deals.columns
     
     if has_spillover_column:
         # Separate deals by shipping timeline using spreadsheet formula
@@ -3563,26 +3575,45 @@ def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None
         rep_deals_ship_q1 = pd.DataFrame()
     
     # Calculate metrics for DEALS SHIPPING IN Q4 (this counts toward quota)
-    expect_commit_q4_deals = rep_deals_ship_q4[rep_deals_ship_q4['Status'].isin(['Expect', 'Commit'])].copy()
-    if expect_commit_q4_deals.columns.duplicated().any():
-        expect_commit_q4_deals = expect_commit_q4_deals.loc[:, ~expect_commit_q4_deals.columns.duplicated()]
-    expect_commit_q4 = expect_commit_q4_deals['Amount'].sum() if not expect_commit_q4_deals.empty else 0
+    # Check if required columns exist
+    has_status = 'Status' in rep_deals_ship_q4.columns if not rep_deals_ship_q4.empty else False
+    has_amount = 'Amount' in rep_deals_ship_q4.columns if not rep_deals_ship_q4.empty else False
     
-    best_opp_q4_deals = rep_deals_ship_q4[rep_deals_ship_q4['Status'].isin(['Best Case', 'Opportunity'])].copy()
-    if best_opp_q4_deals.columns.duplicated().any():
-        best_opp_q4_deals = best_opp_q4_deals.loc[:, ~best_opp_q4_deals.columns.duplicated()]
-    best_opp_q4 = best_opp_q4_deals['Amount'].sum() if not best_opp_q4_deals.empty else 0
+    if has_status and has_amount:
+        expect_commit_q4_deals = rep_deals_ship_q4[rep_deals_ship_q4['Status'].isin(['Expect', 'Commit'])].copy()
+        if expect_commit_q4_deals.columns.duplicated().any():
+            expect_commit_q4_deals = expect_commit_q4_deals.loc[:, ~expect_commit_q4_deals.columns.duplicated()]
+        expect_commit_q4 = expect_commit_q4_deals['Amount'].sum() if not expect_commit_q4_deals.empty else 0
+        
+        best_opp_q4_deals = rep_deals_ship_q4[rep_deals_ship_q4['Status'].isin(['Best Case', 'Opportunity'])].copy()
+        if best_opp_q4_deals.columns.duplicated().any():
+            best_opp_q4_deals = best_opp_q4_deals.loc[:, ~best_opp_q4_deals.columns.duplicated()]
+        best_opp_q4 = best_opp_q4_deals['Amount'].sum() if not best_opp_q4_deals.empty else 0
+    else:
+        expect_commit_q4_deals = pd.DataFrame()
+        expect_commit_q4 = 0
+        best_opp_q4_deals = pd.DataFrame()
+        best_opp_q4 = 0
     
     # Calculate metrics for Q1 SPILLOVER DEALS (closing in Q4 but shipping in Q1)
-    expect_commit_q1_deals = rep_deals_ship_q1[rep_deals_ship_q1['Status'].isin(['Expect', 'Commit'])].copy()
-    if expect_commit_q1_deals.columns.duplicated().any():
-        expect_commit_q1_deals = expect_commit_q1_deals.loc[:, ~expect_commit_q1_deals.columns.duplicated()]
-    expect_commit_q1_spillover = expect_commit_q1_deals['Amount'].sum() if not expect_commit_q1_deals.empty else 0
+    has_status_q1 = 'Status' in rep_deals_ship_q1.columns if not rep_deals_ship_q1.empty else False
+    has_amount_q1 = 'Amount' in rep_deals_ship_q1.columns if not rep_deals_ship_q1.empty else False
     
-    best_opp_q1_deals = rep_deals_ship_q1[rep_deals_ship_q1['Status'].isin(['Best Case', 'Opportunity'])].copy()
-    if best_opp_q1_deals.columns.duplicated().any():
-        best_opp_q1_deals = best_opp_q1_deals.loc[:, ~best_opp_q1_deals.columns.duplicated()]
-    best_opp_q1_spillover = best_opp_q1_deals['Amount'].sum() if not best_opp_q1_deals.empty else 0
+    if has_status_q1 and has_amount_q1:
+        expect_commit_q1_deals = rep_deals_ship_q1[rep_deals_ship_q1['Status'].isin(['Expect', 'Commit'])].copy()
+        if expect_commit_q1_deals.columns.duplicated().any():
+            expect_commit_q1_deals = expect_commit_q1_deals.loc[:, ~expect_commit_q1_deals.columns.duplicated()]
+        expect_commit_q1_spillover = expect_commit_q1_deals['Amount'].sum() if not expect_commit_q1_deals.empty else 0
+        
+        best_opp_q1_deals = rep_deals_ship_q1[rep_deals_ship_q1['Status'].isin(['Best Case', 'Opportunity'])].copy()
+        if best_opp_q1_deals.columns.duplicated().any():
+            best_opp_q1_deals = best_opp_q1_deals.loc[:, ~best_opp_q1_deals.columns.duplicated()]
+        best_opp_q1_spillover = best_opp_q1_deals['Amount'].sum() if not best_opp_q1_deals.empty else 0
+    else:
+        expect_commit_q1_deals = pd.DataFrame()
+        expect_commit_q1_spillover = 0
+        best_opp_q1_deals = pd.DataFrame()
+        best_opp_q1_spillover = 0
     
     # Total Q1 spillover
     q1_spillover_total = expect_commit_q1_spillover + best_opp_q1_spillover
@@ -4791,6 +4822,20 @@ def display_reconciliation_view(deals_df, dashboard_df, sales_orders_df):
 
 def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df=None):
     """Display the team-level dashboard"""
+    
+    # Check for required columns in deals_df
+    required_deal_cols = ['Deal Owner', 'Status', 'Amount']
+    if not deals_df.empty:
+        missing_cols = [col for col in required_deal_cols if col not in deals_df.columns]
+        if missing_cols:
+            st.warning(f"⚠️ Deals data missing columns: {missing_cols}")
+            st.info(f"Available columns: {', '.join(deals_df.columns.tolist())}")
+            st.markdown("""
+            **The 'deals' tab needs these columns (check column mapping):**
+            - `Deal Owner` (or column that gets renamed to it)
+            - `Status` (or `Close Status`)
+            - `Amount`
+            """)
    
     st.title("🎯 Team Sales Dashboard - Q4 2025")
    
@@ -4830,6 +4875,11 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
    
     section1_data = []
     section2_data = []
+    
+    # Check if Rep Name column exists
+    if 'Rep Name' not in dashboard_df.columns:
+        st.error("❌ Dashboard Info missing 'Rep Name' column")
+        return
     
     for rep_name in dashboard_df['Rep Name']:
         # Skip excluded reps
