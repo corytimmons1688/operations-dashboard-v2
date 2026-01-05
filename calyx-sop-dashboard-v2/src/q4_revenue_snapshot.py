@@ -5654,7 +5654,7 @@ def render_q4_revenue_snapshot():
     if view_mode == "Team Overview":
         display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
     elif view_mode == "Individual Rep":
-        if not dashboard_df.empty:
+        if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
             # FIX: Added key="rep_selector" to preserve selection across refreshes
             rep_name = st.selectbox(
                 "Select Rep:",
@@ -5664,7 +5664,7 @@ def render_q4_revenue_snapshot():
             if rep_name:
                 display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
         else:
-            st.error("No rep data available")
+            st.error("No rep data available - check Dashboard Info sheet has 'Rep Name' column")
     elif view_mode == "AI Insights":
         # Calculate team metrics for Claude to use
         if CLAUDE_INSIGHTS_AVAILABLE:
