@@ -343,7 +343,7 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
                     'Revenue': '${:,.0f}',
                     'Quota': '${:,.0f}',
                     'Attainment': '{:.1f}%'
-                }).background_gradient(subset=['Revenue'], cmap='Greens'),
+                }),
                 use_container_width=True,
                 hide_index=True,
                 height=350
