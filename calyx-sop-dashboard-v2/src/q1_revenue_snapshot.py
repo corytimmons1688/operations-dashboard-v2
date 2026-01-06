@@ -677,7 +677,8 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Google Sheets Configuration
-SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
+# Reads from st.secrets["SPREADSHEET_ID"] if available, otherwise uses default
+DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # Cache version for manual refresh control
@@ -685,18 +686,28 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 CACHE_VERSION = "v62_manual_refresh_only"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
-def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
+def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
     """
     Load data from Google Sheets with caching and enhanced error handling
+    
+    Args:
+        sheet_name: Name of the sheet tab
+        range_name: Range to load (e.g., "A:R")
+        version: Cache version string
+        silent: If True, don't show error messages (for optional sheets)
     """
     try:
+        # Get SPREADSHEET_ID from secrets or use default
+        spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
+        
         # Check if secrets exist
-        if "gcp_service_account" not in st.secrets:
-            st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
+        if "service_account" not in st.secrets:
+            if not silent:
+                st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
             return pd.DataFrame()
         
         # Load credentials from Streamlit secrets
-        creds_dict = dict(st.secrets["gcp_service_account"])
+        creds_dict = dict(st.secrets["service_account"])
         
         # Create credentials
         creds = service_account.Credentials.from_service_account_info(
@@ -709,14 +720,15 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
         
         # Fetch data
         result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
+            spreadsheetId=spreadsheet_id,
             range=f"{sheet_name}!{range_name}"
         ).execute()
         
         values = result.get('values', [])
         
         if not values:
-            st.warning(f"⚠️ No data found in {sheet_name}!{range_name}")
+            if not silent:
+                st.warning(f"⚠️ No data found in {sheet_name}!{range_name}")
             return pd.DataFrame()
         
         # Handle mismatched column counts - pad shorter rows with empty strings
@@ -733,29 +745,30 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION):
         
     except Exception as e:
         error_msg = str(e)
-        st.error(f"❌ Error loading data from {sheet_name}: {error_msg}")
+        if not silent:
+            st.error(f"❌ Error loading data from {sheet_name}: {error_msg}")
         
         # Provide specific troubleshooting based on error type
-        if "403" in error_msg or "permission" in error_msg.lower():
-            st.warning("""
-            **Permission Error:**
-            - Make sure you've shared the Google Sheet with your service account email
-            - The service account email looks like: `your-service-account@project.iam.gserviceaccount.com`
-            - Share the sheet with 'Viewer' access
-            """)
-        elif "404" in error_msg or "not found" in error_msg.lower():
-            st.warning("""
-            **Sheet Not Found:**
-            - Check that the spreadsheet ID is correct
-            - Check that the sheet name matches exactly (case-sensitive)
-            - Current spreadsheet ID: `12s-BanWrT_N8SuB3IXFp5JF-xPYB2I-YjmYAYaWsxJk`
-            """)
-        elif "401" in error_msg or "authentication" in error_msg.lower():
-            st.warning("""
-            **Authentication Error:**
-            - Your service account credentials may be invalid
-            - Try regenerating the service account key in Google Cloud Console
-            """)
+        if not silent:
+            if "403" in error_msg or "permission" in error_msg.lower():
+                st.warning("""
+                **Permission Error:**
+                - Make sure you've shared the Google Sheet with your service account email
+                - The service account email looks like: `your-service-account@project.iam.gserviceaccount.com`
+                - Share the sheet with 'Viewer' access
+                """)
+            elif "404" in error_msg or "not found" in error_msg.lower():
+                st.warning("""
+                **Sheet Not Found:**
+                - Check that the spreadsheet ID is correct
+                - Check that the sheet name matches exactly (case-sensitive)
+                """)
+            elif "401" in error_msg or "authentication" in error_msg.lower():
+                st.warning("""
+                **Authentication Error:**
+                - Your service account credentials may be invalid
+                - Try regenerating the service account key in Google Cloud Console
+                """)
         
         return pd.DataFrame()
 
@@ -5238,13 +5251,14 @@ def main():
         
         # Sync Status - collapsed by default, for Xander
         with st.expander("🔧 Sync Status (for Xander)"):
+            current_spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
             st.write("**Spreadsheet ID:**")
-            st.code(SPREADSHEET_ID)
+            st.code(current_spreadsheet_id)
             
-            if "gcp_service_account" in st.secrets:
+            if "service_account" in st.secrets:
                 st.success("✅ GCP credentials found")
                 try:
-                    creds_dict = dict(st.secrets["gcp_service_account"])
+                    creds_dict = dict(st.secrets["service_account"])
                     if 'client_email' in creds_dict:
                         st.info(f"Service account: {creds_dict['client_email']}")
                         st.caption("Make sure this email has 'Viewer' access to your Google Sheet")
