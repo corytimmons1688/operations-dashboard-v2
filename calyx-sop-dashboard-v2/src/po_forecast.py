@@ -3,8 +3,8 @@ Purchase Order Forecast Module for S&OP Dashboard
 Plan purchase orders based on demand forecast and inventory requirements
 
 Author: Xander @ Calyx Containers
-Version: 3.1.0
-Last Updated: 2025-12-22 15:50 MST
+Version: 3.2.0
+Last Updated: 2026-01-05 16:20 MST
 Changes: 
 - Added extensive type safety and debugging
 - Excludes items where Stock Item = No or blank from PO forecasting and cashflow
@@ -21,8 +21,8 @@ import traceback
 logger = logging.getLogger(__name__)
 
 # Version info for tracking deployments
-VERSION = "3.1.0"
-LAST_UPDATED = "2025-12-22 15:50 MST"
+VERSION = "3.2.0"
+LAST_UPDATED = "2026-01-05 16:20 MST"
 
 
 def safe_int(value, default=0):
