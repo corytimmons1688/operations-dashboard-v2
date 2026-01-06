@@ -25,8 +25,8 @@ from google.oauth2.service_account import Credentials
 logger = logging.getLogger(__name__)
 
 # Version info
-VERSION = "3.3.0"
-LAST_UPDATED = "2025-12-22 15:50 MST"
+VERSION = "3.4.0"
+LAST_UPDATED = "2025-12-22 16:10 MST"
 
 # =============================================================================
 # GOOGLE SHEETS CONNECTION
