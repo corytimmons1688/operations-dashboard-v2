@@ -9,8 +9,8 @@ Features:
 - Provides data preparation functions
 
 Author: Xander @ Calyx Containers
-Version: 3.2.0
-Last Updated: 2025-12-22 15:40 MST
+Version: 3.4.0
+Last Updated: 2026-01-05 16:20 MST
 """
 
 import streamlit as st
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Version info
 VERSION = "3.4.0"
-LAST_UPDATED = "2025-12-22 16:10 MST"
+LAST_UPDATED = "2026-01-05 16:20 MST"
 
 # =============================================================================
 # GOOGLE SHEETS CONNECTION
