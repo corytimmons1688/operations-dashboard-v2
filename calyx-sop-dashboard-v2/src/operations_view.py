@@ -3,13 +3,13 @@ Operations/Supply Chain View Module for S&OP Dashboard
 Demand planning, pipeline analysis, and coverage tracking
 
 Author: Xander @ Calyx Containers
-Version: 4.4.0
-Last Updated: 2026-01-05 16:20 MST
+Version: 4.5.0
+Last Updated: 2026-01-05 17:30 MST
 Changes:
-- Pipeline data now uses Column O for SKU and Column D for date
+- Fixed Deals loading to handle HubSpot Import title row
+- Pipeline searches by column name first, then falls back to index
 - SKU mapped to category via Raw_Items for proper filtering
 - Excludes rows where SKU or date is blank
-- Added Pipeline debug expander to show what data is being used
 """
 
 import streamlit as st
@@ -22,8 +22,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Version info
-VERSION = "4.4.0"
-LAST_UPDATED = "2026-01-05 16:20 MST"
+VERSION = "4.5.0"
+LAST_UPDATED = "2026-01-05 17:30 MST"
 
 # =============================================================================
 # PERFORMANCE: Cache expensive computations
@@ -87,8 +87,8 @@ def compute_pipeline_data_cached(deals_hash, deals, freq, items_hash, items, cat
     Cache pipeline data computation.
     
     Uses:
-    - Column O (index 14) for SKU
-    - Column D (index 3) for expected date
+    - SKU column (or Column O as fallback) for SKU
+    - Close Date / Expected Date column (or Column D as fallback) for date
     - Amount column for dollars
     - Maps SKU to category via Raw_Items
     
@@ -101,40 +101,42 @@ def compute_pipeline_data_cached(deals_hash, deals, freq, items_hash, items, cat
         # Get column names from deals DataFrame
         cols = deals.columns.tolist()
         
-        # Column O is index 14 (0-indexed), Column D is index 3
-        # But let's also handle if columns have names
         sku_col = None
         date_col = None
         amount_col = None
         
-        # Try to get Column O (index 14) for SKU
-        if len(cols) > 14:
-            sku_col = cols[14]  # Column O
-        
-        # Try to get Column D (index 3) for Date
-        if len(cols) > 3:
-            date_col = cols[3]  # Column D
-        
-        # Find Amount column by name - prefer exact match first
+        # FIRST: Search by column name (preferred)
         for col in cols:
             col_lower = str(col).lower().strip()
-            if col_lower == 'amount':
-                amount_col = col
-                break
-        
-        # If not found, try broader search
-        if amount_col is None:
-            for col in cols:
-                col_lower = str(col).lower()
-                if 'amount' in col_lower or 'value' in col_lower or 'revenue' in col_lower:
+            
+            # SKU column
+            if sku_col is None:
+                if col_lower == 'sku' or col_lower == 'item' or col_lower == 'product':
+                    sku_col = col
+            
+            # Date column - look for close date, expected date, etc.
+            if date_col is None:
+                if 'close' in col_lower and 'date' in col_lower:
+                    date_col = col
+                elif 'expected' in col_lower and 'date' in col_lower:
+                    date_col = col
+                elif col_lower == 'close date' or col_lower == 'closedate':
+                    date_col = col
+            
+            # Amount column
+            if amount_col is None:
+                if col_lower == 'amount':
                     amount_col = col
-                    break
+                elif 'amount' in col_lower or 'value' in col_lower or 'revenue' in col_lower:
+                    amount_col = col
         
-        # If we couldn't find by index, fall back to name search
-        if sku_col is None:
-            sku_col = find_column(deals, ['sku'])
-        if date_col is None:
-            date_col = find_column(deals, ['close date', 'closedate', 'close_date', 'date'])
+        # FALLBACK: Use column index if name search failed
+        # Column O is index 14 (0-based), Column D is index 3
+        if sku_col is None and len(cols) > 14:
+            sku_col = cols[14]  # Column O
+        
+        if date_col is None and len(cols) > 3:
+            date_col = cols[3]  # Column D
         
         if date_col is None or amount_col is None:
             return pd.DataFrame()
@@ -148,11 +150,12 @@ def compute_pipeline_data_cached(deals_hash, deals, freq, items_hash, items, cat
             
             for col in items.columns:
                 col_str = str(col).strip()
-                if col_str == 'SKU':
+                if col_str == 'SKU' or col_str == 'Item':
                     items_sku_col = col
-                elif col_str == 'Item':
-                    if items_sku_col is None:
-                        items_sku_col = col
+                    break
+            
+            if items_sku_col is None:
+                items_sku_col = find_column(items, ['sku', 'item'])
             
             # Look for category column
             for col in items.columns:
