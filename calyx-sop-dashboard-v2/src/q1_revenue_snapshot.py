@@ -1411,7 +1411,7 @@ def load_all_data():
                 (~sales_orders_df['Sales Rep'].str.lower().isin(['house']))
             ]
     else:
-        st.warning("Could not find required columns in NS Sales Orders")
+        st.warning("Could not find required columns in _NS_SalesOrders_Data")
         sales_orders_df = pd.DataFrame()
     
     return deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df
@@ -3136,25 +3136,32 @@ def display_hubspot_deals_audit(deals_df, rep_name=None):
 def calculate_team_metrics(deals_df, dashboard_df):
     """Calculate overall team metrics"""
     
-    total_quota = dashboard_df['Quota'].sum()
-    total_orders = dashboard_df['NetSuite Orders'].sum()
+    # Handle empty dashboard_df
+    if dashboard_df.empty or 'Quota' not in dashboard_df.columns:
+        total_quota = 0
+        total_orders = 0
+    else:
+        total_quota = dashboard_df['Quota'].sum()
+        total_orders = dashboard_df['NetSuite Orders'].sum() if 'NetSuite Orders' in dashboard_df.columns else 0
     
     # Get spillover column (handles both old and new column names)
     spillover_col = get_spillover_column(deals_df)
     
     # Filter for Q1 2026 fulfillment only
-    if spillover_col:
+    if not deals_df.empty and spillover_col:
         q1_mask = is_q1_deal(deals_df, spillover_col)
         deals_q1 = deals_df[q1_mask]
     else:
-        # No spillover column - use all deals
+        # No spillover column or empty - use all deals
         deals_q1 = deals_df
     
     # Calculate Expect/Commit forecast (Q1 only)
-    expect_commit = deals_q1[deals_q1['Status'].isin(['Expect', 'Commit'])]['Amount'].sum()
-    
-    # Calculate Best Case/Opportunity (Q1 only)
-    best_opp = deals_q1[deals_q1['Status'].isin(['Best Case', 'Opportunity'])]['Amount'].sum()
+    if not deals_q1.empty and 'Status' in deals_q1.columns and 'Amount' in deals_q1.columns:
+        expect_commit = deals_q1[deals_q1['Status'].isin(['Expect', 'Commit'])]['Amount'].sum()
+        best_opp = deals_q1[deals_q1['Status'].isin(['Best Case', 'Opportunity'])]['Amount'].sum()
+    else:
+        expect_commit = 0
+        best_opp = 0
     
     # Calculate gap
     gap = total_quota - expect_commit - total_orders
@@ -5306,13 +5313,13 @@ def main():
                - Paste your service account JSON in the format shown in diagnostics above
             
             4. **Verify Sheet Structure:**
-               - Ensure sheet names match: 'All Reps All Pipelines', 'Dashboard Info', 'NS Invoices', 'NS Sales Orders'
+               - Ensure sheet names match: 'deals', 'Dashboard Info', '_NS_Invoices_Data', '_NS_SalesOrders_Data'
                - Verify columns are in the expected positions
             """)
         
         return
     elif deals_df.empty:
-        st.warning("⚠️ Deals data is empty. Check 'All Reps All Pipelines' sheet.")
+        st.warning("⚠️ Deals data is empty. Check 'deals' sheet.")
     elif dashboard_df.empty:
         st.warning("⚠️ Dashboard info is empty. Check 'Dashboard Info' sheet.")
     
