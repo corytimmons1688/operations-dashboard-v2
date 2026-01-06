@@ -210,12 +210,16 @@ def process_dashboard_info(df):
         col_lower = str(col).lower().strip()
         if 'rep' in col_lower and 'name' in col_lower:
             rename_map[col] = 'Rep Name'
-        elif col_lower == 'quota':
+        elif 'quota' in col_lower:  # More flexible matching
             rename_map[col] = 'Quota'
         elif 'netsuite' in col_lower and 'order' in col_lower:
             rename_map[col] = 'NetSuite Orders'
     
     df = df.rename(columns=rename_map)
+    
+    # Debug: show what we found
+    if 'Quota' not in df.columns:
+        st.sidebar.warning(f"⚠️ Dashboard Info columns: {df.columns.tolist()}")
     
     if 'Quota' in df.columns:
         df['Quota'] = df['Quota'].apply(clean_numeric)
@@ -302,7 +306,7 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
         rep_revenue.columns = ['Sales Rep', 'Revenue', 'Invoices']
         
         # Add quota info
-        if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
+        if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns and 'Quota' in dashboard_df.columns:
             rep_revenue = rep_revenue.merge(
                 dashboard_df[['Rep Name', 'Quota']],
                 left_on='Sales Rep',
