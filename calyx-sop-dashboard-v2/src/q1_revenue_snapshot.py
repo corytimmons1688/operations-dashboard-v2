@@ -683,7 +683,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # Cache version for manual refresh control
 # No TTL - data only refreshes when user clicks refresh button
-CACHE_VERSION = "v63_all_reps_all_pipelines_fix"
+CACHE_VERSION = "v64_simplified_deals"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
 def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
@@ -922,205 +922,81 @@ def load_all_data():
     # Q4 Push planning status removed for Q1 dashboard
     q4_push_df = pd.DataFrame()  # Empty placeholder for compatibility
     
-    # Clean and process deals data - FIXED VERSION to match actual sheet
+    # =========================================================================
+    # PROCESS DEALS DATA FROM "All Reps All Pipelines" SHEET
+    # The query formula in the sheet already filters:
+    # - Date range: Q1 2026 (Jan 1 - Mar 31, 2026)
+    # - Excluded stages: Cancelled, Checkout Abandoned, Closed Lost, Closed Won, 
+    #                    Sales Order Created in NS, NCR, Shipped
+    # So we just need to map columns and convert Amount to numeric
+    # =========================================================================
     if not deals_df.empty and len(deals_df.columns) >= 6:
-        # Get column names from first row
-        if len(deals_df) > 0:
-            # Get actual column names
-            col_names = deals_df.columns.tolist()
+        col_names = deals_df.columns.tolist()
+        
+        st.sidebar.info(f"📋 Raw columns: {col_names}")
+        st.sidebar.caption(f"📊 Raw row count: {len(deals_df)}")
+        
+        # Simple column rename mapping for All Reps All Pipelines sheet
+        # Columns: Record ID, Deal Name, Deal Stage, Close Date, Deal Owner First Name Deal Owner Last Name,
+        #          Amount, Close Status, Pipeline, Create Date, Deal Type, Netsuite SO#, Netsuite SO Link,
+        #          New Design SKU, SKU, Netsuite Sales Order Number, Average Leadtime, Pending Approval Date, Quarter
+        rename_dict = {}
+        for col in col_names:
+            if 'Deal Owner First Name' in col and 'Deal Owner Last Name' in col:
+                rename_dict[col] = 'Deal Owner'
+            elif col == 'Close Status':
+                rename_dict[col] = 'Status'
+            elif col == 'Deal Type':
+                rename_dict[col] = 'Product Type'
+            elif col == 'Quarter':
+                rename_dict[col] = 'Q2 2026 Spillover'
+        
+        deals_df = deals_df.rename(columns=rename_dict)
+        
+        st.sidebar.caption(f"Columns after rename: {deals_df.columns.tolist()}")
+        
+        # Clean Deal Owner
+        if 'Deal Owner' in deals_df.columns:
+            deals_df['Deal Owner'] = deals_df['Deal Owner'].astype(str).str.strip()
+        
+        # Convert Amount to numeric
+        def clean_numeric(value):
+            if pd.isna(value) or str(value).strip() == '':
+                return 0
+            cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
+            try:
+                return float(cleaned)
+            except:
+                return 0
+        
+        if 'Amount' in deals_df.columns:
+            deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
+        
+        # Convert Close Date to datetime
+        if 'Close Date' in deals_df.columns:
+            deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
+        
+        # Debug output
+        total_deals = len(deals_df)
+        total_amount = deals_df['Amount'].sum() if 'Amount' in deals_df.columns else 0
+        
+        st.sidebar.markdown("### 📊 HubSpot Data (from All Reps All Pipelines)")
+        st.sidebar.caption(f"Total deals: {total_deals}")
+        st.sidebar.caption(f"Total amount: ${total_amount:,.0f}")
+        
+        if 'Status' in deals_df.columns:
+            unique_status = deals_df['Status'].unique().tolist()
+            st.sidebar.caption(f"Status values: {unique_status}")
             
-            st.sidebar.info(f"📋 Raw columns from sheet: {col_names}")
-            
-            # Map based on ACTUAL column names from your sheet
-            # Note: Column 4 appears to be "Deal Owner First Name Deal Owner Last Name" combined
-            
-            rename_dict = {}
-            
-            # Map columns by actual names (case-sensitive)
-            for col in col_names:
-                if col == 'Record ID':
-                    rename_dict[col] = 'Record ID'
-                elif col == 'Deal Name':
-                    rename_dict[col] = 'Deal Name'
-                elif col == 'Deal Stage':
-                    rename_dict[col] = 'Deal Stage'
-                elif col == 'Close Date':
-                    rename_dict[col] = 'Close Date'
-                elif 'Deal Owner First Name' in col and 'Deal Owner Last Name' in col:
-                    # This column has both names already combined
-                    rename_dict[col] = 'Deal Owner'
-                elif col == 'Deal Owner First Name':
-                    rename_dict[col] = 'Deal Owner First Name'
-                elif col == 'Deal Owner Last Name':
-                    rename_dict[col] = 'Deal Owner Last Name'
-                elif col == 'Amount':
-                    rename_dict[col] = 'Amount'
-                elif col == 'Close Status':
-                    rename_dict[col] = 'Status'  # Map Close Status to Status
-                elif col == 'Pipeline':
-                    rename_dict[col] = 'Pipeline'
-                elif col == 'Deal Type':
-                    rename_dict[col] = 'Product Type'  # Map Deal Type to Product Type for lead time logic
-                elif col == 'Average Leadtime':
-                    rename_dict[col] = 'Average Leadtime'
-                elif col == 'Q2 2026 Spillover':
-                    rename_dict[col] = 'Q2 2026 Spillover'
-                elif col == 'Quarter':
-                    rename_dict[col] = 'Q2 2026 Spillover'  # Map Quarter to Q2 2026 Spillover for new spreadsheet
-            
-            deals_df = deals_df.rename(columns=rename_dict)
-            
-            # Check if Deal Owner already exists (from combined column)
-            if 'Deal Owner' not in deals_df.columns:
-                # Create a combined "Deal Owner" field from First Name + Last Name if they're separate
-                if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
-                    deals_df['Deal Owner'] = deals_df['Deal Owner First Name'].fillna('') + ' ' + deals_df['Deal Owner Last Name'].fillna('')
-                    deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-                    #st.sidebar.success("✅ Created Deal Owner from First + Last Name")
-                else:
-                    pass  # Debug info removed
-                    #st.sidebar.error("❌ Missing Deal Owner column!")
-            else:
-                pass  # Debug info removed
-                #st.sidebar.success("✅ Deal Owner column already exists")
-                # Clean up the Deal Owner field
-                deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-            
-            # Show what we have after renaming - DEBUG ENABLED
-            st.sidebar.caption(f"Columns loaded: {deals_df.columns.tolist()}")
-            
-            # Check if we have required columns
-            required_cols = ['Deal Name', 'Status', 'Close Date', 'Deal Owner', 'Amount', 'Pipeline']
-            missing_cols = [col for col in required_cols if col not in deals_df.columns]
-            if missing_cols:
-                st.sidebar.error(f"❌ Missing required columns: {missing_cols}")
-            
-            # Clean and convert amount to numeric
-            def clean_numeric(value):
-                if pd.isna(value) or str(value).strip() == '':
-                    return 0
-                cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
-                try:
-                    return float(cleaned)
-                except:
-                    return 0
-            
-            if 'Amount' in deals_df.columns:
-                deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
-            else:
-                pass  # Debug info removed
-                #st.sidebar.error("❌ No Amount column found!")
-            
-            # Convert close date to datetime
-            if 'Close Date' in deals_df.columns:
-                deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
-                
-                # Debug: Show date range in the data
-                valid_dates = deals_df['Close Date'].dropna()
-                if len(valid_dates) > 0:
-                    min_date = valid_dates.min()
-                    max_date = valid_dates.max()
-                    #st.sidebar.info(f"📅 Date range in data: {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
-                    
-                    # Count deals in each quarter
-                    q4_2024_count = len(deals_df[(deals_df['Close Date'] >= '2024-10-01') & (deals_df['Close Date'] <= '2024-12-31')])
-                    q1_2025_count = len(deals_df[(deals_df['Close Date'] >= '2025-01-01') & (deals_df['Close Date'] <= '2025-03-31')])
-                    q2_2025_count = len(deals_df[(deals_df['Close Date'] >= '2025-04-01') & (deals_df['Close Date'] <= '2025-06-30')])
-                    q3_2025_count = len(deals_df[(deals_df['Close Date'] >= '2025-07-01') & (deals_df['Close Date'] <= '2025-09-30')])
-                    q4_2025_count = len(deals_df[(deals_df['Close Date'] >= '2025-10-01') & (deals_df['Close Date'] <= '2025-12-31')])
-                    
-                    #st.sidebar.info(f"Q4 2024: {q4_2024_count} | Q1 2025: {q1_2025_count} | Q2 2025: {q2_2025_count} | Q3 2025: {q3_2025_count} | Q4 2025: {q4_2025_count}")
-                else:
-                    pass  # Debug info removed
-                    #st.sidebar.error("❌ No valid dates found in Close Date column!")
-            else:
-                pass  # Debug info removed
-                #st.sidebar.error("❌ No Close Date column found!")
-            
-            # Show data before filtering
-            total_deals_before = len(deals_df)
-            total_amount_before = deals_df['Amount'].sum() if 'Amount' in deals_df.columns else 0
-            #st.sidebar.info(f"📊 Before filtering: {total_deals_before} deals, ${total_amount_before:,.0f}")
-            
-            # Show unique values in Status column
-            if 'Status' in deals_df.columns:
-                unique_statuses = deals_df['Status'].unique()
-                #st.sidebar.info(f"🏷️ Unique Status values: {', '.join([str(s) for s in unique_statuses[:10]])}")
-            else:
-                pass  # Debug info removed
-                #st.sidebar.error("❌ No Status column found! Check 'Close Status' mapping")
-            
-            # FILTER: Only Q1 2026 deals (Jan 1 - Mar 31, 2026)
-            # Use < Apr 1, 2026 to include all of Mar 31 regardless of timestamp
-            q1_start = pd.Timestamp('2026-01-01')
-            q1_end = pd.Timestamp('2026-04-01')
-            
-            if 'Close Date' in deals_df.columns:
-                before_count = len(deals_df)
-                before_amount = deals_df['Amount'].sum()
-                
-                deals_df = deals_df[
-                    (deals_df['Close Date'] >= q1_start) & 
-                    (deals_df['Close Date'] < q1_end)
-                ]
-                after_count = len(deals_df)
-                after_amount = deals_df['Amount'].sum()
-                
-                st.sidebar.markdown("### 📊 HubSpot Data Loaded")
-                st.sidebar.caption(f"Total deals before Q1 filter: {before_count} (${before_amount:,.0f})")
-                st.sidebar.caption(f"Q1 2026 deals: {after_count} (${after_amount:,.0f})")
-                st.sidebar.caption(f"Filtered out: {before_count - after_count} deals")
-                
-                # Debug: Show unique Status values
-                if 'Status' in deals_df.columns:
-                    unique_status = deals_df['Status'].unique()[:10]
-                    st.sidebar.caption(f"Status values: {list(unique_status)}")
-                
-                # Debug: Show unique Quarter/Spillover values
-                spillover_col = get_spillover_column(deals_df)
-                if spillover_col and spillover_col in deals_df.columns:
-                    unique_quarter = deals_df[spillover_col].unique()[:10]
-                    st.sidebar.caption(f"Quarter values: {list(unique_quarter)}")
-                
-                # Show breakdown by rep for Expect/Commit
-                if 'Deal Owner' in deals_df.columns and 'Status' in deals_df.columns:
-                    expect_commit = deals_df[deals_df['Status'].isin(['Expect', 'Commit'])]
-                    st.sidebar.markdown("**Expect/Commit by Rep:**")
-                    for rep in ['Brad Sherman', 'Jake Lynch', 'Dave Borkowski', 'Lance Mitton', 'Alex Gonzalez']:
-                        rep_deals = expect_commit[expect_commit['Deal Owner'] == rep]
-                        if not rep_deals.empty:
-                            st.sidebar.caption(f"{rep}: {len(rep_deals)} deals, ${rep_deals['Amount'].sum():,.0f}")
-
-            else:
-                pass  # Debug info removed
-                #st.sidebar.error("❌ Cannot apply date filter - no Close Date column")
-            
-            # FILTER OUT unwanted deal stages
-            excluded_stages = [
-                '', '(Blanks)', None, 'Cancelled', 'checkout abandoned', 
-                'closed lost', 'closed won', 'sales order created in NS', 
-                'NCR', 'Shipped'
-            ]
-            
-            # Convert Deal Stage to string and handle NaN
-            if 'Deal Stage' in deals_df.columns:
-                deals_df['Deal Stage'] = deals_df['Deal Stage'].fillna('')
-                deals_df['Deal Stage'] = deals_df['Deal Stage'].astype(str).str.strip()
-                
-                # Show unique stages before filtering
-                unique_stages = deals_df['Deal Stage'].unique()
-                #st.sidebar.info(f"🎯 Unique Deal Stages: {', '.join([str(s) for s in unique_stages[:10]])}")
-                
-                # Filter out excluded stages
-                deals_df = deals_df[~deals_df['Deal Stage'].str.lower().isin([s.lower() if s else '' for s in excluded_stages])]
-                
-                #st.sidebar.success(f"✅ After stage filter: {len(deals_df)} deals, ${deals_df['Amount'].sum():,.0f}")
-            else:
-                pass  # Debug info removed
-                #st.sidebar.warning("⚠️ No Deal Stage column found")
-            
-            # Apply Q1 fulfillment logic
-            deals_df = apply_q1_fulfillment_logic(deals_df)
+            # Show breakdown by Status
+            for status in ['Expect', 'Commit', 'Best Case', 'Opportunity']:
+                status_df = deals_df[deals_df['Status'] == status]
+                if not status_df.empty:
+                    st.sidebar.caption(f"  {status}: {len(status_df)} deals, ${status_df['Amount'].sum():,.0f}")
+        
+        if 'Q2 2026 Spillover' in deals_df.columns:
+            unique_quarter = deals_df['Q2 2026 Spillover'].unique().tolist()
+            st.sidebar.caption(f"Quarter values: {unique_quarter}")
     else:
         pass  # Debug info removed
         #st.sidebar.error(f"❌ HubSpot data has insufficient columns: {len(deals_df.columns) if not deals_df.empty else 0}")
