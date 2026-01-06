@@ -6,11 +6,12 @@ Features:
 - Loads Invoice Lines, Sales Orders, Items, Customers, Deals
 - Properly maps 'Calyx || Product Type' column from Raw_Items
 - Handles duplicate column names
+- Handles HubSpot Import title row in Deals sheet
 - Provides data preparation functions
 
 Author: Xander @ Calyx Containers
-Version: 3.4.0
-Last Updated: 2026-01-05 16:20 MST
+Version: 3.5.0
+Last Updated: 2026-01-05 17:30 MST
 """
 
 import streamlit as st
@@ -25,8 +26,8 @@ from google.oauth2.service_account import Credentials
 logger = logging.getLogger(__name__)
 
 # Version info
-VERSION = "3.4.0"
-LAST_UPDATED = "2026-01-05 16:20 MST"
+VERSION = "3.5.0"
+LAST_UPDATED = "2026-01-05 17:30 MST"
 
 # =============================================================================
 # GOOGLE SHEETS CONNECTION
@@ -326,7 +327,12 @@ def load_customers() -> Optional[pd.DataFrame]:
 
 @st.cache_data(ttl=300)
 def load_deals() -> Optional[pd.DataFrame]:
-    """Load HubSpot Deals/Pipeline data."""
+    """
+    Load HubSpot Deals/Pipeline data.
+    
+    Handles case where first row is a title/info row like "HubSpot Import..."
+    and actual headers are in row 2.
+    """
     df = load_sheet_to_dataframe('Deals')
     
     if df is None or df.empty:
@@ -339,18 +345,38 @@ def load_deals() -> Optional[pd.DataFrame]:
     if df is None or df.empty:
         return None
     
+    # Check if first column header looks like a title row (HubSpot Import, etc.)
+    first_col = str(df.columns[0]).lower() if len(df.columns) > 0 else ''
+    if 'hubspot' in first_col or 'import' in first_col or 'last updated' in first_col:
+        # First row is a title - the actual headers are in the first data row
+        # Use the first row as new headers
+        if len(df) > 0:
+            new_headers = df.iloc[0].astype(str).tolist()
+            df = df.iloc[1:].reset_index(drop=True)
+            df.columns = new_headers
+            logger.info(f"Deals: Detected title row, using row 2 as headers: {new_headers[:5]}...")
+    
+    # Also check if columns are generic like '_1', '_2', etc.
+    generic_cols = [c for c in df.columns if str(c).startswith('_') and str(c)[1:].isdigit()]
+    if len(generic_cols) > len(df.columns) / 2:
+        # More than half are generic - first row is likely actual headers
+        if len(df) > 0:
+            new_headers = df.iloc[0].astype(str).tolist()
+            df = df.iloc[1:].reset_index(drop=True)
+            df.columns = new_headers
+            logger.info(f"Deals: Detected generic columns, using row 1 as headers: {new_headers[:5]}...")
+    
     # Standardize column names
     col_mapping = {}
     for col in df.columns:
-        col_lower = col.lower()
+        col_lower = str(col).lower()
         if 'deal' in col_lower and 'name' in col_lower:
             col_mapping[col] = 'Deal Name'
         elif 'company' in col_lower or 'customer' in col_lower:
             if 'Company' not in col_mapping.values():
                 col_mapping[col] = 'Company'
-        elif 'amount' in col_lower or 'value' in col_lower:
-            if 'Amount' not in col_mapping.values():
-                col_mapping[col] = 'Amount'
+        elif col_lower == 'amount' or (('amount' in col_lower or 'value' in col_lower) and 'Amount' not in col_mapping.values()):
+            col_mapping[col] = 'Amount'
         elif 'stage' in col_lower:
             if 'Stage' not in col_mapping.values():
                 col_mapping[col] = 'Stage'
@@ -359,8 +385,13 @@ def load_deals() -> Optional[pd.DataFrame]:
         elif 'product' in col_lower:
             if 'Product' not in col_mapping.values():
                 col_mapping[col] = 'Product'
+        elif col_lower == 'sku' or col_lower == 'item':
+            col_mapping[col] = 'SKU'
     
     df = df.rename(columns=col_mapping)
+    
+    # Log the actual column names for debugging
+    logger.info(f"Deals columns after processing: {list(df.columns)[:10]}...")
     
     return df
 
