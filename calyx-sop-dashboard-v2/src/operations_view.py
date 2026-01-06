@@ -4,7 +4,7 @@ Demand planning, pipeline analysis, and coverage tracking
 
 Author: Xander @ Calyx Containers
 Version: 4.4.0
-Last Updated: 2025-12-22 16:20 MST
+Last Updated: 2026-01-05 16:20 MST
 Changes:
 - Pipeline data now uses Column O for SKU and Column D for date
 - SKU mapped to category via Raw_Items for proper filtering
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Version info
 VERSION = "4.4.0"
-LAST_UPDATED = "2025-12-22 16:20 MST"
+LAST_UPDATED = "2026-01-05 16:20 MST"
 
 # =============================================================================
 # PERFORMANCE: Cache expensive computations
