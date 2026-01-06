@@ -3,8 +3,13 @@ Operations/Supply Chain View Module for S&OP Dashboard
 Demand planning, pipeline analysis, and coverage tracking
 
 Author: Xander @ Calyx Containers
-Version: 4.2.0
-Last Updated: 2025-12-22 15:40 MST
+Version: 4.4.0
+Last Updated: 2025-12-22 16:20 MST
+Changes:
+- Pipeline data now uses Column O for SKU and Column D for date
+- SKU mapped to category via Raw_Items for proper filtering
+- Excludes rows where SKU or date is blank
+- Added Pipeline debug expander to show what data is being used
 """
 
 import streamlit as st
@@ -17,8 +22,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Version info
-VERSION = "4.2.0"
-LAST_UPDATED = "2025-12-22 15:40 MST"
+VERSION = "4.4.0"
+LAST_UPDATED = "2025-12-22 16:20 MST"
 
 # =============================================================================
 # PERFORMANCE: Cache expensive computations
@@ -77,45 +82,152 @@ def compute_demand_history_cached(data_hash, filtered_data, date_col, amount_col
 
 
 @st.cache_data(ttl=300)
-def compute_pipeline_data_cached(deals_hash, deals, freq):
-    """Cache pipeline data computation."""
+def compute_pipeline_data_cached(deals_hash, deals, freq, items_hash, items, category_filter):
+    """
+    Cache pipeline data computation.
+    
+    Uses:
+    - Column O (index 14) for SKU
+    - Column D (index 3) for expected date
+    - Amount column for dollars
+    - Maps SKU to category via Raw_Items
+    
+    Excludes rows where SKU or date is blank.
+    """
     if deals is None or deals.empty:
         return pd.DataFrame()
     
     try:
-        # Find columns
-        close_date_col = find_column(deals, ['close date', 'closedate', 'close_date'])
-        if close_date_col is None:
-            close_date_col = find_column(deals, ['date'])
+        # Get column names from deals DataFrame
+        cols = deals.columns.tolist()
         
-        amount_col = find_column(deals, ['amount', 'value', 'revenue'])
-        sku_col = find_column(deals, ['sku'])
+        # Column O is index 14 (0-indexed), Column D is index 3
+        # But let's also handle if columns have names
+        sku_col = None
+        date_col = None
+        amount_col = None
         
-        if close_date_col is None or amount_col is None:
+        # Try to get Column O (index 14) for SKU
+        if len(cols) > 14:
+            sku_col = cols[14]  # Column O
+        
+        # Try to get Column D (index 3) for Date
+        if len(cols) > 3:
+            date_col = cols[3]  # Column D
+        
+        # Find Amount column by name - prefer exact match first
+        for col in cols:
+            col_lower = str(col).lower().strip()
+            if col_lower == 'amount':
+                amount_col = col
+                break
+        
+        # If not found, try broader search
+        if amount_col is None:
+            for col in cols:
+                col_lower = str(col).lower()
+                if 'amount' in col_lower or 'value' in col_lower or 'revenue' in col_lower:
+                    amount_col = col
+                    break
+        
+        # If we couldn't find by index, fall back to name search
+        if sku_col is None:
+            sku_col = find_column(deals, ['sku'])
+        if date_col is None:
+            date_col = find_column(deals, ['close date', 'closedate', 'close_date', 'date'])
+        
+        if date_col is None or amount_col is None:
             return pd.DataFrame()
         
-        date_series = get_column_as_series(deals, close_date_col)
+        # Build SKU -> Category mapping from Raw_Items
+        sku_to_category = {}
+        if items is not None and not items.empty:
+            # Look for SKU column - exact match first
+            items_sku_col = None
+            items_cat_col = None
+            
+            for col in items.columns:
+                col_str = str(col).strip()
+                if col_str == 'SKU':
+                    items_sku_col = col
+                elif col_str == 'Item':
+                    if items_sku_col is None:
+                        items_sku_col = col
+            
+            # Look for category column
+            for col in items.columns:
+                col_str = str(col).strip()
+                if 'Calyx Product Type' in col_str or 'Calyx || Product Type' in col_str:
+                    items_cat_col = col
+                    break
+            
+            if items_cat_col is None:
+                items_cat_col = find_column(items, ['calyx product type', 'product type', 'category'])
+            
+            if items_sku_col and items_cat_col:
+                for _, row in items.iterrows():
+                    sku_val = row.get(items_sku_col)
+                    cat_val = row.get(items_cat_col)
+                    if pd.notna(sku_val) and pd.notna(cat_val):
+                        sku_to_category[str(sku_val).strip()] = str(cat_val).strip()
+        
+        # Extract data
+        date_series = get_column_as_series(deals, date_col)
         amt_series = get_column_as_series(deals, amount_col)
+        sku_series = get_column_as_series(deals, sku_col) if sku_col else None
         
         temp_df = pd.DataFrame({
             'Date': pd.to_datetime(date_series, errors='coerce'),
             'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
         })
         
-        if sku_col:
-            temp_df['SKU'] = get_column_as_series(deals, sku_col)
+        if sku_series is not None:
+            temp_df['SKU'] = sku_series.astype(str).str.strip()
+            # Map SKU to Category
+            temp_df['Category'] = temp_df['SKU'].map(sku_to_category).fillna('Unknown')
+        else:
+            temp_df['SKU'] = ''
+            temp_df['Category'] = 'Unknown'
         
+        # EXCLUDE rows where SKU or Date is blank/null
         temp_df = temp_df.dropna(subset=['Date'])
+        temp_df = temp_df[temp_df['SKU'].str.len() > 0]  # Exclude blank SKUs
+        temp_df = temp_df[temp_df['SKU'] != 'nan']  # Exclude 'nan' strings
+        temp_df = temp_df[temp_df['SKU'].str.lower() != 'none']  # Exclude 'none' strings
         
+        if temp_df.empty:
+            return pd.DataFrame()
+        
+        # Filter by category if specified
+        if category_filter and category_filter != 'All':
+            # Try exact match first
+            filtered = temp_df[temp_df['Category'] == category_filter]
+            
+            # If no match, try case-insensitive
+            if filtered.empty:
+                filtered = temp_df[temp_df['Category'].str.lower().str.strip() == category_filter.lower().strip()]
+            
+            # If still empty, try partial match
+            if filtered.empty:
+                filtered = temp_df[temp_df['Category'].str.lower().str.contains(category_filter.lower().strip(), na=False)]
+            
+            if not filtered.empty:
+                temp_df = filtered
+        
+        # Create period column
         if freq == 'Q':
             temp_df['Period'] = temp_df['Date'].apply(lambda x: f"{x.year}-Q{(x.month-1)//3 + 1}")
         else:
             temp_df['Period'] = temp_df['Date'].dt.to_period(freq).astype(str)
         
+        # Aggregate by period
         pipeline_by_period = temp_df.groupby('Period')['Amount'].sum().reset_index()
         pipeline_by_period.columns = ['Period', 'Pipeline Value']
-        return pipeline_by_period
-    except:
+        
+        return pipeline_by_period.sort_values('Period')
+        
+    except Exception as e:
+        logger.error(f"Error in compute_pipeline_data_cached: {e}")
         return pd.DataFrame()
 
 
@@ -315,7 +427,7 @@ def render_operations_view():
     ])
     
     with tab1:
-        render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, selected_category)
+        render_demand_pipeline_tab(filtered, deals, items, date_col, amount_col, qty_col, freq, horizon, selected_category)
     
     with tab2:
         render_coverage_tab(filtered, amount_col, product_type_col)
@@ -345,7 +457,7 @@ def render_operations_view():
 # DEMAND VS PIPELINE TAB
 # =============================================================================
 
-def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, freq, horizon, category):
+def render_demand_pipeline_tab(filtered, deals, items, date_col, amount_col, qty_col, freq, horizon, category):
     """Render Demand vs Pipeline overlay chart."""
     
     st.markdown("### 📈 Demand Forecast vs Pipeline Overlay")
@@ -376,9 +488,10 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
     # Generate forecast
     demand_forecast_df = generate_forecast(demand_history, horizon, freq)
     
-    # Get pipeline data (cached)
+    # Get pipeline data (cached) - now with items for SKU->Category mapping
     deals_hash = get_df_hash(deals)
-    pipeline_df = compute_pipeline_data_cached(deals_hash, deals, freq)
+    items_hash = get_df_hash(items)
+    pipeline_df = compute_pipeline_data_cached(deals_hash, deals, freq, items_hash, items, category)
     
     # Create chart
     fig = create_overlay_chart(demand_history, demand_forecast_df, pipeline_df, revenue_forecast_by_period, category)
@@ -394,6 +507,30 @@ def render_demand_pipeline_tab(filtered, deals, date_col, amount_col, qty_col, f
         st.metric("Pipeline/Deals", f"${pipeline_df['Pipeline Value'].sum() if not pipeline_df.empty else 0:,.0f}")
     with col4:
         st.metric("Revenue Forecast", f"${revenue_forecast_by_period['Forecast_Revenue'].sum() if not revenue_forecast_by_period.empty else 0:,.0f}")
+    
+    # Pipeline debug info
+    with st.expander("🔍 Pipeline/Deals Debug Info", expanded=False):
+        if deals is not None and not deals.empty:
+            st.write(f"**Deals table:** {len(deals)} rows, {len(deals.columns)} columns")
+            st.write(f"**Deals columns (first 20):** {list(deals.columns[:20])}")
+            
+            # Show Column D and O values
+            cols = deals.columns.tolist()
+            if len(cols) > 3:
+                st.write(f"**Column D (index 3):** '{cols[3]}'")
+            if len(cols) > 14:
+                st.write(f"**Column O (index 14):** '{cols[14]}'")
+        else:
+            st.write("**Deals table:** Empty or None")
+        
+        if items is not None and not items.empty:
+            st.write(f"**Items table:** {len(items)} rows")
+        
+        st.write(f"**Pipeline result:** {len(pipeline_df) if pipeline_df is not None and not pipeline_df.empty else 0} periods")
+        
+        if pipeline_df is not None and not pipeline_df.empty:
+            st.write("**Pipeline data:**")
+            st.dataframe(pipeline_df, use_container_width=True)
 
 
 def align_forecast_periods(forecast_df):
