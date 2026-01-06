@@ -894,7 +894,7 @@ def load_all_data():
     #st.sidebar.info("🔄 Loading data from Google Sheets...")
     
     # Load deals data - extend range to include Q2 2026 Spillover column
-    deals_df = load_google_sheets_data("deals", "A2:R", version=CACHE_VERSION)
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:R", version=CACHE_VERSION)
     
     # DEBUG: Show what we got from HubSpot
     if not deals_df.empty:
@@ -5313,13 +5313,13 @@ def main():
                - Paste your service account JSON in the format shown in diagnostics above
             
             4. **Verify Sheet Structure:**
-               - Ensure sheet names match: 'deals', 'Dashboard Info', '_NS_Invoices_Data', '_NS_SalesOrders_Data'
+               - Ensure sheet names match: 'All Reps All Pipelines', 'Dashboard Info', '_NS_Invoices_Data', '_NS_SalesOrders_Data'
                - Verify columns are in the expected positions
             """)
         
         return
     elif deals_df.empty:
-        st.warning("⚠️ Deals data is empty. Check 'deals' sheet.")
+        st.warning("⚠️ Deals data is empty. Check 'All Reps All Pipelines' sheet.")
     elif dashboard_df.empty:
         st.warning("⚠️ Dashboard info is empty. Check 'Dashboard Info' sheet.")
     
