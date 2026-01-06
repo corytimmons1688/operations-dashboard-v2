@@ -110,8 +110,8 @@ def clean_numeric(value):
 def load_all_data():
     """Load all required data for Q4 review"""
     
-    # Load invoice data
-    invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:U", version=CACHE_VERSION)
+    # Load invoice data - extended to column Y for Product Type
+    invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
     
     # Load dashboard info (rep quotas)
     dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
@@ -161,6 +161,8 @@ def process_invoices(df):
             col_mapping[col] = 'Corrected Customer'
         elif col_lower == 'rep master':
             col_mapping[col] = 'Rep Master'
+        elif 'product' in col_lower and 'type' in col_lower:
+            col_mapping[col] = 'Product Type'
     
     df = df.rename(columns=col_mapping)
     
@@ -169,6 +171,11 @@ def process_invoices(df):
     if len(col_names) >= 21:  # Column U exists (index 20)
         col_u_name = col_names[20]
         df['Rep Master'] = df[col_u_name].astype(str).str.strip()
+    
+    # Use column Y (index 24) for Product Type
+    if len(col_names) >= 25:  # Column Y exists (index 24)
+        col_y_name = col_names[24]
+        df['Product Type'] = df[col_y_name].astype(str).str.strip()
     
     # Use Rep Master as the Sales Rep (source of truth)
     if 'Rep Master' in df.columns:
@@ -462,52 +469,51 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
     
     st.markdown("---")
     
-    # ==================== CATEGORY BREAKDOWN ====================
-    st.markdown("### 📦 Revenue by Category")
+    # ==================== PRODUCT TYPE BREAKDOWN ====================
+    st.markdown("### 📦 Revenue by Product Type")
     
-    # Try Pipeline first, then Department
-    cat_col = None
-    if 'Pipeline' in invoices_df.columns:
-        cat_col = 'Pipeline'
-    elif 'Department' in invoices_df.columns:
-        cat_col = 'Department'
-    
-    if cat_col:
-        cat_revenue = invoices_df.groupby(cat_col).agg({
+    if 'Product Type' in invoices_df.columns:
+        product_revenue = invoices_df.groupby('Product Type').agg({
             'Amount': 'sum',
             'Invoice Number': 'count' if 'Invoice Number' in invoices_df.columns else 'size'
         }).reset_index()
-        cat_revenue.columns = ['Category', 'Revenue', 'Invoices']
-        cat_revenue = cat_revenue[cat_revenue['Category'].notna()]
-        cat_revenue = cat_revenue[cat_revenue['Category'].astype(str).str.strip() != '']
-        cat_revenue = cat_revenue.sort_values('Revenue', ascending=False)
+        product_revenue.columns = ['Product Type', 'Revenue', 'Invoices']
+        product_revenue = product_revenue[product_revenue['Product Type'].notna()]
+        product_revenue = product_revenue[product_revenue['Product Type'].astype(str).str.strip() != '']
+        product_revenue = product_revenue.sort_values('Revenue', ascending=False)
         
-        if not cat_revenue.empty:
+        if not product_revenue.empty:
             col1, col2 = st.columns(2)
             
             with col1:
+                # Add rank
+                product_revenue_display = product_revenue.copy()
+                product_revenue_display['Rank'] = range(1, len(product_revenue_display) + 1)
+                product_revenue_display = product_revenue_display[['Rank', 'Product Type', 'Revenue', 'Invoices']]
+                
                 st.dataframe(
-                    cat_revenue.style.format({'Revenue': '${:,.0f}'}),
+                    product_revenue_display.style.format({'Revenue': '${:,.0f}'}),
                     use_container_width=True,
-                    hide_index=True
+                    hide_index=True,
+                    height=350
                 )
             
             with col2:
                 fig = px.bar(
-                    cat_revenue,
-                    x='Category',
+                    product_revenue.head(10),
+                    x='Product Type',
                     y='Revenue',
                     color='Revenue',
                     color_continuous_scale='Viridis',
                     text='Revenue'
                 )
                 fig.update_traces(texttemplate='$%{text:,.0f}', textposition='outside')
-                fig.update_layout(showlegend=False, height=300)
+                fig.update_layout(showlegend=False, height=350, xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("📭 No category data available")
+            st.info("📭 No product type data available")
     else:
-        st.info("📭 No category/pipeline data available")
+        st.info("📭 Product Type column not found in invoice data")
 
 # ============================================================================
 # MAIN RENDER FUNCTION
