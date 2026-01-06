@@ -134,6 +134,7 @@ def process_invoices(df):
     col_mapping = {}
     col_names = df.columns.tolist()
     
+    # Map columns by name
     for i, col in enumerate(col_names):
         col_lower = str(col).lower().strip()
         if 'document' in col_lower and 'number' in col_lower:
@@ -163,9 +164,14 @@ def process_invoices(df):
     
     df = df.rename(columns=col_mapping)
     
-    # Use Rep Master if available
+    # CRITICAL: Use column U (index 20) as Rep Master for accurate rep attribution
+    # This is the authoritative source for which rep gets credit
+    if len(col_names) >= 21:  # Column U exists (index 20)
+        col_u_name = col_names[20]
+        df['Rep Master'] = df[col_u_name].astype(str).str.strip()
+    
+    # Use Rep Master as the Sales Rep (source of truth)
     if 'Rep Master' in df.columns:
-        df['Rep Master'] = df['Rep Master'].astype(str).str.strip()
         invalid_values = ['', 'nan', 'None', '#N/A', '#REF!', '#VALUE!', '#ERROR!']
         df = df[~df['Rep Master'].isin(invalid_values)]
         df['Sales Rep'] = df['Rep Master']
