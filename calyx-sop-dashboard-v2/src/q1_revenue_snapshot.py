@@ -17,39 +17,10 @@ from zoneinfo import ZoneInfo
 import time
 import base64
 import numpy as np
-import claude_insights
-# Optional: Commission calculator module (if available)
-try:
-    import commission_calculator
-    COMMISSION_AVAILABLE = True
-except ImportError:
-    COMMISSION_AVAILABLE = False
 
-# Optional: Shipping planning module (if available)
-try:
-    import shipping_planning
-    from importlib import reload
-    reload(shipping_planning)  # Force reload to pick up any changes
-    SHIPPING_PLANNING_AVAILABLE = True
-except ImportError as e:
-    SHIPPING_PLANNING_AVAILABLE = False
-    SHIPPING_PLANNING_ERROR = str(e)
-except Exception as e:
-    SHIPPING_PLANNING_AVAILABLE = False
-    SHIPPING_PLANNING_ERROR = f"Error loading module: {str(e)}"
 
-# Optional: Q1 2026 Forecasting Tool module (if available)
-try:
-    import all_products_forecast
-    from importlib import reload
-    reload(all_products_forecast)  # Force reload to pick up any changes
-    ALL_PRODUCTS_FORECAST_AVAILABLE = True
-except ImportError as e:
-    ALL_PRODUCTS_FORECAST_AVAILABLE = False
-    ALL_PRODUCTS_FORECAST_ERROR = str(e)
-except Exception as e:
-    ALL_PRODUCTS_FORECAST_AVAILABLE = False
-    ALL_PRODUCTS_FORECAST_ERROR = f"Error loading module: {str(e)}"
+
+
 
 # Configure Plotly for dark mode compatibility
 pio.templates.default = "plotly"  # Use default template that adapts to theme
@@ -5180,7 +5151,7 @@ def main():
         # Create navigation options
         view_mode = st.radio(
             "Select View:",
-            ["👥 Team Overview", "👤 Individual Rep", "🤖 AI Insights", "💰 Commission", "🧪 Concentrate Jar Forecast", "📦 Q1 2026 Forecasting Tool"],
+            ["👥 Team Overview", "👤 Individual Rep"],
             label_visibility="collapsed",
             key="nav_selector"
         )
@@ -5188,11 +5159,7 @@ def main():
         # Map display names back to internal names
         view_mapping = {
             "👥 Team Overview": "Team Overview",
-            "👤 Individual Rep": "Individual Rep",
-            "🤖 AI Insights": "AI Insights",
-            "💰 Commission": "💰 Commission",
-            "🧪 Concentrate Jar Forecast": "🧪 Concentrate Jar Forecast",
-            "📦 Q1 2026 Forecasting Tool": "📦 Q1 2026 Forecasting Tool"
+            "👤 Individual Rep": "Individual Rep"
         }
         
         view_mode = view_mapping.get(view_mode, "Team Overview")
@@ -5350,57 +5317,6 @@ def main():
                 display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
         else:
             st.error("No rep data available")
-    elif view_mode == "AI Insights":
-        # Calculate team metrics for Claude to use
-        team_metrics = calculate_team_metrics(deals_df, dashboard_df)
-        claude_insights.display_insights_dashboard(deals_df, dashboard_df, team_metrics)
-    elif view_mode == "💰 Commission":
-        # Commission calculator view (password protected)
-        commission_calculator.display_commission_section(invoices_df, sales_orders_df)
-    elif view_mode == "🧪 Concentrate Jar Forecast":
-        # Concentrate Jar Forecasting view
-        if SHIPPING_PLANNING_AVAILABLE:
-            shipping_planning.main()
-        else:
-            st.error("❌ Concentrate Jar Forecasting module not found.")
-            if 'SHIPPING_PLANNING_ERROR' in globals():
-                st.error(f"Error details: {SHIPPING_PLANNING_ERROR}")
-            st.info("Make sure shipping_planning.py is in your repository at the same level as this dashboard file.")
-            st.code("Expected file location: shipping_planning.py")
-            
-            # Debug info
-            with st.expander("🔧 Debug Information"):
-                st.write("**Current working directory:**")
-                import os
-                st.code(os.getcwd())
-                st.write("**Files in current directory:**")
-                try:
-                    files = os.listdir('.')
-                    st.code('\n'.join([f for f in files if f.endswith('.py')]))
-                except Exception as e:
-                    st.error(f"Cannot list files: {e}")
-    elif view_mode == "📦 Q1 2026 Forecasting Tool":
-        # Q1 2026 Forecasting view
-        if ALL_PRODUCTS_FORECAST_AVAILABLE:
-            all_products_forecast.main()
-        else:
-            st.error("❌ Q1 2026 Forecasting Tool module not found.")
-            if 'ALL_PRODUCTS_FORECAST_ERROR' in globals():
-                st.error(f"Error details: {ALL_PRODUCTS_FORECAST_ERROR}")
-            st.info("Make sure all_products_forecast.py is in your repository at the same level as this dashboard file.")
-            st.code("Expected file location: all_products_forecast.py")
-            
-            # Debug info
-            with st.expander("🔧 Debug Information"):
-                st.write("**Current working directory:**")
-                import os
-                st.code(os.getcwd())
-                st.write("**Files in current directory:**")
-                try:
-                    files = os.listdir('.')
-                    st.code('\n'.join([f for f in files if f.endswith('.py')]))
-                except Exception as e:
-                    st.error(f"Cannot list files: {e}")
 
 if __name__ == "__main__":
     main()
