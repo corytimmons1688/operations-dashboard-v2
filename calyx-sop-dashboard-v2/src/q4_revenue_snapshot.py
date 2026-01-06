@@ -110,7 +110,7 @@ def clean_numeric(value):
 def load_all_data():
     """Load all required data for Q4 review"""
     
-    # Load invoice data - extended to column Y for Q2 2026 Spillover
+    # Load invoice data - extended to column Y for Product Type
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
     
     # Load dashboard info (rep quotas)
@@ -163,8 +163,6 @@ def process_invoices(df):
             col_mapping[col] = 'Rep Master'
         elif 'product' in col_lower and 'type' in col_lower:
             col_mapping[col] = 'Product Type'
-        elif 'spillover' in col_lower or 'q2 2026' in col_lower:
-            col_mapping[col] = 'Q2 2026 Spillover'
     
     df = df.rename(columns=col_mapping)
     
@@ -174,10 +172,10 @@ def process_invoices(df):
         col_u_name = col_names[20]
         df['Rep Master'] = df[col_u_name].astype(str).str.strip()
     
-    # Use column Y (index 24) for Q2 2026 Spillover (was Product Type)
+    # Use column Y (index 24) for Product Type
     if len(col_names) >= 25:  # Column Y exists (index 24)
         col_y_name = col_names[24]
-        df['Q2 2026 Spillover'] = df[col_y_name].astype(str).str.strip()
+        df['Product Type'] = df[col_y_name].astype(str).str.strip()
     
     # Use Rep Master as the Sales Rep (source of truth)
     if 'Rep Master' in df.columns:
@@ -471,30 +469,29 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
     
     st.markdown("---")
     
-    # ==================== Q2 2026 SPILLOVER BREAKDOWN ====================
-    st.markdown("### 📦 Revenue by Q2 2026 Spillover")
+    # ==================== PRODUCT TYPE BREAKDOWN ====================
+    st.markdown("### 📦 Revenue by Product Type")
     
-    if 'Q2 2026 Spillover' in invoices_df.columns:
-        spillover_revenue = invoices_df.groupby('Q2 2026 Spillover').agg({
+    if 'Product Type' in invoices_df.columns:
+        product_revenue = invoices_df.groupby('Product Type').agg({
             'Amount': 'sum',
             'Invoice Number': 'count' if 'Invoice Number' in invoices_df.columns else 'size'
         }).reset_index()
-        spillover_revenue.columns = ['Q2 2026 Spillover', 'Revenue', 'Invoices']
-        spillover_revenue = spillover_revenue[spillover_revenue['Q2 2026 Spillover'].notna()]
-        spillover_revenue = spillover_revenue[spillover_revenue['Q2 2026 Spillover'].astype(str).str.strip() != '']
-        spillover_revenue = spillover_revenue.sort_values('Revenue', ascending=False)
+        product_revenue.columns = ['Product Type', 'Revenue', 'Invoices']
+        product_revenue = product_revenue[product_revenue['Product Type'].notna()]
+        product_revenue = product_revenue[product_revenue['Product Type'].astype(str).str.strip() != '']
+        product_revenue = product_revenue.sort_values('Revenue', ascending=False)
         
-        if not spillover_revenue.empty:
+        if not product_revenue.empty:
             col1, col2 = st.columns(2)
             
             with col1:
-                # Add rank
-                spillover_display = spillover_revenue.copy()
-                spillover_display['Rank'] = range(1, len(spillover_display) + 1)
-                spillover_display = spillover_display[['Rank', 'Q2 2026 Spillover', 'Revenue', 'Invoices']]
+                product_display = product_revenue.copy()
+                product_display['Rank'] = range(1, len(product_display) + 1)
+                product_display = product_display[['Rank', 'Product Type', 'Revenue', 'Invoices']]
                 
                 st.dataframe(
-                    spillover_display.style.format({'Revenue': '${:,.0f}'}),
+                    product_display.style.format({'Revenue': '${:,.0f}'}),
                     use_container_width=True,
                     hide_index=True,
                     height=350
@@ -502,8 +499,8 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
             
             with col2:
                 fig = px.bar(
-                    spillover_revenue.head(10),
-                    x='Q2 2026 Spillover',
+                    product_revenue.head(10),
+                    x='Product Type',
                     y='Revenue',
                     color='Revenue',
                     color_continuous_scale='Viridis',
@@ -513,9 +510,54 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
                 fig.update_layout(showlegend=False, height=350, xaxis_tickangle=-45)
                 st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("📭 No Q2 2026 Spillover data available")
+            st.info("📭 No product type data available")
     else:
-        st.info("📭 Q2 2026 Spillover column not found in invoice data")
+        st.info("📭 Product Type column not found in invoice data")
+    
+    st.markdown("---")
+    
+    # ==================== PIPELINE BREAKDOWN ====================
+    st.markdown("### 🔀 Revenue by Pipeline")
+    
+    if 'Pipeline' in invoices_df.columns:
+        pipeline_revenue = invoices_df.groupby('Pipeline').agg({
+            'Amount': 'sum',
+            'Invoice Number': 'count' if 'Invoice Number' in invoices_df.columns else 'size'
+        }).reset_index()
+        pipeline_revenue.columns = ['Pipeline', 'Revenue', 'Invoices']
+        pipeline_revenue = pipeline_revenue[pipeline_revenue['Pipeline'].notna()]
+        pipeline_revenue = pipeline_revenue[pipeline_revenue['Pipeline'].astype(str).str.strip() != '']
+        pipeline_revenue = pipeline_revenue.sort_values('Revenue', ascending=False)
+        
+        if not pipeline_revenue.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                pipeline_display = pipeline_revenue.copy()
+                pipeline_display['Rank'] = range(1, len(pipeline_display) + 1)
+                pipeline_display = pipeline_display[['Rank', 'Pipeline', 'Revenue', 'Invoices']]
+                
+                st.dataframe(
+                    pipeline_display.style.format({'Revenue': '${:,.0f}'}),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=300
+                )
+            
+            with col2:
+                fig = px.pie(
+                    pipeline_revenue,
+                    values='Revenue',
+                    names='Pipeline',
+                    hole=0.4
+                )
+                fig.update_traces(textposition='inside', textinfo='percent+label')
+                fig.update_layout(showlegend=False, height=300)
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("📭 No pipeline data available")
+    else:
+        st.info("📭 Pipeline column not found in invoice data")
 
 # ============================================================================
 # MAIN RENDER FUNCTION
