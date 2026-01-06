@@ -683,7 +683,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # Cache version for manual refresh control
 # No TTL - data only refreshes when user clicks refresh button
-CACHE_VERSION = "v62_manual_refresh_only"
+CACHE_VERSION = "v63_all_reps_all_pipelines_fix"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
 def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
@@ -803,18 +803,22 @@ def is_q1_deal(df, spillover_col):
     """
     Determine if deals are Q1 2026 deals (primary quarter).
     Q1 deals are NOT marked as Q2 2026 spillover AND NOT marked as Q4 2025 spillover.
-    If using old column name 'Q1 2026 Spillover', Q1 deals are those NOT marked as 'Q1 2026'.
+    Handles various Quarter column value formats: 'Q2 2026', 'Q2', 'Q4 2025', 'Q4', etc.
     """
     if df is None or df.empty:
         return pd.Series([], dtype=bool)
     if spillover_col is None:
         return pd.Series([True] * len(df), index=df.index)
     
-    spillover_vals = get_spillover_value(df, spillover_col)
+    spillover_vals = get_spillover_value(df, spillover_col).astype(str).str.strip().str.upper()
     
     if spillover_col == 'Q2 2026 Spillover':
-        # New column: exclude Q2 2026 and Q4 2025 spillover
-        return (spillover_vals != 'Q2 2026') & (spillover_vals != 'Q4 2025')
+        # Exclude Q2 spillover (various formats) and Q4 spillover (various formats)
+        # Q2 values: 'Q2 2026', 'Q2', 'Q2 26', etc.
+        # Q4 values: 'Q4 2025', 'Q4', 'Q4 25', etc.
+        is_q2 = spillover_vals.str.contains('Q2', na=False)
+        is_q4 = spillover_vals.str.contains('Q4', na=False)
+        return ~is_q2 & ~is_q4
     else:
         # Old column 'Q1 2026 Spillover': for Q1 dashboard, all deals are primary quarter
         return pd.Series([True] * len(df), index=df.index)
@@ -925,8 +929,7 @@ def load_all_data():
             # Get actual column names
             col_names = deals_df.columns.tolist()
             
-            #st.sidebar.info(f"Processing {len(col_names)} HubSpot columns")
-            #st.sidebar.info(f"First 10 columns: {col_names[:10]}")
+            st.sidebar.info(f"📋 Raw columns from sheet: {col_names}")
             
             # Map based on ACTUAL column names from your sheet
             # Note: Column 4 appears to be "Deal Owner First Name Deal Owner Last Name" combined
@@ -983,15 +986,14 @@ def load_all_data():
                 # Clean up the Deal Owner field
                 deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
             
-            # Show what we have after renaming
-            #st.sidebar.success(f"✅ Columns after rename: {', '.join([c for c in deals_df.columns.tolist()[:10] if c])}")
+            # Show what we have after renaming - DEBUG ENABLED
+            st.sidebar.caption(f"Columns loaded: {deals_df.columns.tolist()}")
             
             # Check if we have required columns
             required_cols = ['Deal Name', 'Status', 'Close Date', 'Deal Owner', 'Amount', 'Pipeline']
             missing_cols = [col for col in required_cols if col not in deals_df.columns]
             if missing_cols:
-                pass  # Debug info removed
-                #st.sidebar.error(f"❌ Missing required columns: {missing_cols}")
+                st.sidebar.error(f"❌ Missing required columns: {missing_cols}")
             
             # Clean and convert amount to numeric
             def clean_numeric(value):
@@ -1069,11 +1071,22 @@ def load_all_data():
                 st.sidebar.caption(f"Q1 2026 deals: {after_count} (${after_amount:,.0f})")
                 st.sidebar.caption(f"Filtered out: {before_count - after_count} deals")
                 
+                # Debug: Show unique Status values
+                if 'Status' in deals_df.columns:
+                    unique_status = deals_df['Status'].unique()[:10]
+                    st.sidebar.caption(f"Status values: {list(unique_status)}")
+                
+                # Debug: Show unique Quarter/Spillover values
+                spillover_col = get_spillover_column(deals_df)
+                if spillover_col and spillover_col in deals_df.columns:
+                    unique_quarter = deals_df[spillover_col].unique()[:10]
+                    st.sidebar.caption(f"Quarter values: {list(unique_quarter)}")
+                
                 # Show breakdown by rep for Expect/Commit
                 if 'Deal Owner' in deals_df.columns and 'Status' in deals_df.columns:
                     expect_commit = deals_df[deals_df['Status'].isin(['Expect', 'Commit'])]
                     st.sidebar.markdown("**Expect/Commit by Rep:**")
-                    for rep in ['Brad Sherman', 'Jake Lynch', 'Dave Borkowski', 'Lance Mitton']:
+                    for rep in ['Brad Sherman', 'Jake Lynch', 'Dave Borkowski', 'Lance Mitton', 'Alex Gonzalez']:
                         rep_deals = expect_commit[expect_commit['Deal Owner'] == rep]
                         if not rep_deals.empty:
                             st.sidebar.caption(f"{rep}: {len(rep_deals)} deals, ${rep_deals['Amount'].sum():,.0f}")
