@@ -74,138 +74,172 @@ try:
 except:
     pass  # Page config already set by parent app
 
-# Custom CSS for styling - Dark Mode Compatible
+# Custom CSS for styling - High-End "Cyber-Executive" UI
 st.markdown("""
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+
     /* ========================================
-       GOOGLE AI STUDIO INSPIRED STYLING
-       Modern glass-morphism with depth
+       GLOBAL THEME
        ======================================== */
-    
-    /* App-wide theming */
+    :root {
+        --bg-color: #0f172a;
+        --card-bg: rgba(30, 41, 59, 0.7);
+        --accent-primary: #3b82f6;
+        --accent-glow: rgba(59, 130, 246, 0.5);
+        --text-primary: #f8fafc;
+        --text-secondary: #94a3b8;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+    }
+
     .stApp {
-        color-scheme: light dark;
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.05) 0%, rgba(139, 92, 246, 0.05) 100%);
+        background-color: var(--bg-color);
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
+            radial-gradient(at 100% 0%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+        font-family: 'Inter', sans-serif;
     }
-    
-    /* Smooth transitions for everything */
-    * {
-        transition: all 0.3s ease !important;
-    }
-    
-    /* ========== METRIC CARDS ========== */
-    [data-testid="stMetric"] {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.02) 100%);
-        backdrop-filter: blur(10px);
-        -webkit-backdrop-filter: blur(10px);
-        padding: 20px;
-        border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.15);
-        overflow: visible !important;
-        min-width: 140px !important;
-    }
-    
-    [data-testid="stMetric"]:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 12px 40px 0 rgba(0, 0, 0, 0.25);
-        border-color: rgba(59, 130, 246, 0.3);
-    }
-    
-    [data-testid="stMetricValue"] {
-        font-size: 1.8rem !important;
-        font-weight: 700 !important;
-        background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        overflow: visible !important;
+
+    h1, h2, h3 {
+        color: var(--text-primary) !important;
+        font-weight: 800 !important;
         letter-spacing: -0.5px;
     }
     
+    p, label, span {
+        color: var(--text-secondary);
+    }
+
+    /* ========================================
+       METRIC CARDS
+       ======================================== */
+    [data-testid="stMetric"] {
+        background: linear-gradient(145deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.05);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        overflow: hidden;
+        position: relative;
+    }
+
+    [data-testid="stMetric"]::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; height: 1px;
+        background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
+        opacity: 0;
+        transition: opacity 0.3s;
+    }
+
+    [data-testid="stMetric"]:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1);
+        border-color: rgba(59, 130, 246, 0.3);
+    }
+
+    [data-testid="stMetric"]:hover::before {
+        opacity: 1;
+    }
+
     [data-testid="stMetricLabel"] {
         font-size: 0.85rem !important;
         font-weight: 600 !important;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
-        opacity: 0.7;
-        overflow: visible !important;
-        white-space: normal !important;
-        line-height: 1.2 !important;
+        letter-spacing: 1px;
+        color: var(--text-secondary) !important;
     }
-    
-    [data-testid="stMetricDelta"] {
-        font-size: 0.875rem !important;
-        font-weight: 600 !important;
-        white-space: normal !important;
+
+    [data-testid="stMetricValue"] {
+        font-size: 2.2rem !important;
+        font-weight: 800 !important;
+        background: linear-gradient(to right, #fff, #cbd5e1);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
-    
-    /* ========== SIDEBAR STYLING ========== */
+
+    /* ========================================
+       SIDEBAR & NAVIGATION
+       ======================================== */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        border-right: 1px solid rgba(255, 255, 255, 0.05);
+        background-color: #020617;
+        border-right: 1px solid rgba(255,255,255,0.05);
     }
     
-    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {
-        color: rgba(255, 255, 255, 0.9);
+    /* Navigation Radios look like Pills */
+    div[data-testid="stRadio"] > div {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
     }
     
-    /* ========== BUTTONS ========== */
-    .stButton > button {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        color: white;
-        border: none;
+    div[data-testid="stRadio"] label {
+        background: rgba(255, 255, 255, 0.03) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+        padding: 12px 16px !important;
+        border-radius: 12px !important;
+        transition: all 0.2s ease;
+    }
+
+    div[data-testid="stRadio"] label:hover {
+        background: rgba(255, 255, 255, 0.08) !important;
+        border-color: rgba(255,255,255,0.2) !important;
+    }
+    
+    /* Selected Radio */
+    div[data-testid="stRadio"] label[data-checked="true"] {
+        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+        border: none !important;
+    }
+    
+    div[data-testid="stRadio"] label[data-checked="true"] p {
+        color: white !important;
+        font-weight: 600 !important;
+    }
+
+    /* ========================================
+       DATAFRAMES & TABLES
+       ======================================== */
+    [data-testid="stDataFrame"] {
+        background: var(--card-bg);
         border-radius: 12px;
-        padding: 12px 24px;
+        border: 1px solid rgba(255,255,255,0.05);
+        padding: 4px;
+    }
+    
+    [data-testid="stDataFrame"] table {
+        font-family: 'Inter', sans-serif !important;
+    }
+
+    /* ========================================
+       BUTTONS
+       ======================================== */
+    .stButton > button {
+        background: linear-gradient(180deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 8px;
         font-weight: 600;
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
-        transition: all 0.3s ease;
+        transition: all 0.2s;
     }
     
     .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(59, 130, 246, 0.4);
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+        background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.1) 100%);
+        border-color: white;
+        transform: scale(1.02);
     }
-    
-    /* ========== DATAFRAMES / TABLES ========== */
-    [data-testid="stDataFrame"], .stDataFrame {
-        background: rgba(255, 255, 255, 0.03);
-        backdrop-filter: blur(10px);
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-        overflow: hidden;
+
+    /* Primary Actions */
+    button[kind="primary"] {
+        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
     }
-    
-    /* Table headers */
-    [data-testid="stDataFrame"] thead tr {
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
-        backdrop-filter: blur(10px);
-    }
-    
-    [data-testid="stDataFrame"] thead th {
-        font-weight: 700;
-        text-transform: uppercase;
-        font-size: 0.75rem;
-        letter-spacing: 0.5px;
-        padding: 16px 12px;
-        border-bottom: 2px solid rgba(59, 130, 246, 0.2);
-    }
-    
-    /* Table rows */
-    [data-testid="stDataFrame"] tbody tr:hover {
-        background: rgba(59, 130, 246, 0.05);
-        transform: scale(1.01);
-    }
-    
-    [data-testid="stDataFrame"] tbody td {
-        padding: 12px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    }
-    
+
     /* ========== EXPANDERS ========== */
     [data-testid="stExpander"] {
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
@@ -221,65 +255,60 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
     }
     
-    /* ========== PROGRESS BREAKDOWN ========== */
+    /* ========================================
+       PROGRESS BREAKDOWN (CUSTOM HTML)
+       ======================================== */
     .progress-breakdown {
-        background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-        padding: 28px;
+        background: rgba(15, 23, 42, 0.6);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255,255,255,0.08);
         border-radius: 16px;
-        color: white !important;
-        margin: 24px 0;
-        box-shadow: 0 12px 32px rgba(59, 130, 246, 0.3);
-        backdrop-filter: blur(20px);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+        padding: 30px;
+        position: relative;
+        overflow: hidden;
     }
     
-    .progress-breakdown:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 16px 40px rgba(59, 130, 246, 0.4);
+    .progress-breakdown::after {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; width: 4px; height: 100%;
+        background: linear-gradient(to bottom, #3b82f6, #8b5cf6);
     }
-    
+
     .progress-breakdown h3 {
+        font-size: 1.2rem;
+        margin-bottom: 25px;
         color: white !important;
-        margin-bottom: 20px;
-        font-size: 24px;
-        font-weight: 700;
-        letter-spacing: -0.5px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
     }
-    
+
     .progress-item {
         display: flex;
         justify-content: space-between;
-        padding: 14px 0;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-        color: white !important;
-        transition: all 0.3s ease;
+        align-items: center;
+        padding: 12px 0;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
     }
-    
-    .progress-item:hover {
-        padding-left: 8px;
-        border-bottom-color: rgba(255, 255, 255, 0.3);
-    }
-    
+
     .progress-item:last-child {
         border-bottom: none;
-        font-weight: 700;
-        font-size: 20px;
-        padding-top: 18px;
-        margin-top: 8px;
-        border-top: 2px solid rgba(255, 255, 255, 0.3);
+        margin-top: 15px;
+        padding-top: 20px;
+        border-top: 2px dashed rgba(255,255,255,0.1);
     }
-    
+
     .progress-label {
-        font-size: 16px;
-        color: rgba(255, 255, 255, 0.95) !important;
-        font-weight: 500;
+        color: #94a3b8;
+        font-size: 0.95rem;
     }
-    
+
     .progress-value {
-        font-size: 16px;
+        color: white;
+        font-family: 'Inter', monospace;
         font-weight: 700;
-        color: white !important;
-        font-family: 'SF Mono', 'Courier New', monospace;
+        font-size: 1.1rem;
     }
     
     /* ========== SECTION HEADERS ========== */
@@ -534,22 +563,18 @@ st.markdown("""
     
     /* ========== LOCKED REVENUE BANNER ========== */
     .locked-revenue-banner {
-        background: linear-gradient(90deg, #1e3a8a 0%, #172554 100%);
-        padding: 15px 25px;
+        background: rgba(16, 185, 129, 0.1);
+        border: 1px solid rgba(16, 185, 129, 0.2);
         border-radius: 12px;
-        border-left: 6px solid #3b82f6;
-        margin-bottom: 20px;
+        padding: 16px 24px;
         display: flex;
-        align-items: center;
         justify-content: space-between;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        transition: all 0.3s ease;
+        align-items: center;
+        margin-bottom: 24px;
     }
     
-    .locked-revenue-banner:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 12px -1px rgba(0, 0, 0, 0.2);
-    }
+    .banner-value { color: #10b981; font-weight: 800; font-size: 1.5rem; }
+    .banner-status { background: #10b981; color: #022c22; font-size: 0.7rem; padding: 4px 8px; border-radius: 4px; font-weight: 700; }
     
     .banner-left {
         display: flex;
@@ -568,58 +593,78 @@ st.markdown("""
         letter-spacing: 1px;
     }
     
-    .banner-value {
-        font-size: 24px;
-        font-weight: 700;
-        color: white;
-    }
-    
     .banner-right {
         text-align: right;
     }
     
-    .banner-status {
-        color: #4ade80;
-        font-weight: 600;
-    }
-    
-    /* ========== STICKY FORECAST SUMMARY ========== */
+    /* ========================================
+       STICKY FOOTER
+       ======================================== */
     .sticky-forecast-bar {
         position: fixed;
-        bottom: 0;
-        left: 22rem;  /* Account for sidebar width */
-        right: 0;
-        z-index: 9999;
-        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
-        backdrop-filter: blur(20px);
-        -webkit-backdrop-filter: blur(20px);
-        border-top: 2px solid rgba(59, 130, 246, 0.5);
-        padding: 16px 32px;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 85%;
+        max-width: 1000px;
+        z-index: 999999;
+        
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 100px; /* Pill shape */
+        box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+        
+        padding: 12px 40px;
         display: flex;
         justify-content: space-between;
         align-items: center;
-        gap: 24px;
-        box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.4);
     }
-    
+
     .sticky-forecast-item {
-        text-align: center;
-        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
     }
-    
+
     .sticky-forecast-label {
-        font-size: 11px;
+        font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 1.5px;
-        opacity: 0.8;
-        margin-bottom: 4px;
-        font-weight: 600;
+        color: #94a3b8;
+        margin-bottom: 2px;
+    }
+
+    .sticky-forecast-value {
+        font-size: 1.2rem;
+        font-weight: 800;
+        color: white;
     }
     
-    .sticky-forecast-value {
-        font-size: 26px;
-        font-weight: 800;
-        letter-spacing: -0.5px;
+    .sticky-forecast-value.total {
+        font-size: 1.5rem;
+        background: linear-gradient(to right, #3b82f6, #8b5cf6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .sticky-forecast-divider {
+        width: 1px;
+        height: 25px;
+        background: rgba(255,255,255,0.1);
+    }
+
+    /* Mobile handling for footer */
+    @media (max-width: 768px) {
+        .sticky-forecast-bar {
+            width: 95%;
+            border-radius: 16px;
+            bottom: 10px;
+            padding: 10px 15px;
+            flex-wrap: wrap;
+        }
     }
     
     .sticky-forecast-value.invoiced {
@@ -637,15 +682,6 @@ st.markdown("""
         text-shadow: 0 0 20px rgba(96, 165, 250, 0.5);
     }
     
-    .sticky-forecast-value.total {
-        font-size: 30px;
-        background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        filter: drop-shadow(0 0 20px rgba(139, 92, 246, 0.5));
-    }
-    
     .sticky-forecast-value.gap-behind {
         color: #f87171;
         text-shadow: 0 0 20px rgba(248, 113, 113, 0.5);
@@ -654,19 +690,6 @@ st.markdown("""
     .sticky-forecast-value.gap-ahead {
         color: #4ade80;
         text-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
-    }
-    
-    .sticky-forecast-divider {
-        width: 1px;
-        height: 50px;
-        background: linear-gradient(180deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-    }
-    
-    /* When sidebar is collapsed, adjust position */
-    @media (max-width: 768px) {
-        .sticky-forecast-bar {
-            left: 0;
-        }
     }
     
     /* Add padding at bottom of page to prevent content from hiding behind sticky bar */
@@ -2216,10 +2239,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     # We use this dict to store the ACTUAL dataframes to be exported
     export_buckets = {}
     
-    # --- SELECT ALL / UNSELECT ALL BUTTONS ---
-    sel_col1, sel_col2, sel_col3 = st.columns([1, 1, 2])
-    with sel_col1:
-        if st.button("☑️ Select All", key=f"select_all_{rep_name}", use_container_width=True):
+    # --- SELECT ALL / UNSELECT ALL BUTTONS (Toolbar style) ---
+    st.markdown("#### 🛠️ Forecast Builder")
+    t_col1, t_col2 = st.columns([1, 1])
+    with t_col1:
+        if st.button("☑️ Select All Categories", key=f"select_all_{rep_name}", type="secondary", use_container_width=True):
             # Select all NetSuite categories that have data
             for key in ns_categories.keys():
                 df = ns_dfs.get(key, pd.DataFrame())
@@ -2234,8 +2258,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     st.session_state[f"chk_{key}_{rep_name}"] = True
             st.rerun()
     
-    with sel_col2:
-        if st.button("☐ Unselect All", key=f"unselect_all_{rep_name}", use_container_width=True):
+    with t_col2:
+        if st.button("☐ Reset Selection", key=f"unselect_all_{rep_name}", type="secondary", use_container_width=True):
             # Unselect all NetSuite categories
             for key in ns_categories.keys():
                 st.session_state[f"chk_{key}_{rep_name}"] = False
@@ -3497,37 +3521,30 @@ def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None
 # ========== ENHANCED CHART FUNCTIONS (GEMINI ENHANCEMENTS) ==========
 
 def create_sexy_gauge(current_val, target_val, title="Progress to Quota"):
-    """Enhanced gauge with color zones and delta reference"""
+    """Enhanced cyber-style gauge"""
     fig = go.Figure(go.Indicator(
         mode = "gauge+number+delta",
         value = current_val,
         domain = {'x': [0, 1], 'y': [0, 1]},
-        title = {'text': title, 'font': {'size': 20, 'color': 'white'}},
+        title = {'text': title.upper(), 'font': {'size': 12, 'color': '#94a3b8'}},
         delta = {
             'reference': target_val, 
             'increasing': {'color': "#10b981"},
             'decreasing': {'color': "#ef4444"},
-            'font': {'size': 16}
+            'font': {'size': 14}
         },
-        number = {'font': {'size': 32, 'color': 'white'}},
+        number = {'font': {'size': 40, 'color': 'white', 'family': 'Inter'}, 'prefix': "$"},
         gauge = {
-            'axis': {
-                'range': [None, target_val * 1.2], 
-                'tickwidth': 1, 
-                'tickcolor': "rgba(255,255,255,0.3)",
-                'tickfont': {'color': 'rgba(255,255,255,0.7)', 'size': 10}
-            },
-            'bar': {'color': "#3b82f6", 'thickness': 0.8},
-            'bgcolor': "rgba(0,0,0,0)",
-            'borderwidth': 2,
-            'bordercolor': "rgba(255,255,255,0.2)",
+            'axis': {'range': [None, max(target_val * 1.1, current_val * 1.1)], 'visible': False},
+            'bar': {'color': "#3b82f6", 'thickness': 1},
+            'bgcolor': "rgba(255,255,255,0.05)",
+            'borderwidth': 0,
             'steps': [
-                {'range': [0, target_val * 0.7], 'color': 'rgba(239, 68, 68, 0.2)'},  # Red zone
-                {'range': [target_val * 0.7, target_val], 'color': 'rgba(251, 191, 36, 0.2)'}  # Yellow zone
+                 {'range': [0, target_val], 'color': "rgba(30, 41, 59, 0.5)"}
             ],
             'threshold': {
                 'line': {'color': "#10b981", 'width': 4},
-                'thickness': 0.75,
+                'thickness': 1,
                 'value': target_val
             }
         }
@@ -3535,9 +3552,9 @@ def create_sexy_gauge(current_val, target_val, title="Progress to Quota"):
     fig.update_layout(
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': 'white'},
-        height=280,
-        margin=dict(l=40, r=40, t=60, b=40)
+        font={'color': 'white', 'family': 'Inter'},
+        height=250,
+        margin=dict(l=30, r=30, t=40, b=10)
     )
     return fig
 
@@ -3703,7 +3720,7 @@ def create_gap_chart(metrics, title):
         name='NetSuite Orders',
         x=['Progress'],
         y=[metrics['total_orders'] if 'total_orders' in metrics else metrics['orders']],
-        marker_color='#1E88E5',
+        marker_color='#3b82f6',
         text=[f"${metrics['total_orders'] if 'total_orders' in metrics else metrics['orders']:,.0f}"],
         textposition='auto',
         textfont=dict(size=14)
@@ -3713,7 +3730,7 @@ def create_gap_chart(metrics, title):
         name='Expect/Commit',
         x=['Progress'],
         y=[metrics['expect_commit']],
-        marker_color='#43A047',
+        marker_color='#10b981',
         text=[f"${metrics['expect_commit']:,.0f}"],
         textposition='auto',
         textfont=dict(size=14)
@@ -3725,7 +3742,7 @@ def create_gap_chart(metrics, title):
         x=['Progress'],
         y=[metrics['total_quota'] if 'total_quota' in metrics else metrics['quota']],
         mode='markers',
-        marker=dict(size=12, color='#DC3912', symbol='diamond'),
+        marker=dict(size=12, color='#ef4444', symbol='diamond'),
         text=[f"Goal: ${metrics['total_quota'] if 'total_quota' in metrics else metrics['quota']:,.0f}"],
         textposition='top center'
     ))
@@ -3737,7 +3754,7 @@ def create_gap_chart(metrics, title):
         x=['Progress'],
         y=[potential],
         mode='markers',
-        marker=dict(size=12, color='#FB8C00', symbol='diamond'),
+        marker=dict(size=12, color='#f59e0b', symbol='diamond'),
         text=[f"Potential: ${potential:,.0f}"],
         textposition='bottom center'
     ))
@@ -3747,10 +3764,18 @@ def create_gap_chart(metrics, title):
         barmode='stack',
         height=400,
         showlegend=True,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            font=dict(color="#94a3b8")
+        ),
         yaxis_title="Amount ($)",
         xaxis_title="",
-        hovermode='x unified'
+        hovermode='x unified',
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#f8fafc", family="Inter"),
+        xaxis=dict(showgrid=False, tickfont=dict(color='#94a3b8')),
+        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', tickfont=dict(color='#94a3b8'))
     )
     
     return fig
@@ -3764,171 +3789,89 @@ def get_col_by_index(df, index):
 
 def create_enhanced_waterfall_chart(metrics, title, mode):
     """
-    Creates a waterfall chart for forecast progress to address visibility issues with small segments.
-    Each component gets its own visible bar height proportional to its value, making small segments readable.
-    
-    Args:
-        metrics: dict with keys like 'orders', 'pending_fulfillment', etc., and 'total_quota', 'total_progress'
-        title: Chart title
-        mode: 'base' or 'full' to determine which components to include
+    Creates a high-end waterfall chart
     """
     # Define the steps based on mode
     if mode == "base":
         steps = [
-            {'label': 'Invoiced', 'value': metrics['orders'], 'color': '#1E88E5'},
-            {'label': 'Pending Fulfillment', 'value': metrics['pending_fulfillment'], 'color': '#FFC107'},
-            {'label': 'Pending Approval', 'value': metrics['pending_approval'], 'color': '#FB8C00'},
-            {'label': 'HubSpot Expect/Commit', 'value': metrics['expect_commit'], 'color': '#43A047'},
+            {'label': 'Invoiced', 'value': metrics['orders'], 'color': '#3b82f6'},
+            {'label': 'Pending Full.', 'value': metrics['pending_fulfillment'], 'color': '#f59e0b'},
+            {'label': 'Pending Appr.', 'value': metrics['pending_approval'], 'color': '#f97316'},
+            {'label': 'Pipeline (Hi-Conf)', 'value': metrics['expect_commit'], 'color': '#10b981'},
         ]
     elif mode == "full":
         steps = [
-            {'label': 'Invoiced', 'value': metrics['orders'], 'color': '#1E88E5'},
-            {'label': 'Pending Fulfillment', 'value': metrics['pending_fulfillment'], 'color': '#FFC107'},
-            {'label': 'PF No Date', 'value': metrics.get('pending_fulfillment_no_date', 0), 'color': '#FFE082'},
-            {'label': 'Pending Approval', 'value': metrics['pending_approval'], 'color': '#FB8C00'},
-            {'label': 'PA No Date', 'value': metrics.get('pending_approval_no_date', 0), 'color': '#FFCC80'},
-            {'label': 'Old PA (>2 weeks)', 'value': metrics.get('pending_approval_old', 0), 'color': '#FF9800'},
-            {'label': 'HubSpot Expect/Commit', 'value': metrics['expect_commit'], 'color': '#43A047'},
+            {'label': 'Invoiced', 'value': metrics['orders'], 'color': '#3b82f6'},
+            {'label': 'Pending Full.', 'value': metrics['pending_fulfillment'], 'color': '#f59e0b'},
+            {'label': 'PF (No Date)', 'value': metrics.get('pending_fulfillment_no_date', 0), 'color': '#d97706'},
+            {'label': 'Pending Appr.', 'value': metrics['pending_approval'], 'color': '#f97316'},
+            {'label': 'PA (No Date)', 'value': metrics.get('pending_approval_no_date', 0), 'color': '#ea580c'},
+            {'label': 'PA (Old)', 'value': metrics.get('pending_approval_old', 0), 'color': '#c2410c'},
+            {'label': 'Pipeline', 'value': metrics['expect_commit'], 'color': '#10b981'},
         ]
     else:
         return None
 
-    # Filter out zero-value steps to avoid clutter
     steps = [step for step in steps if step['value'] > 0]
-    
-    if not steps:
-        return None
+    if not steps: return None
 
-    # Calculate totals
     current_total = sum(step['value'] for step in steps)
     quota = metrics.get('total_quota', metrics.get('quota', 0))
     gap = quota - current_total
     
-    # Create figure
     fig = go.Figure()
     
-    # Add each component as a separate bar trace for full color control
     cumulative = 0
     for step in steps:
         fig.add_trace(go.Bar(
-            name=step['label'],
-            x=[step['label']],
-            y=[step['value']],
+            name=step['label'], x=[step['label']], y=[step['value']],
             marker_color=step['color'],
-            text=[f"${step['value']:,.0f}"],
-            textposition='outside',
-            textfont=dict(size=12),  # Remove fixed color to auto-adapt
-            hovertemplate=f"<b>{step['label']}</b><br>${step['value']:,.0f}<br>Cumulative: ${cumulative + step['value']:,.0f}<extra></extra>",
-            showlegend=True
+            text=[f"${step['value']/1000:.0f}k"], textposition='auto',
+            hovertemplate=f"<b>{step['label']}</b><br>${step['value']:,.0f}<extra></extra>",
+            marker=dict(line=dict(width=0))
         ))
         cumulative += step['value']
     
-    # Add total bar showing cumulative sum
+    # Total Bar
     fig.add_trace(go.Bar(
-        name='TOTAL FORECAST',
-        x=['TOTAL'],
-        y=[current_total],
-        marker_color='#7B1FA2',
-        marker_line=dict(width=2, color='#4A148C'),
-        text=[f"${current_total:,.0f}"],
-        textposition='outside',
-        textfont=dict(size=14, family='Arial Black'),  # Remove fixed color
-        hovertemplate=f"<b>Total Forecast</b><br>${current_total:,.0f}<extra></extra>",
-        showlegend=True
+        name='FORECAST', x=['TOTAL'], y=[current_total],
+        marker_color='#8b5cf6',
+        text=[f"${current_total/1000:.0f}k"], textposition='auto',
+        hovertemplate=f"<b>Total Forecast</b><br>${current_total:,.0f}<extra></extra>"
     ))
     
-    # Add gap bar if exists
+    # Gap Bar (Ghost bar style)
     if gap != 0:
-        gap_color = '#DC3912' if gap > 0 else '#43A047'
-        gap_label = 'Gap to Goal' if gap > 0 else 'Over Goal'
+        gap_color = 'rgba(239, 68, 68, 0.3)' if gap > 0 else 'rgba(16, 185, 129, 0.3)'
+        gap_label = 'Gap' if gap > 0 else 'Surplus'
         fig.add_trace(go.Bar(
-            name=gap_label,
-            x=[gap_label],
-            y=[abs(gap)],
+            name=gap_label, x=[gap_label], y=[abs(gap)],
             marker_color=gap_color,
-            text=[f"${gap:,.0f}"],
-            textposition='outside',
-            textfont=dict(size=12),  # Remove fixed color
-            hovertemplate=f"<b>{gap_label}</b><br>${gap:,.0f}<extra></extra>",
-            showlegend=True
+            marker_line=dict(width=1, color='#ef4444' if gap > 0 else '#10b981'),
+            text=[f"${abs(gap)/1000:.0f}k"], textposition='auto',
+            hovertemplate=f"<b>{gap_label}</b><br>${abs(gap):,.0f}<extra></extra>"
         ))
     
-    # Add quota reference line
-    fig.add_hline(
-        y=quota,
-        line_dash="dash",
-        line_color="#DC3912",
-        line_width=2,
-        annotation_text=f"Quota Goal: ${quota:,.0f}",
-        annotation_position="right"
+    # Quota Line
+    fig.add_shape(type="line",
+        x0=-0.5, x1=len(steps)+1.5, y0=quota, y1=quota,
+        line=dict(color="white", width=2, dash="dash"),
     )
-    
-    # Add best case potential line if in base mode
-    best_opp = metrics.get('best_opp', 0)
-    if best_opp > 0:
-        potential = current_total + best_opp
-        fig.add_hline(
-            y=potential,
-            line_dash="dot",
-            line_color="#FB8C00",
-            line_width=2,
-            annotation_text=f"Potential: ${potential:,.0f}",
-            annotation_position="right"
-        )
-    
-    # Customize layout
+    fig.add_annotation(x=len(steps)+1, y=quota, text="QUOTA", showarrow=False, yshift=10, font=dict(color="white", size=10))
+
     fig.update_layout(
-        title=dict(
-            text=title,
-            font=dict(size=18)  # Remove fixed color to auto-adapt
-        ),
-        xaxis_title="Forecast Components",
-        yaxis_title="Amount ($)",
+        title=dict(text=title.upper(), font=dict(size=14, color="#94a3b8")),
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#f8fafc", family="Inter"),
+        showlegend=False,
+        height=450,
+        margin=dict(l=20, r=20, t=50, b=20),
+        yaxis=dict(showgrid=False, showticklabels=False, fixedrange=True),
+        xaxis=dict(showgrid=False, fixedrange=True),
         barmode='group',
-        height=600,
-        showlegend=True,
-        legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=1.02,
-            bgcolor="rgba(255,255,255,0.1)",  # Semi-transparent to work in both modes
-            bordercolor="rgba(128,128,128,0.5)",
-            borderwidth=1
-        ),
-        plot_bgcolor='rgba(0,0,0,0)',  # Transparent background
-        paper_bgcolor='rgba(0,0,0,0)',  # Transparent paper
-        font=dict(color=None),  # Auto font color
-        yaxis=dict(
-            gridcolor='rgba(128,128,128,0.2)',
-            zeroline=True,
-            zerolinecolor='rgba(128,128,128,0.5)',
-            zerolinewidth=1
-        ),
-        xaxis=dict(
-            tickangle=-45,
-            automargin=True
-        ),
-        margin=dict(l=70, r=200, t=100, b=120),
-        annotations=[
-            dict(
-                x=1.02,
-                y=1.05,
-                xref='paper',
-                yref='paper',
-                text=f"<b>Current Total:</b> ${current_total:,.0f}<br><b>Quota:</b> ${quota:,.0f}<br><b>Gap:</b> ${gap:,.0f}",
-                showarrow=False,
-                font=dict(size=13, color="black"),
-                align="left",
-                bgcolor="rgba(255,255,255,0.9)",
-                bordercolor="#333333",
-                borderwidth=1,
-                borderpad=8
-            )
-        ]
+        bargap=0.15
     )
-    
     return fig
 
 def create_status_breakdown_chart(deals_df, rep_name=None):
@@ -3949,10 +3892,10 @@ def create_status_breakdown_chart(deals_df, rep_name=None):
     status_summary = deals_df.groupby('Status')['Amount'].sum().reset_index()
     
     color_map = {
-        'Expect': '#1E88E5',
-        'Commit': '#43A047',
-        'Best Case': '#FB8C00',
-        'Opportunity': '#8E24AA'
+        'Expect': '#3b82f6',
+        'Commit': '#10b981',
+        'Best Case': '#f59e0b',
+        'Opportunity': '#8b5cf6'
     }
     
     fig = px.pie(
@@ -3966,7 +3909,17 @@ def create_status_breakdown_chart(deals_df, rep_name=None):
     )
     
     fig.update_traces(textposition='inside', textinfo='percent+label')
-    fig.update_layout(height=400)
+    fig.update_layout(
+        height=400,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#f8fafc", family="Inter"),
+        showlegend=True,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            font=dict(color="#94a3b8")
+        )
+    )
     
     return fig
 
@@ -3989,10 +3942,10 @@ def create_pipeline_breakdown_chart(deals_df, rep_name=None):
     pipeline_summary = deals_df.groupby(['Pipeline', 'Status'])['Amount'].sum().reset_index()
     
     color_map = {
-        'Expect': '#1E88E5',
-        'Commit': '#43A047',
-        'Best Case': '#FB8C00',
-        'Opportunity': '#8E24AA'
+        'Expect': '#3b82f6',
+        'Commit': '#10b981',
+        'Best Case': '#f59e0b',
+        'Opportunity': '#8b5cf6'
     }
     
     fig = px.bar(
@@ -4012,11 +3965,21 @@ def create_pipeline_breakdown_chart(deals_df, rep_name=None):
         height=450,
         yaxis_title="Amount ($)",
         xaxis_title="Pipeline",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#f8fafc", family="Inter"),
         xaxis=dict(
             automargin=True,
-            tickangle=-45
+            tickangle=-45,
+            showgrid=False,
+            tickfont=dict(color='#94a3b8')
         ),
-        yaxis=dict(automargin=True),
+        yaxis=dict(
+            automargin=True,
+            showgrid=True,
+            gridcolor='rgba(255,255,255,0.05)',
+            tickfont=dict(color='#94a3b8')
+        ),
         margin=dict(l=50, r=50, t=80, b=100),
         showlegend=True,
         legend=dict(
@@ -4024,7 +3987,8 @@ def create_pipeline_breakdown_chart(deals_df, rep_name=None):
             yanchor="bottom",
             y=1.02,
             xanchor="right",
-            x=1
+            x=1,
+            font=dict(color="#94a3b8")
         )
     )
     
@@ -4061,10 +4025,10 @@ def create_deals_timeline(deals_df, rep_name=None):
     timeline_df['Quarter'] = timeline_df.apply(get_quarter, axis=1)
     
     color_map = {
-        'Expect': '#1E88E5',
-        'Commit': '#43A047',
-        'Best Case': '#FB8C00',
-        'Opportunity': '#8E24AA'
+        'Expect': '#3b82f6',
+        'Commit': '#10b981',
+        'Best Case': '#f59e0b',
+        'Opportunity': '#8b5cf6'
     }
     
     fig = px.scatter(
@@ -4086,7 +4050,7 @@ def create_deals_timeline(deals_df, rep_name=None):
         fig.add_vline(
             x=q4_boundary, 
             line_dash="dash", 
-            line_color="red",
+            line_color="#ef4444",
             annotation_text="Q4/Q1 Boundary"
         )
     except:
@@ -4095,7 +4059,17 @@ def create_deals_timeline(deals_df, rep_name=None):
     fig.update_layout(
         height=400,
         yaxis_title="Deal Amount ($)",
-        xaxis_title="Expected Close Date"
+        xaxis_title="Expected Close Date",
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#f8fafc", family="Inter"),
+        showlegend=True,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            font=dict(color="#94a3b8")
+        ),
+        xaxis=dict(showgrid=False, tickfont=dict(color='#94a3b8')),
+        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', tickfont=dict(color='#94a3b8'))
     )
     
     return fig
@@ -4123,7 +4097,17 @@ def create_invoice_status_chart(invoices_df, rep_name=None):
     )
     
     fig.update_traces(textposition='inside', textinfo='percent+label')
-    fig.update_layout(height=400)
+    fig.update_layout(
+        height=400,
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        font=dict(color="#f8fafc", family="Inter"),
+        showlegend=True,
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            font=dict(color="#94a3b8")
+        )
+    )
     
     return fig
 
@@ -4251,26 +4235,26 @@ def display_progress_breakdown(metrics):
     
     st.markdown(f"""
     <div class="progress-breakdown">
-        <h3>💰 Section 1: The Money We Can Count On</h3>
+        <h3>💰 The Safe Bet <span style="font-size: 0.8em; opacity: 0.6; font-weight: 400; margin-left: auto;">High Confidence Revenue</span></h3>
         <div class="progress-item">
-            <span class="progress-label">✅ Already Celebrating (Invoiced & Shipped)</span>
-            <span class="progress-value">${metrics['orders']:,.0f}</span>
+            <span class="progress-label">✅ Invoiced & Shipped</span>
+            <span class="progress-value" style="color: #3b82f6;">${metrics['orders']:,.0f}</span>
         </div>
         <div class="progress-item">
-            <span class="progress-label">📦 In the Warehouse (Just Add Shipping Label)</span>
-            <span class="progress-value">${metrics['pending_fulfillment']:,.0f}</span>
+            <span class="progress-label">📦 Pending Fulfillment</span>
+            <span class="progress-value" style="color: #f59e0b;">${metrics['pending_fulfillment']:,.0f}</span>
         </div>
         <div class="progress-item">
-            <span class="progress-label">⏳ Waiting for the Magic Signature</span>
-            <span class="progress-value">${metrics['pending_approval']:,.0f}</span>
+            <span class="progress-label">⏳ Pending Approval</span>
+            <span class="progress-value" style="color: #f97316;">${metrics['pending_approval']:,.0f}</span>
         </div>
         <div class="progress-item">
-            <span class="progress-label">🎯 Deals We're Banking On (HubSpot Expect/Commit)</span>
-            <span class="progress-value">${metrics['expect_commit']:,.0f}</span>
+            <span class="progress-label">🎯 HubSpot Expect/Commit</span>
+            <span class="progress-value" style="color: #10b981;">${metrics['expect_commit']:,.0f}</span>
         </div>
         <div class="progress-item">
-            <span class="progress-label">🎯 THE SAFE BET TOTAL</span>
-            <span class="progress-value">${metrics['total_progress']:,.0f}</span>
+            <span class="progress-label" style="color: white; font-weight: 600;">TOTAL CONFIRMED</span>
+            <span class="progress-value" style="font-size: 1.4rem; background: linear-gradient(to right, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">${metrics['total_progress']:,.0f}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
