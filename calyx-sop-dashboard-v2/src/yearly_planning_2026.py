@@ -216,6 +216,12 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     if orders.columns.duplicated().any():
         orders = orders.loc[:, ~orders.columns.duplicated()]
     
+    # === CONVERT DATE COLUMNS TO DATETIME ===
+    date_columns = ['Customer Promise Date', 'Projected Date', 'Pending Approval Date']
+    for col in date_columns:
+        if col in orders.columns:
+            orders[col] = pd.to_datetime(orders[col], errors='coerce')
+    
     # Helper function
     def get_col_by_idx(df, index):
         if df is not None and len(df.columns) > index:
