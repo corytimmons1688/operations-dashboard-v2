@@ -91,6 +91,31 @@ def load_all_data_yearly():
     # Load sales orders data from NetSuite
     sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
     
+    # Process Dashboard Info - rename columns
+    if not dashboard_df.empty:
+        if len(dashboard_df.columns) >= 3:
+            dashboard_df.columns = ['Rep Name', 'Quota', 'NetSuite Orders']
+        
+        # Filter out empty rows
+        dashboard_df = dashboard_df[dashboard_df['Rep Name'].notna() & (dashboard_df['Rep Name'] != '')]
+        
+        # Clean numeric values
+        def clean_numeric(value):
+            if pd.isna(value) or str(value).strip() == '':
+                return 0
+            cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
+            try:
+                return float(cleaned)
+            except:
+                return 0
+        
+        if 'Quota' in dashboard_df.columns:
+            dashboard_df['Quota'] = dashboard_df['Quota'].apply(clean_numeric)
+        if 'NetSuite Orders' in dashboard_df.columns:
+            dashboard_df['NetSuite Orders'] = dashboard_df['NetSuite Orders'].apply(clean_numeric)
+        
+        dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
+    
     # Process deals data
     if not deals_df.empty and len(deals_df.columns) >= 6:
         col_names = deals_df.columns.tolist()
