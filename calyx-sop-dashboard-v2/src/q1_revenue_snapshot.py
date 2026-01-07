@@ -74,627 +74,625 @@ try:
 except:
     pass  # Page config already set by parent app
 
-# Custom CSS for styling - High-End "Cyber-Executive" UI
+# Custom CSS for styling - DRAMATIC DARK MODE UI
 st.markdown("""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
-    /* ========================================
-       GLOBAL THEME
-       ======================================== */
-    :root {
-        --bg-color: #0f172a;
-        --card-bg: rgba(30, 41, 59, 0.7);
-        --accent-primary: #3b82f6;
-        --accent-glow: rgba(59, 130, 246, 0.5);
-        --text-primary: #f8fafc;
-        --text-secondary: #94a3b8;
-        --success: #10b981;
-        --warning: #f59e0b;
-        --danger: #ef4444;
-    }
-
-    .stApp {
-        background-color: var(--bg-color);
-        background-image: 
-            radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.15) 0px, transparent 50%),
-            radial-gradient(at 100% 0%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
-        font-family: 'Inter', sans-serif;
-    }
-
-    h1, h2, h3 {
-        color: var(--text-primary) !important;
-        font-weight: 800 !important;
-        letter-spacing: -0.5px;
+    /* ==============================================
+       FORCE DARK THEME EVERYWHERE
+       ============================================== */
+    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], 
+    .main, .block-container, [data-testid="stVerticalBlock"] {
+        background: #0a0f1a !important;
+        color: #e2e8f0 !important;
     }
     
-    p, label, span {
-        color: var(--text-secondary);
+    /* Main app container */
+    .stApp {
+        background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 50%, #1e1b4b 100%) !important;
+    }
+    
+    /* Override any white backgrounds */
+    div, section, header, main, article {
+        background-color: transparent !important;
     }
 
-    /* ========================================
-       METRIC CARDS
-       ======================================== */
+    /* ==============================================
+       TYPOGRAPHY - CRISP AND MODERN
+       ============================================== */
+    * {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+    }
+    
+    h1 {
+        font-size: 2.5rem !important;
+        font-weight: 900 !important;
+        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        background-clip: text !important;
+        letter-spacing: -1px !important;
+        margin-bottom: 1rem !important;
+    }
+    
+    h2, h3, h4 {
+        color: #f1f5f9 !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.5px !important;
+    }
+    
+    p, span, label, div {
+        color: #cbd5e1 !important;
+    }
+    
+    /* ==============================================
+       METRIC CARDS - GLOWING GLASS EFFECT
+       ============================================== */
     [data-testid="stMetric"] {
-        background: linear-gradient(145deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.01) 100%);
-        backdrop-filter: blur(10px);
-        border: 1px solid rgba(255,255,255,0.05);
-        border-radius: 16px;
-        padding: 24px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        overflow: hidden;
-        position: relative;
+        background: linear-gradient(145deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%) !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+        border-radius: 20px !important;
+        padding: 1.5rem !important;
+        box-shadow: 
+            0 0 20px rgba(99, 102, 241, 0.15),
+            0 8px 32px rgba(0, 0, 0, 0.4),
+            inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+        position: relative !important;
+        overflow: hidden !important;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
-
+    
     [data-testid="stMetric"]::before {
-        content: "";
-        position: absolute;
-        top: 0; left: 0; right: 0; height: 1px;
-        background: linear-gradient(90deg, transparent, var(--accent-primary), transparent);
-        opacity: 0;
-        transition: opacity 0.3s;
+        content: "" !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        height: 3px !important;
+        background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899) !important;
+        opacity: 0.8 !important;
     }
-
+    
     [data-testid="stMetric"]:hover {
-        transform: translateY(-5px);
-        box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1);
-        border-color: rgba(59, 130, 246, 0.3);
+        transform: translateY(-8px) scale(1.02) !important;
+        border-color: rgba(139, 92, 246, 0.6) !important;
+        box-shadow: 
+            0 0 40px rgba(139, 92, 246, 0.3),
+            0 20px 60px rgba(0, 0, 0, 0.5) !important;
     }
-
-    [data-testid="stMetric"]:hover::before {
-        opacity: 1;
-    }
-
+    
     [data-testid="stMetricLabel"] {
+        font-size: 0.75rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1.5px !important;
+        color: #94a3b8 !important;
+        margin-bottom: 0.5rem !important;
+    }
+    
+    [data-testid="stMetricValue"] {
+        font-size: 2rem !important;
+        font-weight: 800 !important;
+        background: linear-gradient(135deg, #ffffff 0%, #60a5fa 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        background-clip: text !important;
+        line-height: 1.2 !important;
+    }
+    
+    [data-testid="stMetricDelta"] {
         font-size: 0.85rem !important;
         font-weight: 600 !important;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: var(--text-secondary) !important;
+    }
+    
+    [data-testid="stMetricDelta"] svg {
+        display: inline !important;
     }
 
-    [data-testid="stMetricValue"] {
-        font-size: 2.2rem !important;
-        font-weight: 800 !important;
-        background: linear-gradient(to right, #fff, #cbd5e1);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-
-    /* ========================================
-       SIDEBAR & NAVIGATION
-       ======================================== */
+    /* ==============================================
+       SIDEBAR - SLEEK DARK PANEL
+       ============================================== */
     [data-testid="stSidebar"] {
-        background-color: #020617;
-        border-right: 1px solid rgba(255,255,255,0.05);
+        background: linear-gradient(180deg, #020617 0%, #0f172a 100%) !important;
+        border-right: 1px solid rgba(99, 102, 241, 0.2) !important;
     }
     
-    /* Navigation Radios look like Pills */
-    div[data-testid="stRadio"] > div {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
+    [data-testid="stSidebar"] > div:first-child {
+        background: transparent !important;
     }
     
-    div[data-testid="stRadio"] label {
-        background: rgba(255, 255, 255, 0.03) !important;
-        border: 1px solid rgba(255, 255, 255, 0.05) !important;
-        padding: 12px 16px !important;
+    [data-testid="stSidebar"] [data-testid="stMarkdown"] {
+        color: #e2e8f0 !important;
+    }
+    
+    /* Sidebar radio buttons as cards */
+    [data-testid="stSidebar"] [data-testid="stRadio"] > div > label {
+        background: rgba(30, 41, 59, 0.6) !important;
+        border: 1px solid rgba(71, 85, 105, 0.5) !important;
         border-radius: 12px !important;
-        transition: all 0.2s ease;
-    }
-
-    div[data-testid="stRadio"] label:hover {
-        background: rgba(255, 255, 255, 0.08) !important;
-        border-color: rgba(255,255,255,0.2) !important;
+        padding: 14px 18px !important;
+        margin: 4px 0 !important;
+        transition: all 0.3s ease !important;
     }
     
-    /* Selected Radio */
-    div[data-testid="stRadio"] label[data-checked="true"] {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+    [data-testid="stSidebar"] [data-testid="stRadio"] > div > label:hover {
+        background: rgba(51, 65, 85, 0.8) !important;
+        border-color: #6366f1 !important;
+        transform: translateX(4px) !important;
+    }
+    
+    [data-testid="stSidebar"] [data-testid="stRadio"] > div > label[data-checked="true"] {
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
         border: none !important;
-    }
-    
-    div[data-testid="stRadio"] label[data-checked="true"] p {
-        color: white !important;
-        font-weight: 600 !important;
+        box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4) !important;
     }
 
-    /* ========================================
-       DATAFRAMES & TABLES
-       ======================================== */
-    [data-testid="stDataFrame"] {
-        background: var(--card-bg);
-        border-radius: 12px;
-        border: 1px solid rgba(255,255,255,0.05);
-        padding: 4px;
-    }
-    
-    [data-testid="stDataFrame"] table {
-        font-family: 'Inter', sans-serif !important;
-    }
-
-    /* ========================================
-       BUTTONS
-       ======================================== */
+    /* ==============================================
+       BUTTONS - GRADIENT WITH GLOW
+       ============================================== */
     .stButton > button {
-        background: linear-gradient(180deg, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0.05) 100%);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px;
-        font-weight: 600;
-        transition: all 0.2s;
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.75rem 1.5rem !important;
+        font-weight: 600 !important;
+        font-size: 0.9rem !important;
+        letter-spacing: 0.3px !important;
+        box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4) !important;
+        transition: all 0.3s ease !important;
     }
     
     .stButton > button:hover {
-        background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.1) 100%);
-        border-color: white;
-        transform: scale(1.02);
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 25px rgba(99, 102, 241, 0.5) !important;
+    }
+    
+    .stButton > button:active {
+        transform: translateY(0) !important;
     }
 
-    /* Primary Actions */
-    button[kind="primary"] {
-        background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
-        border: none !important;
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+    /* ==============================================
+       DATAFRAMES & TABLES - DARK GLASS
+       ============================================== */
+    [data-testid="stDataFrame"], .stDataFrame {
+        background: rgba(15, 23, 42, 0.8) !important;
+        border: 1px solid rgba(71, 85, 105, 0.3) !important;
+        border-radius: 16px !important;
+        overflow: hidden !important;
+    }
+    
+    [data-testid="stDataFrame"] > div {
+        background: transparent !important;
+    }
+    
+    /* Table styling */
+    .stDataFrame table {
+        background: transparent !important;
+    }
+    
+    .stDataFrame th {
+        background: rgba(30, 41, 59, 0.9) !important;
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        font-size: 0.75rem !important;
+        letter-spacing: 0.5px !important;
+        border-bottom: 2px solid rgba(99, 102, 241, 0.3) !important;
+    }
+    
+    .stDataFrame td {
+        background: rgba(15, 23, 42, 0.5) !important;
+        color: #cbd5e1 !important;
+        border-bottom: 1px solid rgba(51, 65, 85, 0.5) !important;
+    }
+    
+    .stDataFrame tr:hover td {
+        background: rgba(51, 65, 85, 0.6) !important;
     }
 
-    /* ========== EXPANDERS ========== */
+    /* ==============================================
+       EXPANDERS - COLLAPSIBLE CARDS
+       ============================================== */
     [data-testid="stExpander"] {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
-        backdrop-filter: blur(10px);
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-        margin: 12px 0;
+        background: rgba(30, 41, 59, 0.5) !important;
+        border: 1px solid rgba(71, 85, 105, 0.4) !important;
+        border-radius: 16px !important;
+        margin: 12px 0 !important;
+        overflow: hidden !important;
+    }
+    
+    [data-testid="stExpander"] summary {
+        background: rgba(30, 41, 59, 0.8) !important;
+        color: #f1f5f9 !important;
+        font-weight: 600 !important;
+        padding: 1rem 1.25rem !important;
     }
     
     [data-testid="stExpander"]:hover {
-        border-color: rgba(59, 130, 246, 0.3);
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        border-color: rgba(99, 102, 241, 0.5) !important;
     }
     
-    /* ========================================
-       PROGRESS BREAKDOWN (CUSTOM HTML)
-       ======================================== */
-    .progress-breakdown {
-        background: rgba(15, 23, 42, 0.6);
-        backdrop-filter: blur(12px);
-        border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 16px;
-        padding: 30px;
-        position: relative;
-        overflow: hidden;
-    }
-    
-    .progress-breakdown::after {
-        content: "";
-        position: absolute;
-        top: 0; left: 0; width: 4px; height: 100%;
-        background: linear-gradient(to bottom, #3b82f6, #8b5cf6);
+    [data-testid="stExpander"] > div {
+        background: transparent !important;
     }
 
-    .progress-breakdown h3 {
-        font-size: 1.2rem;
-        margin-bottom: 25px;
-        color: white !important;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-
-    .progress-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 12px 0;
-        border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-
-    .progress-item:last-child {
-        border-bottom: none;
-        margin-top: 15px;
-        padding-top: 20px;
-        border-top: 2px dashed rgba(255,255,255,0.1);
-    }
-
-    .progress-label {
-        color: #94a3b8;
-        font-size: 0.95rem;
-    }
-
-    .progress-value {
-        color: white;
-        font-family: 'Inter', monospace;
-        font-weight: 700;
-        font-size: 1.1rem;
-    }
-    
-    /* ========== SECTION HEADERS ========== */
-    .section-header {
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
-        backdrop-filter: blur(10px);
-        padding: 16px 20px;
-        border-radius: 12px;
-        margin: 20px 0;
-        font-weight: 700;
-        border: 1px solid rgba(59, 130, 246, 0.2);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-        letter-spacing: -0.3px;
-    }
-    
-    .section-header:hover {
-        border-color: rgba(59, 130, 246, 0.4);
-        transform: translateX(4px);
-    }
-    
-    /* ========== DRILL-DOWN SECTIONS ========== */
-    .drill-down-section {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
-        backdrop-filter: blur(10px);
-        padding: 16px;
-        border-radius: 12px;
-        margin: 12px 0;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    }
-    
-    .drill-down-section:hover {
-        border-color: rgba(59, 130, 246, 0.2);
-        box-shadow: 0 6px 16px rgba(0, 0, 0, 0.12);
-    }
-    
-    /* ========== AUDIT SECTIONS ========== */
-    .audit-section {
-        background: linear-gradient(135deg, rgba(34, 197, 94, 0.08) 0%, rgba(59, 130, 246, 0.08) 100%);
-        backdrop-filter: blur(10px);
-        padding: 24px;
-        border-radius: 12px;
-        margin: 20px 0;
-        border: 1px solid rgba(34, 197, 94, 0.2);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-    }
-    
-    /* ========== CHANGE TRACKING ========== */
-    .change-positive {
-        color: #10b981;
-        font-weight: 700;
-        text-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
-    }
-    
-    .change-negative {
-        color: #ef4444;
-        font-weight: 700;
-        text-shadow: 0 0 8px rgba(239, 68, 68, 0.3);
-    }
-    
-    .change-neutral {
-        color: #6b7280;
-        font-weight: 600;
-    }
-    
-    /* ========== RECONCILIATION TABLE ========== */
-    .reconciliation-table {
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
-        backdrop-filter: blur(10px);
-        padding: 20px;
-        border-radius: 12px;
-        margin: 16px 0;
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-    }
-    
-    /* ========== TABS ========== */
+    /* ==============================================
+       TABS - MODERN PILL STYLE
+       ============================================== */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background: rgba(255, 255, 255, 0.03);
-        padding: 8px;
-        border-radius: 12px;
+        background: rgba(15, 23, 42, 0.6) !important;
+        border-radius: 16px !important;
+        padding: 6px !important;
+        gap: 6px !important;
+        border: 1px solid rgba(51, 65, 85, 0.5) !important;
     }
     
     .stTabs [data-baseweb="tab"] {
-        background: transparent;
-        border-radius: 8px;
-        padding: 12px 24px;
-        font-weight: 600;
-        transition: all 0.3s ease;
+        background: transparent !important;
+        color: #94a3b8 !important;
+        border-radius: 12px !important;
+        font-weight: 600 !important;
+        padding: 10px 20px !important;
+        transition: all 0.3s ease !important;
     }
     
     .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(59, 130, 246, 0.1);
+        color: #f1f5f9 !important;
+        background: rgba(51, 65, 85, 0.5) !important;
     }
     
     .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
         color: white !important;
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+        box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4) !important;
+    }
+
+    /* ==============================================
+       SELECT BOXES & INPUTS
+       ============================================== */
+    .stSelectbox > div > div,
+    .stTextInput > div > div > input,
+    .stNumberInput > div > div > input {
+        background: rgba(30, 41, 59, 0.8) !important;
+        border: 1px solid rgba(71, 85, 105, 0.5) !important;
+        border-radius: 12px !important;
+        color: #f1f5f9 !important;
     }
     
-    /* ========== SELECT BOXES ========== */
-    .stSelectbox > div > div {
-        background: rgba(255, 255, 255, 0.05);
-        backdrop-filter: blur(10px);
-        border-radius: 12px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    .stSelectbox > div > div:hover,
+    .stSelectbox > div > div:focus {
+        border-color: #6366f1 !important;
+        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
     }
     
-    .stSelectbox > div > div:hover {
-        border-color: rgba(59, 130, 246, 0.3);
+    /* Dropdown options */
+    [data-baseweb="popover"] {
+        background: #1e293b !important;
+        border: 1px solid rgba(71, 85, 105, 0.5) !important;
+        border-radius: 12px !important;
     }
     
-    /* ========== RESPONSIVE ========== */
-    @media (max-width: 768px) {
-        [data-testid="stMetricValue"] {
-            font-size: 1.4rem !important;
-        }
+    [data-baseweb="menu"] {
+        background: transparent !important;
+    }
+    
+    [role="option"] {
+        background: transparent !important;
+        color: #e2e8f0 !important;
+    }
+    
+    [role="option"]:hover {
+        background: rgba(99, 102, 241, 0.2) !important;
+    }
+
+    /* ==============================================
+       PROGRESS BREAKDOWN CARD
+       ============================================== */
+    .progress-breakdown {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%) !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
+        border-radius: 20px !important;
+        padding: 2rem !important;
+        margin: 1.5rem 0 !important;
+        position: relative !important;
+        overflow: hidden !important;
+        box-shadow: 
+            0 0 30px rgba(99, 102, 241, 0.1),
+            0 10px 40px rgba(0, 0, 0, 0.3) !important;
+    }
+    
+    .progress-breakdown::before {
+        content: "" !important;
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 5px !important;
+        height: 100% !important;
+        background: linear-gradient(180deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%) !important;
+    }
+    
+    .progress-breakdown h3 {
+        color: #f1f5f9 !important;
+        font-size: 1.25rem !important;
+        font-weight: 700 !important;
+        margin-bottom: 1.5rem !important;
+        padding-left: 0.5rem !important;
+    }
+    
+    .progress-item {
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        padding: 1rem 0.5rem !important;
+        border-bottom: 1px solid rgba(71, 85, 105, 0.3) !important;
+        transition: all 0.2s ease !important;
+    }
+    
+    .progress-item:hover {
+        background: rgba(99, 102, 241, 0.05) !important;
+        padding-left: 1rem !important;
+    }
+    
+    .progress-item:last-child {
+        border-bottom: none !important;
+        border-top: 2px solid rgba(99, 102, 241, 0.3) !important;
+        margin-top: 1rem !important;
+        padding-top: 1.25rem !important;
+    }
+    
+    .progress-label {
+        color: #94a3b8 !important;
+        font-size: 0.95rem !important;
+        font-weight: 500 !important;
+    }
+    
+    .progress-value {
+        font-size: 1.1rem !important;
+        font-weight: 700 !important;
+        font-family: 'Inter', monospace !important;
+    }
+
+    /* ==============================================
+       STICKY FOOTER BAR - FLOATING HUD
+       ============================================== */
+    .sticky-forecast-bar {
+        position: fixed !important;
+        bottom: 24px !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        width: calc(100% - 380px) !important;
+        max-width: 1100px !important;
+        z-index: 999999 !important;
         
-        [data-testid="stMetric"] {
-            margin-bottom: 12px !important;
-            padding: 16px;
-        }
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.95) 100%) !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
         
-        .progress-breakdown {
-            padding: 20px;
-        }
+        border: 1px solid rgba(99, 102, 241, 0.4) !important;
+        border-radius: 24px !important;
+        box-shadow: 
+            0 0 40px rgba(99, 102, 241, 0.2),
+            0 20px 60px rgba(0, 0, 0, 0.5) !important;
+        
+        padding: 16px 32px !important;
+        display: flex !important;
+        justify-content: space-around !important;
+        align-items: center !important;
     }
     
-    /* ========== ANIMATIONS ========== */
-    @keyframes fadeIn {
-        from {
-            opacity: 0;
-            transform: translateY(10px);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0);
-        }
+    .sticky-forecast-item {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        padding: 0 1rem !important;
     }
     
-    @keyframes slideIn {
-        from {
-            opacity: 0;
-            transform: translateX(-20px);
-        }
-        to {
-            opacity: 1;
-            transform: translateX(0);
-        }
+    .sticky-forecast-label {
+        font-size: 0.65rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1.5px !important;
+        color: #64748b !important;
+        margin-bottom: 4px !important;
     }
     
-    [data-testid="stMetric"],
-    [data-testid="stExpander"],
-    .drill-down-section {
-        animation: fadeIn 0.5s ease-out;
+    .sticky-forecast-value {
+        font-size: 1.25rem !important;
+        font-weight: 800 !important;
+        color: #f1f5f9 !important;
     }
     
-    /* ========== SCROLLBAR ========== */
+    .sticky-forecast-value.invoiced { 
+        color: #4ade80 !important; 
+        text-shadow: 0 0 15px rgba(74, 222, 128, 0.5) !important;
+    }
+    .sticky-forecast-value.pending { 
+        color: #fbbf24 !important; 
+        text-shadow: 0 0 15px rgba(251, 191, 36, 0.5) !important;
+    }
+    .sticky-forecast-value.pipeline { 
+        color: #60a5fa !important; 
+        text-shadow: 0 0 15px rgba(96, 165, 250, 0.5) !important;
+    }
+    .sticky-forecast-value.total {
+        font-size: 1.5rem !important;
+        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%) !important;
+        -webkit-background-clip: text !important;
+        -webkit-text-fill-color: transparent !important;
+        filter: drop-shadow(0 0 20px rgba(139, 92, 246, 0.5)) !important;
+    }
+    .sticky-forecast-value.gap-behind { 
+        color: #f87171 !important; 
+        text-shadow: 0 0 15px rgba(248, 113, 113, 0.5) !important;
+    }
+    .sticky-forecast-value.gap-ahead { 
+        color: #4ade80 !important; 
+        text-shadow: 0 0 15px rgba(74, 222, 128, 0.5) !important;
+    }
+    
+    .sticky-forecast-divider {
+        width: 1px !important;
+        height: 40px !important;
+        background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent) !important;
+    }
+
+    /* ==============================================
+       LOCKED REVENUE BANNER
+       ============================================== */
+    .locked-revenue-banner {
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 78, 59, 0.2) 100%) !important;
+        border: 1px solid rgba(16, 185, 129, 0.4) !important;
+        border-radius: 16px !important;
+        padding: 1.25rem 1.5rem !important;
+        margin-bottom: 1.5rem !important;
+        display: flex !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        box-shadow: 0 0 20px rgba(16, 185, 129, 0.15) !important;
+    }
+    
+    .banner-value {
+        color: #4ade80 !important;
+        font-size: 1.75rem !important;
+        font-weight: 800 !important;
+        text-shadow: 0 0 20px rgba(74, 222, 128, 0.4) !important;
+    }
+    
+    .banner-status {
+        background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+        color: #022c22 !important;
+        font-size: 0.7rem !important;
+        font-weight: 700 !important;
+        padding: 6px 12px !important;
+        border-radius: 8px !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1px !important;
+    }
+
+    /* ==============================================
+       CHECKBOXES
+       ============================================== */
+    [data-testid="stCheckbox"] label span {
+        color: #e2e8f0 !important;
+    }
+    
+    [data-testid="stCheckbox"] > div > div {
+        border-color: rgba(99, 102, 241, 0.5) !important;
+    }
+    
+    [data-testid="stCheckbox"] > div > div[data-checked="true"] {
+        background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
+        border: none !important;
+    }
+
+    /* ==============================================
+       DIVIDERS & MARKDOWN
+       ============================================== */
+    hr {
+        border: none !important;
+        height: 1px !important;
+        background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.4), transparent) !important;
+        margin: 1.5rem 0 !important;
+    }
+    
+    [data-testid="stMarkdown"] a {
+        color: #818cf8 !important;
+        text-decoration: none !important;
+    }
+    
+    [data-testid="stMarkdown"] a:hover {
+        color: #a5b4fc !important;
+        text-decoration: underline !important;
+    }
+    
+    /* Code blocks */
+    code {
+        background: rgba(30, 41, 59, 0.8) !important;
+        color: #fbbf24 !important;
+        padding: 2px 6px !important;
+        border-radius: 4px !important;
+        font-size: 0.85rem !important;
+    }
+
+    /* ==============================================
+       SCROLLBAR - CUSTOM DARK
+       ============================================== */
     ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
+        width: 8px !important;
+        height: 8px !important;
     }
     
     ::-webkit-scrollbar-track {
-        background: rgba(15, 23, 42, 0.3);
-        border-radius: 10px;
+        background: #0f172a !important;
     }
     
     ::-webkit-scrollbar-thumb {
-        background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-        border-radius: 10px;
+        background: linear-gradient(180deg, #4f46e5, #7c3aed) !important;
+        border-radius: 10px !important;
     }
     
     ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%);
-    }
-    
-    /* ========== TEXT SELECTION ========== */
-    ::selection {
-        background: rgba(59, 130, 246, 0.3);
-        color: white;
-    }
-    
-    /* ========== GLOWING CARD EFFECTS (GEMINI ENHANCEMENT) ========== */
-    .metric-card-glow {
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 16px;
-        padding: 20px;
-        text-align: center;
-        position: relative;
-        overflow: hidden;
-        transition: all 0.3s ease;
-    }
-    
-    .metric-card-glow:hover {
-        transform: translateY(-4px);
-    }
-    
-    .glow-green {
-        box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
-        border: 1px solid rgba(16, 185, 129, 0.5);
-        animation: pulseGreen 2s infinite;
-    }
-    
-    .glow-red {
-        box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
-        border: 1px solid rgba(239, 68, 68, 0.5);
-        animation: pulseRed 2s infinite;
-    }
-    
-    .glow-blue {
-        box-shadow: 0 0 20px rgba(59, 130, 246, 0.3);
-        border: 1px solid rgba(59, 130, 246, 0.5);
-        animation: pulseBlue 2s infinite;
-    }
-    
-    @keyframes pulseGreen {
-        0%, 100% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.3); }
-        50% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.5); }
-    }
-    
-    @keyframes pulseRed {
-        0%, 100% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.3); }
-        50% { box-shadow: 0 0 30px rgba(239, 68, 68, 0.5); }
-    }
-    
-    @keyframes pulseBlue {
-        0%, 100% { box-shadow: 0 0 20px rgba(59, 130, 246, 0.3); }
-        50% { box-shadow: 0 0 30px rgba(59, 130, 246, 0.5); }
-    }
-    
-    .metric-label {
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        opacity: 0.8;
-        font-weight: 600;
-    }
-    
-    .metric-value {
-        font-size: 2.2rem;
-        font-weight: 800;
-        background: linear-gradient(to right, #fff, #ccc);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
-        margin: 10px 0;
-    }
-    
-    /* ========== LOCKED REVENUE BANNER ========== */
-    .locked-revenue-banner {
-        background: rgba(16, 185, 129, 0.1);
-        border: 1px solid rgba(16, 185, 129, 0.2);
-        border-radius: 12px;
-        padding: 16px 24px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 24px;
-    }
-    
-    .banner-value { color: #10b981; font-weight: 800; font-size: 1.5rem; }
-    .banner-status { background: #10b981; color: #022c22; font-size: 0.7rem; padding: 4px 8px; border-radius: 4px; font-weight: 700; }
-    
-    .banner-left {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    
-    .banner-icon {
-        font-size: 24px;
-    }
-    
-    .banner-label {
-        font-size: 12px;
-        text-transform: uppercase;
-        opacity: 0.8;
-        letter-spacing: 1px;
-    }
-    
-    .banner-right {
-        text-align: right;
-    }
-    
-    /* ========================================
-       STICKY FOOTER
-       ======================================== */
-    .sticky-forecast-bar {
-        position: fixed;
-        bottom: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 85%;
-        max-width: 1000px;
-        z-index: 999999;
-        
-        background: rgba(15, 23, 42, 0.85);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        
-        border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 100px; /* Pill shape */
-        box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-        
-        padding: 12px 40px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
+        background: linear-gradient(180deg, #6366f1, #8b5cf6) !important;
     }
 
-    .sticky-forecast-item {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-    }
-
-    .sticky-forecast-label {
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 1.5px;
-        color: #94a3b8;
-        margin-bottom: 2px;
-    }
-
-    .sticky-forecast-value {
-        font-size: 1.2rem;
-        font-weight: 800;
-        color: white;
+    /* ==============================================
+       ALERTS & INFO BOXES
+       ============================================== */
+    .stAlert {
+        background: rgba(30, 41, 59, 0.8) !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(71, 85, 105, 0.5) !important;
     }
     
-    .sticky-forecast-value.total {
-        font-size: 1.5rem;
-        background: linear-gradient(to right, #3b82f6, #8b5cf6);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+    [data-testid="stInfo"] {
+        background: rgba(59, 130, 246, 0.1) !important;
+        border: 1px solid rgba(59, 130, 246, 0.3) !important;
+    }
+    
+    [data-testid="stSuccess"] {
+        background: rgba(16, 185, 129, 0.1) !important;
+        border: 1px solid rgba(16, 185, 129, 0.3) !important;
+    }
+    
+    [data-testid="stWarning"] {
+        background: rgba(245, 158, 11, 0.1) !important;
+        border: 1px solid rgba(245, 158, 11, 0.3) !important;
+    }
+    
+    [data-testid="stError"] {
+        background: rgba(239, 68, 68, 0.1) !important;
+        border: 1px solid rgba(239, 68, 68, 0.3) !important;
     }
 
-    .sticky-forecast-divider {
-        width: 1px;
-        height: 25px;
-        background: rgba(255,255,255,0.1);
-    }
-
-    /* Mobile handling for footer */
+    /* ==============================================
+       RESPONSIVE ADJUSTMENTS
+       ============================================== */
     @media (max-width: 768px) {
         .sticky-forecast-bar {
-            width: 95%;
-            border-radius: 16px;
-            bottom: 10px;
-            padding: 10px 15px;
-            flex-wrap: wrap;
+            width: 95% !important;
+            left: 50% !important;
+            bottom: 12px !important;
+            padding: 12px 16px !important;
+            border-radius: 16px !important;
+        }
+        
+        [data-testid="stMetric"] {
+            padding: 1rem !important;
+        }
+        
+        [data-testid="stMetricValue"] {
+            font-size: 1.5rem !important;
         }
     }
-    
-    .sticky-forecast-value.invoiced {
-        color: #4ade80;
-        text-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
-    }
-    
-    .sticky-forecast-value.pending {
-        color: #fbbf24;
-        text-shadow: 0 0 20px rgba(251, 191, 36, 0.5);
-    }
-    
-    .sticky-forecast-value.pipeline {
-        color: #60a5fa;
-        text-shadow: 0 0 20px rgba(96, 165, 250, 0.5);
-    }
-    
-    .sticky-forecast-value.gap-behind {
-        color: #f87171;
-        text-shadow: 0 0 20px rgba(248, 113, 113, 0.5);
-    }
-    
-    .sticky-forecast-value.gap-ahead {
-        color: #4ade80;
-        text-shadow: 0 0 20px rgba(74, 222, 128, 0.5);
-    }
-    
-    /* Add padding at bottom of page to prevent content from hiding behind sticky bar */
+
+    /* ==============================================
+       BOTTOM PADDING FOR STICKY BAR
+       ============================================== */
     .main .block-container {
-        padding-bottom: 100px !important;
+        padding-bottom: 120px !important;
     }
     </style>
     """, unsafe_allow_html=True)
