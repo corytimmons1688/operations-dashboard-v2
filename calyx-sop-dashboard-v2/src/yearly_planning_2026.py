@@ -175,21 +175,29 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     SINGLE SOURCE OF TRUTH for categorizing sales orders into forecast buckets.
     
     Returns a dictionary with categorized DataFrames and their amounts.
+    
+    Column names from _NS_SalesOrders_Data:
+    - Status, Sales Rep, Projected Date, Pending Approval Date
+    - Customer Promise Last Date to Ship (promise date)
+    - Calyx | External Order (external flag)
+    - Amount (Transaction Total) (order amount)
     """
+    empty_result = {
+        'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
+        'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
+        'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
+        'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
+        'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
+        'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
+        'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
+        'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
+        'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
+        'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
+        'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
+    }
+    
     if sales_orders_df is None or sales_orders_df.empty:
-        return {
-            'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
-            'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
-            'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
-            'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
-            'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
-            'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
-            'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
-            'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
-            'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
-            'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
-            'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
-        }
+        return empty_result
     
     # Filter by rep if specified
     if rep_name and 'Sales Rep' in sales_orders_df.columns:
@@ -198,47 +206,26 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         orders = sales_orders_df.copy()
     
     if orders.empty:
-        return {
-            'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
-            'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
-            'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
-            'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
-            'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
-            'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
-            'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
-            'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
-            'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
-            'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
-            'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
-        }
+        return empty_result
     
     # Remove duplicate columns
     if orders.columns.duplicated().any():
         orders = orders.loc[:, ~orders.columns.duplicated()]
     
     # === CONVERT DATE COLUMNS TO DATETIME ===
-    date_columns = ['Customer Promise Date', 'Projected Date', 'Pending Approval Date']
+    # Actual column names from _NS_SalesOrders_Data
+    date_columns = ['Customer Promise Last Date to Ship', 'Projected Date', 'Pending Approval Date']
     for col in date_columns:
         if col in orders.columns:
             orders[col] = pd.to_datetime(orders[col], errors='coerce')
     
-    # Helper function
-    def get_col_by_idx(df, index):
-        if df is not None and len(df.columns) > index:
-            return df.iloc[:, index]
-        return pd.Series()
-    
-    # === ADD DISPLAY COLUMNS FOR UI ===
-    orders['Display_SO_Num'] = get_col_by_idx(orders, 1)
-    orders['Display_Type'] = get_col_by_idx(orders, 17).fillna('Standard')
-    orders['Display_Promise_Date'] = pd.to_datetime(get_col_by_idx(orders, 11), errors='coerce')
-    orders['Display_Projected_Date'] = pd.to_datetime(get_col_by_idx(orders, 12), errors='coerce')
-    
-    # PA Date handling
-    if 'Pending Approval Date' in orders.columns:
-        orders['Display_PA_Date'] = pd.to_datetime(orders['Pending Approval Date'], errors='coerce')
-    else:
-        orders['Display_PA_Date'] = pd.to_datetime(get_col_by_idx(orders, 29), errors='coerce')
+    # === CONVERT AMOUNT TO NUMERIC ===
+    amount_col = 'Amount (Transaction Total)'
+    if amount_col in orders.columns:
+        orders[amount_col] = pd.to_numeric(
+            orders[amount_col].astype(str).str.replace(',', '').str.replace('$', ''),
+            errors='coerce'
+        ).fillna(0)
     
     # Define date ranges
     q4_2025_start = pd.Timestamp('2025-10-01')
@@ -252,30 +239,34 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     pf_orders = orders[orders['Status'].isin(['Pending Fulfillment', 'Pending Billing/Partially Fulfilled'])].copy()
     
     if not pf_orders.empty:
+        # Use actual column names
+        promise_col = 'Customer Promise Last Date to Ship'
+        projected_col = 'Projected Date'
+        
         def has_q1_date(row):
-            if pd.notna(row.get('Customer Promise Date')):
-                if q1_2026_start <= row['Customer Promise Date'] <= q1_2026_end:
+            if promise_col in row.index and pd.notna(row.get(promise_col)):
+                if q1_2026_start <= row[promise_col] <= q1_2026_end:
                     return True
-            if pd.notna(row.get('Projected Date')):
-                if q1_2026_start <= row['Projected Date'] <= q1_2026_end:
+            if projected_col in row.index and pd.notna(row.get(projected_col)):
+                if q1_2026_start <= row[projected_col] <= q1_2026_end:
                     return True
             return False
         
         def has_q4_2025_date(row):
-            if pd.notna(row.get('Customer Promise Date')):
-                if q4_2025_start <= row['Customer Promise Date'] <= q4_2025_end:
+            if promise_col in row.index and pd.notna(row.get(promise_col)):
+                if q4_2025_start <= row[promise_col] <= q4_2025_end:
                     return True
-            if pd.notna(row.get('Projected Date')):
-                if q4_2025_start <= row['Projected Date'] <= q4_2025_end:
+            if projected_col in row.index and pd.notna(row.get(projected_col)):
+                if q4_2025_start <= row[projected_col] <= q4_2025_end:
                     return True
             return False
         
         def has_q2_2026_date(row):
-            if pd.notna(row.get('Customer Promise Date')):
-                if q2_2026_start <= row['Customer Promise Date'] <= q2_2026_end:
+            if promise_col in row.index and pd.notna(row.get(promise_col)):
+                if q2_2026_start <= row[promise_col] <= q2_2026_end:
                     return True
-            if pd.notna(row.get('Projected Date')):
-                if q2_2026_start <= row['Projected Date'] <= q2_2026_end:
+            if projected_col in row.index and pd.notna(row.get(projected_col)):
+                if q2_2026_start <= row[projected_col] <= q2_2026_end:
                     return True
             return False
         
@@ -283,10 +274,11 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         pf_orders['Has_Q4_2025_Date'] = pf_orders.apply(has_q4_2025_date, axis=1)
         pf_orders['Has_Q2_2026_Date'] = pf_orders.apply(has_q2_2026_date, axis=1)
         
-        # Check External/Internal flag
+        # Check External/Internal flag - actual column name
         is_ext = pd.Series(False, index=pf_orders.index)
-        if 'Calyx External Order' in pf_orders.columns:
-            is_ext = pf_orders['Calyx External Order'].astype(str).str.strip().str.upper() == 'YES'
+        ext_col = 'Calyx | External Order'
+        if ext_col in pf_orders.columns:
+            is_ext = pf_orders[ext_col].astype(str).str.strip().str.upper() == 'YES'
         
         # Q4 2025 Spillover bucket
         pf_q4_spillover = pf_orders[pf_orders['Has_Q4_2025_Date'] == True].copy()
@@ -303,10 +295,12 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         pf_date_int = q1_candidates[~is_ext.loc[q1_candidates.index]].copy()
         
         # No date means BOTH dates are missing
-        no_date_mask = (
-            (pf_orders['Customer Promise Date'].isna()) &
-            (pf_orders['Projected Date'].isna())
-        )
+        no_date_mask = pd.Series(True, index=pf_orders.index)
+        if promise_col in pf_orders.columns:
+            no_date_mask = no_date_mask & pf_orders[promise_col].isna()
+        if projected_col in pf_orders.columns:
+            no_date_mask = no_date_mask & pf_orders[projected_col].isna()
+        
         pf_nodate_ext = pf_orders[no_date_mask & is_ext].copy()
         pf_nodate_int = pf_orders[no_date_mask & ~is_ext].copy()
     else:
@@ -320,8 +314,9 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
             pa_orders['Age_Business_Days'] = 0
         
         # Parse Pending Approval Date
-        if 'Pending Approval Date' in pa_orders.columns:
-            pa_orders['PA_Date_Parsed'] = pd.to_datetime(pa_orders['Pending Approval Date'], errors='coerce')
+        pa_date_col = 'Pending Approval Date'
+        if pa_date_col in pa_orders.columns:
+            pa_orders['PA_Date_Parsed'] = pd.to_datetime(pa_orders[pa_date_col], errors='coerce')
             
             # Fix 1900s dates
             if pa_orders['PA_Date_Parsed'].notna().any():
@@ -352,11 +347,9 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         )
         
         # No PA Date
-        has_no_pa_date = (
-            (pa_orders['PA_Date_Parsed'].isna()) |
-            (pa_orders['Pending Approval Date'].astype(str).str.strip() == 'No Date') |
-            (pa_orders['Pending Approval Date'].astype(str).str.strip() == '')
-        )
+        has_no_pa_date = pa_orders['PA_Date_Parsed'].isna()
+        if pa_date_col in pa_orders.columns:
+            has_no_pa_date = has_no_pa_date | (pa_orders[pa_date_col].astype(str).str.strip().isin(['No Date', '']))
         
         # PA Q4 2025 Spillover bucket
         pa_q4_spillover = pa_orders[has_q4_2025_pa_date].copy()
@@ -384,9 +377,15 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     else:
         pa_old = pa_date = pa_nodate = pa_q4_spillover = pa_q2_spillover = pd.DataFrame()
     
-    # Calculate amounts
+    # Calculate amounts using actual column name
     def get_amount(df):
-        return df['Amount'].sum() if not df.empty and 'Amount' in df.columns else 0
+        if df.empty:
+            return 0
+        if 'Amount (Transaction Total)' in df.columns:
+            return df['Amount (Transaction Total)'].sum()
+        elif 'Amount' in df.columns:
+            return df['Amount'].sum()
+        return 0
     
     return {
         'pf_date_ext': pf_date_ext,
