@@ -653,6 +653,28 @@ def render_sidebar():
             key="main_nav"
         )
         
+        # Q1 Sub-Navigation (nested under Q1 Revenue Snapshot)
+        q1_view_mode = None
+        if section == "🎯 Q1 Revenue Snapshot":
+            st.markdown("""
+            <p style="
+                color: #a78bfa;
+                font-size: 0.6rem;
+                font-weight: 700;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                margin: 12px 0 8px 16px;
+                padding-left: 4px;
+            ">Q1 VIEW</p>
+            """, unsafe_allow_html=True)
+            
+            q1_view_mode = st.radio(
+                "Q1 View Mode",
+                options=["👥 Team Overview", "👤 Individual Rep"],
+                label_visibility="collapsed",
+                key="q1_nav_selector"
+            )
+        
         st.markdown("---")
         
         # Quick Stats Cards
@@ -769,7 +791,7 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
         
-    return section
+    return section, q1_view_mode
 
 
 # =============================================================================
@@ -978,12 +1000,12 @@ def render_q4_revenue_section():
         st.error(f"❌ Q4 Revenue Snapshot module failed to load: {Q4_IMPORT_ERROR}")
 
 
-def render_q1_revenue_section():
+def render_q1_revenue_section(view_mode=None):
     """Render Q1 Revenue Snapshot & Planning section."""
     # The Q1 module handles its own header and layout - don't add extra headers
     if Q1_MODULE_LOADED:
         try:
-            render_q1_revenue_snapshot()
+            render_q1_revenue_snapshot(view_mode)
         except Exception as e:
             st.error(f"Error loading Q1 Revenue Snapshot: {str(e)}")
             import traceback
@@ -1026,11 +1048,11 @@ def render_2026_yearly_planning_section():
 def main():
     """Main application entry point."""
     inject_custom_css()
-    section = render_sidebar()
+    section, q1_view_mode = render_sidebar()
     
     # Map the navigation options
     if section == "🎯 Q1 Revenue Snapshot":
-        render_q1_revenue_section()
+        render_q1_revenue_section(q1_view_mode)
     elif section == "📈 S&OP Planning":
         render_sop_section()
     elif section == "🛡️ Quality Management":
