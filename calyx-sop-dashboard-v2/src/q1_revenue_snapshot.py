@@ -4670,6 +4670,21 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
     
     st.title(f"👤 {rep_name}'s Q1 2026 Forecast")
     
+    # DEBUG: Show rep name matching info
+    with st.expander("🔧 Debug: Sales Order Rep Matching (for Xander)", expanded=False):
+        if not sales_orders_df.empty and 'Sales Rep' in sales_orders_df.columns:
+            unique_reps = sales_orders_df['Sales Rep'].unique().tolist()
+            st.write(f"**Looking for:** `{rep_name}`")
+            st.write(f"**Available Sales Reps in SO data:** {unique_reps}")
+            matches = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name]
+            st.write(f"**Exact matches found:** {len(matches)} orders")
+            if len(matches) == 0:
+                # Check for partial matches
+                partial = [r for r in unique_reps if rep_name.lower() in str(r).lower() or str(r).lower() in rep_name.lower()]
+                st.warning(f"**Possible partial matches:** {partial}")
+        else:
+            st.error("Sales Orders DataFrame is empty or missing 'Sales Rep' column")
+    
     # Calculate metrics with details
     metrics = calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df)
     
