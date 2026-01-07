@@ -96,26 +96,17 @@ def inject_custom_css():
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
     /* ==============================================
-       FORCE DARK THEME EVERYWHERE
+       FORCE DARK THEME EVERYWHERE (Cleaned up - removed problematic selectors)
        ============================================== */
-    html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"], 
-    .main, .block-container, [data-testid="stVerticalBlock"] {
-        background: #0a0f1a !important;
-        color: #e2e8f0 !important;
-    }
-    
-    /* Main app container */
     .stApp {
         background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 50%, #1e1b4b 100%) !important;
+        color: #e2e8f0 !important;
     }
-    
-    /* Note: Removed overly broad 'div, section, header, main, article { background-color: transparent }' 
-       rule that was exposing internal Streamlit widget elements */
 
     /* ==============================================
        TYPOGRAPHY - CRISP AND MODERN
        ============================================== */
-    * {
+    .stApp {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
     
@@ -308,12 +299,13 @@ def inject_custom_css():
     }
 
     /* ==============================================
-       EXPANDERS - COLLAPSIBLE CARDS
+       EXPANDERS - COLLAPSIBLE CARDS (Simplified to prevent text garbling)
        ============================================== */
     [data-testid="stExpander"] {
+        background: rgba(30, 41, 59, 0.5) !important;
         border: 1px solid rgba(71, 85, 105, 0.4) !important;
-        border-radius: 12px !important;
-        margin: 8px 0 !important;
+        border-radius: 16px !important;
+        margin: 12px 0 !important;
     }
     
     [data-testid="stExpander"]:hover {
@@ -642,28 +634,6 @@ def render_sidebar():
             key="main_nav"
         )
         
-        # Q1 Sub-Navigation (nested under Q1 Revenue Snapshot)
-        q1_view_mode = None
-        if section == "🎯 Q1 Revenue Snapshot":
-            st.markdown("""
-            <p style="
-                color: #a78bfa;
-                font-size: 0.6rem;
-                font-weight: 700;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                margin: 12px 0 8px 16px;
-                padding-left: 4px;
-            ">Q1 VIEW</p>
-            """, unsafe_allow_html=True)
-            
-            q1_view_mode = st.radio(
-                "Q1 View Mode",
-                options=["👥 Team Overview", "👤 Individual Rep"],
-                label_visibility="collapsed",
-                key="q1_nav_selector"
-            )
-        
         st.markdown("---")
         
         # Quick Stats Cards
@@ -780,7 +750,7 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
         
-    return section, q1_view_mode
+    return section
 
 
 # =============================================================================
@@ -989,12 +959,12 @@ def render_q4_revenue_section():
         st.error(f"❌ Q4 Revenue Snapshot module failed to load: {Q4_IMPORT_ERROR}")
 
 
-def render_q1_revenue_section(view_mode=None):
+def render_q1_revenue_section():
     """Render Q1 Revenue Snapshot & Planning section."""
     # The Q1 module handles its own header and layout - don't add extra headers
     if Q1_MODULE_LOADED:
         try:
-            render_q1_revenue_snapshot(view_mode)
+            render_q1_revenue_snapshot()
         except Exception as e:
             st.error(f"Error loading Q1 Revenue Snapshot: {str(e)}")
             import traceback
@@ -1037,11 +1007,11 @@ def render_2026_yearly_planning_section():
 def main():
     """Main application entry point."""
     inject_custom_css()
-    section, q1_view_mode = render_sidebar()
+    section = render_sidebar()
     
     # Map the navigation options
     if section == "🎯 Q1 Revenue Snapshot":
-        render_q1_revenue_section(q1_view_mode)
+        render_q1_revenue_section()
     elif section == "📈 S&OP Planning":
         render_sop_section()
     elif section == "🛡️ Quality Management":
