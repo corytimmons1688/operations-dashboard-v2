@@ -2063,7 +2063,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         so_data = pd.DataFrame()
 
     # Prepare HubSpot Data
-    if deals_df is not None and not deals_df.empty:
+    if deals_df is not None and not deals_df.empty and 'Deal Owner' in deals_df.columns:
         if rep_name:
             hs_data = deals_df[deals_df['Deal Owner'] == rep_name].copy()
         else:
@@ -3406,7 +3406,11 @@ def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None
     orders = rep_info['NetSuite Orders'].iloc[0]
     
     # Filter deals for this rep - ALL Q1 2026 deals (regardless of spillover)
-    rep_deals = deals_df[deals_df['Deal Owner'] == rep_name].copy()
+    # Handle empty deals_df gracefully
+    if deals_df.empty or 'Deal Owner' not in deals_df.columns:
+        rep_deals = pd.DataFrame()
+    else:
+        rep_deals = deals_df[deals_df['Deal Owner'] == rep_name].copy()
     
     # Check for spillover column (handles both old and new column names)
     spillover_col = get_spillover_column(rep_deals)
@@ -3703,7 +3707,7 @@ def create_team_sunburst(dashboard_df, deals_df):
             })
         
         # Add pipeline data if available
-        rep_deals = deals_df[deals_df['Deal Owner'] == rep_name] if not deals_df.empty else pd.DataFrame()
+        rep_deals = deals_df[deals_df['Deal Owner'] == rep_name] if (not deals_df.empty and 'Deal Owner' in deals_df.columns) else pd.DataFrame()
         if not rep_deals.empty:
             pipeline_total = rep_deals['Amount'].sum()
             if pipeline_total > 0:
@@ -3926,7 +3930,10 @@ def create_enhanced_waterfall_chart(metrics, title, mode):
 def create_status_breakdown_chart(deals_df, rep_name=None):
     """Create a pie chart showing deal distribution by status"""
     
-    if rep_name:
+    if deals_df.empty:
+        return None
+    
+    if rep_name and 'Deal Owner' in deals_df.columns:
         deals_df = deals_df[deals_df['Deal Owner'] == rep_name]
     
     # Only show Q1 deals (filter out Q2 and Q4 spillover)
@@ -3975,7 +3982,10 @@ def create_status_breakdown_chart(deals_df, rep_name=None):
 def create_pipeline_breakdown_chart(deals_df, rep_name=None):
     """Create a stacked bar chart showing pipeline breakdown"""
     
-    if rep_name:
+    if deals_df.empty:
+        return None
+    
+    if rep_name and 'Deal Owner' in deals_df.columns:
         deals_df = deals_df[deals_df['Deal Owner'] == rep_name]
     
     # Only show Q1 deals (filter out Q2 and Q4 spillover)
@@ -4046,10 +4056,16 @@ def create_pipeline_breakdown_chart(deals_df, rep_name=None):
 def create_deals_timeline(deals_df, rep_name=None):
     """Create a timeline showing when deals are expected to close"""
     
-    if rep_name:
+    if deals_df.empty:
+        return None
+    
+    if rep_name and 'Deal Owner' in deals_df.columns:
         deals_df = deals_df[deals_df['Deal Owner'] == rep_name]
     
     # Filter out deals without close dates
+    if 'Close Date' not in deals_df.columns:
+        return None
+    
     timeline_df = deals_df[deals_df['Close Date'].notna()].copy()
     
     if timeline_df.empty:
