@@ -1,23 +1,13 @@
 """
 2026 Yearly Planning & Forecasting Module
-Based on Sales Dashboard architecture - Uses Demand_planning_DB_aistudio spreadsheet
-
-KEY INSIGHT: For Q1 2026 dashboard, the primary quarter data is in the "date" buckets:
-- pf_date_ext + pf_date_int = PF orders with Q1 2026 dates
-- pa_date = PA orders with PA Date in Q1 2026
-
-Spillover buckets are now for adjacent quarters:
-- pf_q4_spillover/pa_q4_spillover = Q4 2025 carryover orders
-- pf_q2_spillover/pa_q2_spillover = Q2 2026 forward spillover
+Self-contained module for yearly planning - Uses Demand_planning_DB_aistudio spreadsheet
 
 Data Sources (Demand_planning_DB_aistudio):
 - All Reps All Pipelines (HubSpot deals)
 - _NS_SalesOrders_Data (NetSuite sales orders)
 - _NS_Invoices_Data (NetSuite invoices)
 - Sales Order Line Item (line item details)
-- Invoice Line Item (invoice line item details)
-
-This module imports directly from the main dashboard to reuse all data loading and categorization logic.
+- Dashboard Info (rep quotas)
 """
 
 import streamlit as st
@@ -26,13 +16,134 @@ import plotly.graph_objects as go
 import re
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-# ========== STREAMLIT APP CONFIG ==========
-st.set_page_config(
-    page_title="2026 Yearly Planning",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+# ========== GOOGLE SHEETS CONFIGURATION ==========
+# Uses the same spreadsheet as q1_revenue_snapshot
+DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
+CACHE_VERSION = "v64_yearly_planning"
+
+# ========== DATA LOADING FUNCTIONS ==========
+@st.cache_data
+def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
+    """
+    Load data from Google Sheets with caching and enhanced error handling
+    """
+    try:
+        spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
+        
+        if "service_account" not in st.secrets:
+            if not silent:
+                st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
+            return pd.DataFrame()
+        
+        creds_dict = dict(st.secrets["service_account"])
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict, scopes=SCOPES
+        )
+        
+        service = build('sheets', 'v4', credentials=creds)
+        sheet = service.spreadsheets()
+        
+        result = sheet.values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{sheet_name}!{range_name}"
+        ).execute()
+        
+        values = result.get('values', [])
+        
+        if not values:
+            if not silent:
+                st.warning(f"⚠️ No data found in {sheet_name}!{range_name}")
+            return pd.DataFrame()
+        
+        # Handle mismatched column counts
+        if len(values) > 1:
+            max_cols = max(len(row) for row in values)
+            for row in values:
+                while len(row) < max_cols:
+                    row.append('')
+        
+        df = pd.DataFrame(values[1:], columns=values[0])
+        return df
+        
+    except Exception as e:
+        error_msg = str(e)
+        if not silent:
+            st.error(f"❌ Error loading data from {sheet_name}: {error_msg}")
+        return pd.DataFrame()
+
+
+def load_all_data_yearly():
+    """Load all necessary data for yearly planning module"""
+    
+    # Load deals data from All Reps All Pipelines
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
+    
+    # Load dashboard info (rep quotas)
+    dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
+    
+    # Load invoice data from NetSuite
+    invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
+    
+    # Load sales orders data from NetSuite
+    sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
+    
+    # Process deals data
+    if not deals_df.empty and len(deals_df.columns) >= 6:
+        col_names = deals_df.columns.tolist()
+        rename_dict = {}
+        
+        for col in col_names:
+            if 'Deal Owner First Name' in col and 'Deal Owner Last Name' in col:
+                rename_dict[col] = 'Deal Owner'
+            elif col == 'Deal Owner First Name':
+                rename_dict[col] = 'Deal Owner First Name'
+            elif col == 'Deal Owner Last Name':
+                rename_dict[col] = 'Deal Owner Last Name'
+            elif col == 'Close Status':
+                rename_dict[col] = 'Status'
+            elif col == 'Deal Type':
+                rename_dict[col] = 'Product Type'
+            elif col == 'Quarter':
+                rename_dict[col] = 'Q2 2026 Spillover'
+            elif col == 'Account Name' or col == 'Associated Company' or col == 'Company':
+                rename_dict[col] = 'Account Name'
+        
+        deals_df = deals_df.rename(columns=rename_dict)
+        
+        # Create Deal Owner if not exists
+        if 'Deal Owner' not in deals_df.columns:
+            if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
+                deals_df['Deal Owner'] = deals_df['Deal Owner First Name'].fillna('') + ' ' + deals_df['Deal Owner Last Name'].fillna('')
+                deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
+        else:
+            deals_df['Deal Owner'] = deals_df['Deal Owner'].astype(str).str.strip()
+        
+        # Clean Amount
+        def clean_numeric(value):
+            if pd.isna(value) or str(value).strip() == '':
+                return 0
+            cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
+            try:
+                return float(cleaned)
+            except:
+                return 0
+        
+        if 'Amount' in deals_df.columns:
+            deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
+        
+        # Convert dates
+        if 'Close Date' in deals_df.columns:
+            deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
+        
+        if 'Pending Approval Date' in deals_df.columns:
+            deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
+    
+    return deals_df, dashboard_df, invoices_df, sales_orders_df
+
 
 # ========== DATE CONSTANTS ==========
 Q1_2026_START = pd.Timestamp('2026-01-01')
@@ -904,7 +1015,7 @@ def build_customer_match_dict(ns_customers, hs_customers):
 
 # ========== HISTORICAL ANALYSIS FUNCTIONS ==========
 
-def load_historical_orders(main_dash, rep_name):
+def load_historical_orders(rep_name):
     """
     Load 2025 completed orders for historical analysis
     
@@ -916,7 +1027,7 @@ def load_historical_orders(main_dash, rep_name):
     """
     
     # Load raw sales orders data
-    historical_df = main_dash.load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=main_dash.CACHE_VERSION)
+    historical_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
     
     if historical_df.empty:
         return pd.DataFrame()
@@ -1033,7 +1144,7 @@ def load_historical_orders(main_dash, rep_name):
     return historical_df
 
 
-def load_invoices(main_dash, rep_name):
+def load_invoices(rep_name):
     """
     Load 2025 invoices for actual revenue figures
     
@@ -1045,7 +1156,7 @@ def load_invoices(main_dash, rep_name):
     - Column U: Rep Master
     """
     
-    invoice_df = main_dash.load_google_sheets_data("_NS_Invoices_Data", "A:U", version=main_dash.CACHE_VERSION)
+    invoice_df = load_google_sheets_data("_NS_Invoices_Data", "A:U", version=CACHE_VERSION)
     
     if invoice_df.empty:
         return pd.DataFrame()
@@ -1134,7 +1245,7 @@ def load_invoices(main_dash, rep_name):
     return invoice_df
 
 
-def load_line_items(main_dash):
+def load_line_items():
     """
     Load Sales Order Line Items for item-level detail
     
@@ -1145,7 +1256,7 @@ def load_line_items(main_dash):
     - Column F: Quantity Ordered
     """
     
-    line_items_df = main_dash.load_google_sheets_data("Sales Order Line Item", "A:F", version=main_dash.CACHE_VERSION)
+    line_items_df = load_google_sheets_data("Sales Order Line Item", "A:F", version=CACHE_VERSION)
     
     if line_items_df.empty:
         return pd.DataFrame()
@@ -1279,7 +1390,7 @@ def load_line_items(main_dash):
     return line_items_df
 
 
-def load_item_master(main_dash):
+def load_item_master():
     """
     Load Item Master data for SKU descriptions
     
@@ -1290,7 +1401,7 @@ def load_item_master(main_dash):
     Returns a dictionary mapping SKU -> Description
     """
     
-    item_master_df = main_dash.load_google_sheets_data("Item Master", "A:C", version=main_dash.CACHE_VERSION)
+    item_master_df = load_google_sheets_data("Item Master", "A:C", version=CACHE_VERSION)
     
     if item_master_df.empty:
         return {}
@@ -1815,98 +1926,18 @@ def render_yearly_planning_2026():
     st.markdown("---")
     
     # Show data source info in sidebar
-    st.sidebar.markdown("### 📊 Q1 2026 Data")
+    st.sidebar.markdown("### 📊 2026 Yearly Planning Data")
     st.sidebar.caption("HubSpot: All Reps All Pipelines")
-    st.sidebar.caption("NetSuite: _NS_SalesOrders_Data (spillover)")
+    st.sidebar.caption("NetSuite: _NS_SalesOrders_Data")
+    st.sidebar.caption("NetSuite: _NS_Invoices_Data")
     
-    # === IMPORT FROM MAIN DASHBOARD ===
-    # The main dashboard already has all the data loading and categorization logic
-    # We import it directly to ensure consistency
+    # === LOAD DATA (SELF-CONTAINED) ===
     try:
-        # Import the main dashboard module (updated to use Demand_planning_DB_aistudio spreadsheet)
-        import q1_revenue_snapshot as main_dash
+        # Load all data using local functions
+        deals_df, dashboard_df, invoices_df, sales_orders_df = load_all_data_yearly()
         
-        # Load sales orders and dashboard data using the EXACT SAME function as the main dashboard
-        deals_df_q4, dashboard_df, invoices_df, sales_orders_df, q4_push_df = main_dash.load_all_data()
-        
-        # Get the categorization function
-        categorize_sales_orders = main_dash.categorize_sales_orders
-        
-        # NOW: Load Q1 2026 deals from "All Reps All Pipelines" 
-        # This sheet includes BOTH Q4 2025 and Q1 2026 close dates
-        # Expanded range to A:Z to capture Account Name and other columns
-        deals_df = main_dash.load_google_sheets_data("All Reps All Pipelines", "A:Z", version=main_dash.CACHE_VERSION)
-        
-        # Process the deals data (same logic as main dashboard)
-        if not deals_df.empty and len(deals_df.columns) >= 6:
-            col_names = deals_df.columns.tolist()
-            rename_dict = {}
-            
-            for col in col_names:
-                if col == 'Record ID':
-                    rename_dict[col] = 'Record ID'
-                elif col == 'Deal Name':
-                    rename_dict[col] = 'Deal Name'
-                elif col == 'Deal Stage':
-                    rename_dict[col] = 'Deal Stage'
-                elif col == 'Close Date':
-                    rename_dict[col] = 'Close Date'
-                elif 'Deal Owner First Name' in col and 'Deal Owner Last Name' in col:
-                    rename_dict[col] = 'Deal Owner'
-                elif col == 'Deal Owner First Name':
-                    rename_dict[col] = 'Deal Owner First Name'
-                elif col == 'Deal Owner Last Name':
-                    rename_dict[col] = 'Deal Owner Last Name'
-                elif col == 'Amount':
-                    rename_dict[col] = 'Amount'
-                elif col == 'Close Status':
-                    rename_dict[col] = 'Status'
-                elif col == 'Pipeline':
-                    rename_dict[col] = 'Pipeline'
-                elif col == 'Deal Type':
-                    rename_dict[col] = 'Product Type'
-                elif col == 'Pending Approval Date':
-                    rename_dict[col] = 'Pending Approval Date'
-                elif col == 'Q2 2026 Spillover':
-                    rename_dict[col] = 'Q2 2026 Spillover'
-                elif col == 'Q1 2026 Spillover':
-                    # Handle old column name - rename to new name
-                    rename_dict[col] = 'Q2 2026 Spillover'
-                elif col == 'Account Name' or col == 'Associated Company':
-                    rename_dict[col] = 'Account Name'
-                elif col == 'Company':
-                    rename_dict[col] = 'Account Name'
-            
-            deals_df = deals_df.rename(columns=rename_dict)
-            
-            # Create Deal Owner if not exists
-            if 'Deal Owner' not in deals_df.columns:
-                if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
-                    deals_df['Deal Owner'] = deals_df['Deal Owner First Name'].fillna('') + ' ' + deals_df['Deal Owner Last Name'].fillna('')
-                    deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-            else:
-                deals_df['Deal Owner'] = deals_df['Deal Owner'].str.strip()
-            
-            # Clean amount
-            def clean_numeric(value):
-                if pd.isna(value) or str(value).strip() == '':
-                    return 0
-                cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
-                try:
-                    return float(cleaned)
-                except:
-                    return 0
-            
-            if 'Amount' in deals_df.columns:
-                deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
-            
-            # Convert dates
-            if 'Close Date' in deals_df.columns:
-                deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
-            
-            if 'Pending Approval Date' in deals_df.columns:
-                deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
-            
+        # Process deals data for Q1 2026 filtering
+        if not deals_df.empty:
             # Filter out excluded deal stages
             excluded_stages = [
                 '', '(Blanks)', None, 'Cancelled', 'checkout abandoned', 
@@ -1919,10 +1950,6 @@ def render_yearly_planning_2026():
                 deals_df['Deal Stage'] = deals_df['Deal Stage'].astype(str).str.strip()
                 deals_df = deals_df[~deals_df['Deal Stage'].str.lower().isin([s.lower() if s else '' for s in excluded_stages])]
         
-    except ImportError as e:
-        st.error(f"❌ Unable to import main dashboard: {e}")
-        st.info("Make sure q1_revenue_snapshot.py is in the same directory")
-        return
     except Exception as e:
         st.error(f"❌ Error loading data: {e}")
         st.exception(e)
@@ -2627,8 +2654,8 @@ def render_yearly_planning_2026():
             all_historical = []
             all_invoices = []
             for r in active_team_reps:
-                rep_hist = load_historical_orders(main_dash, r)
-                rep_inv = load_invoices(main_dash, r)
+                rep_hist = load_historical_orders(r)
+                rep_inv = load_invoices(r)
                 if not rep_hist.empty:
                     rep_hist['Rep'] = r
                     all_historical.append(rep_hist)
@@ -2637,8 +2664,8 @@ def render_yearly_planning_2026():
             historical_df = pd.concat(all_historical, ignore_index=True) if all_historical else pd.DataFrame()
             invoices_df = pd.concat(all_invoices, ignore_index=True) if all_invoices else pd.DataFrame()
         else:
-            historical_df = load_historical_orders(main_dash, rep_name)
-            invoices_df = load_invoices(main_dash, rep_name)
+            historical_df = load_historical_orders(rep_name)
+            invoices_df = load_invoices(rep_name)
             if not historical_df.empty:
                 historical_df['Rep'] = rep_name
         
@@ -2647,10 +2674,10 @@ def render_yearly_planning_2026():
             historical_df = merge_orders_with_invoices(historical_df, invoices_df)
         
         # Load line items - THIS IS THE KEY DATA
-        line_items_df = load_line_items(main_dash)
+        line_items_df = load_line_items()
         
         # Load Item Master for SKU descriptions
-        sku_to_desc = load_item_master(main_dash)
+        sku_to_desc = load_item_master()
     
     # Debug section - EXPANDED
     with st.expander("🔧 Debug: Data Loading Status", expanded=False):
