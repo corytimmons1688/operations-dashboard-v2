@@ -1768,7 +1768,7 @@ def get_product_type_summary(historical_df, opportunities_df):
 
 
 # ========== MAIN FUNCTION ==========
-def main():
+def render_yearly_planning_2026():
     """Main function for Q1 2026 Forecasting module"""
     
     inject_custom_css()
@@ -4134,4 +4134,4 @@ def main():
 
 # Run if called directly
 if __name__ == "__main__":
-    main()
+    render_yearly_planning_2026()
