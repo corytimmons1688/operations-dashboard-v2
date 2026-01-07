@@ -93,10 +93,8 @@ st.markdown("""
         background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 50%, #1e1b4b 100%) !important;
     }
     
-    /* Override any white backgrounds */
-    div, section, header, main, article {
-        background-color: transparent !important;
-    }
+    /* Note: Removed overly broad 'div, section, header, main, article { background-color: transparent }' 
+       rule that was exposing internal Streamlit widget elements */
 
     /* ==============================================
        TYPOGRAPHY - CRISP AND MODERN
@@ -297,26 +295,13 @@ st.markdown("""
        EXPANDERS - COLLAPSIBLE CARDS
        ============================================== */
     [data-testid="stExpander"] {
-        background: rgba(30, 41, 59, 0.5) !important;
         border: 1px solid rgba(71, 85, 105, 0.4) !important;
-        border-radius: 16px !important;
-        margin: 12px 0 !important;
-        overflow: hidden !important;
-    }
-    
-    [data-testid="stExpander"] summary {
-        background: rgba(30, 41, 59, 0.8) !important;
-        color: #f1f5f9 !important;
-        font-weight: 600 !important;
-        padding: 1rem 1.25rem !important;
+        border-radius: 12px !important;
+        margin: 8px 0 !important;
     }
     
     [data-testid="stExpander"]:hover {
         border-color: rgba(99, 102, 241, 0.5) !important;
-    }
-    
-    [data-testid="stExpander"] > div {
-        background: transparent !important;
     }
 
     /* ==============================================
