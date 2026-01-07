@@ -1867,7 +1867,7 @@ def display_invoices_drill_down(invoices_df, rep_name=None):
             st.metric("Avg Invoice", f"${avg_invoice:,.0f}")
     
     # Display invoices table
-    with st.expander("📋 View All Invoices", expanded=False):
+    with st.expander("View All Invoices", expanded=False):
         display_columns = []
         possible_columns = [
             'Document Number', 'Transaction Date', 'Account Name', 'Customer',
@@ -2331,7 +2331,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     )
                     
                     if is_checked:
-                        with st.expander(f"🔎 View Orders ({data['label']})"):
+                        with st.expander(f"View Orders ({data['label']})"):
                             if not df.empty:
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
                                 
@@ -2515,7 +2515,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                         key=checkbox_key
                     )
                     if is_checked:
-                        with st.expander(f"🔎 View Deals ({data['label']})"):
+                        with st.expander(f"View Deals ({data['label']})"):
                             if not df.empty:
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
                                 cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Amount_Numeric']
@@ -2737,19 +2737,29 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     st.markdown("---")
     st.markdown("### 🔮 Forecast Scenario Results")
     
-    # Add locked revenue banner
+    # Add locked revenue banner with inline styles (CSS classes don't work reliably in Streamlit)
     st.markdown(f"""
-    <div class="locked-revenue-banner">
-        <div class="banner-left">
-            <span class="banner-icon">🔒</span>
+    <div style="
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 78, 59, 0.25) 100%);
+        border: 2px solid rgba(16, 185, 129, 0.5);
+        border-radius: 16px;
+        padding: 1.5rem 2rem;
+        margin: 1rem 0 1.5rem 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        box-shadow: 0 0 30px rgba(16, 185, 129, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    ">
+        <div style="display: flex; align-items: center; gap: 1rem;">
+            <span style="font-size: 2rem;">🔒</span>
             <div>
-                <div class="banner-label">Locked Revenue</div>
-                <div class="banner-value">${invoiced_shipped:,.0f}</div>
+                <div style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8; margin-bottom: 4px;">Locked Revenue</div>
+                <div style="color: #4ade80; font-size: 2rem; font-weight: 800; text-shadow: 0 0 20px rgba(74, 222, 128, 0.4);">${invoiced_shipped:,.0f}</div>
             </div>
         </div>
-        <div class="banner-right">
-            <div class="banner-label">Status</div>
-            <div class="banner-status">INVOICED & SECURED</div>
+        <div style="text-align: right;">
+            <div style="font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8; margin-bottom: 4px;">Status</div>
+            <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #022c22; font-size: 0.75rem; font-weight: 700; padding: 8px 16px; border-radius: 8px; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);">INVOICED & SECURED</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -3053,7 +3063,7 @@ def display_hubspot_deals_audit(deals_df, rep_name=None):
             status_deals = deals_no_amount[deals_no_amount['Status'] == status].copy()
             
             if not status_deals.empty:
-                with st.expander(f"🔍 {status} - {len(status_deals)} deals", expanded=False):
+                with st.expander(f"{status} - {len(status_deals)} deals", expanded=False):
                     # Create display dataframe with cleaner structure
                     display_data = []
                     
@@ -4180,7 +4190,7 @@ def display_drill_down_section(title, amount, details_df, key_suffix):
     """Display a collapsible section with order details - WITH PROPER SO# AND LINKS"""
     
     item_count = len(details_df)
-    with st.expander(f"{title}: ${amount:,.2f} (👀 Click to see {item_count} {'item' if item_count == 1 else 'items'})"):
+    with st.expander(f"{title}: ${amount:,.2f} (Click to see {item_count} {'item' if item_count == 1 else 'items'})"):
         if not details_df.empty:
             # DEBUG: Check for duplicate columns
             if details_df.columns.duplicated().any():
@@ -4523,7 +4533,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
         )
     
     # Add expandable breakdown details
-    with st.expander("🔍 View Calculation Breakdowns", expanded=False):
+    with st.expander("View Calculation Breakdowns", expanded=False):
         st.markdown("#### Detailed Component Breakdown")
         st.markdown("")  # Add spacing
         
@@ -5303,7 +5313,7 @@ def main(external_view_mode=None):
     if deals_df.empty and dashboard_df.empty:
         st.error("❌ Unable to load data. Please check your Google Sheets connection.")
         
-        with st.expander("📋 Setup Checklist"):
+        with st.expander("Setup Checklist"):
             st.markdown("""
             ### Quick Setup Guide:
             
