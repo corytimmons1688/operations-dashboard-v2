@@ -540,36 +540,62 @@ st.markdown("""
     }
 
     /* ==============================================
-       LOCKED REVENUE BANNER
+       LOCKED REVENUE BANNER - STYLED BOX
        ============================================== */
     .locked-revenue-banner {
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 78, 59, 0.2) 100%) !important;
-        border: 1px solid rgba(16, 185, 129, 0.4) !important;
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 78, 59, 0.25) 100%) !important;
+        border: 2px solid rgba(16, 185, 129, 0.5) !important;
         border-radius: 16px !important;
-        padding: 1.25rem 1.5rem !important;
-        margin-bottom: 1.5rem !important;
+        padding: 1.5rem 2rem !important;
+        margin: 1rem 0 1.5rem 0 !important;
         display: flex !important;
         justify-content: space-between !important;
         align-items: center !important;
-        box-shadow: 0 0 20px rgba(16, 185, 129, 0.15) !important;
+        box-shadow: 
+            0 0 30px rgba(16, 185, 129, 0.2),
+            inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
+    }
+    
+    .banner-left {
+        display: flex !important;
+        align-items: center !important;
+        gap: 1rem !important;
+    }
+    
+    .banner-icon {
+        font-size: 2rem !important;
+    }
+    
+    .banner-label {
+        font-size: 0.7rem !important;
+        font-weight: 600 !important;
+        text-transform: uppercase !important;
+        letter-spacing: 1.5px !important;
+        color: #94a3b8 !important;
+        margin-bottom: 4px !important;
     }
     
     .banner-value {
         color: #4ade80 !important;
-        font-size: 1.75rem !important;
+        font-size: 2rem !important;
         font-weight: 800 !important;
         text-shadow: 0 0 20px rgba(74, 222, 128, 0.4) !important;
+    }
+    
+    .banner-right {
+        text-align: right !important;
     }
     
     .banner-status {
         background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
         color: #022c22 !important;
-        font-size: 0.7rem !important;
+        font-size: 0.75rem !important;
         font-weight: 700 !important;
-        padding: 6px 12px !important;
+        padding: 8px 16px !important;
         border-radius: 8px !important;
         text-transform: uppercase !important;
         letter-spacing: 1px !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3) !important;
     }
 
     /* ==============================================
@@ -3027,38 +3053,43 @@ def display_hubspot_deals_audit(deals_df, rep_name=None):
             status_deals = deals_no_amount[deals_no_amount['Status'] == status].copy()
             
             if not status_deals.empty:
-                with st.expander(f"🔍 {status} - {len(status_deals)} deals"):
-                    # Create display dataframe
+                with st.expander(f"🔍 {status} - {len(status_deals)} deals", expanded=False):
+                    # Create display dataframe with cleaner structure
                     display_data = []
                     
                     for _, row in status_deals.iterrows():
                         # Build HubSpot link if we have Record ID
-                        deal_link = ""
                         record_id = row.get('Record ID', '')
-                        if record_id:
-                            deal_link = f"https://app.hubspot.com/contacts/6554605/deal/{record_id}"
+                        deal_link = f"https://app.hubspot.com/contacts/6554605/deal/{record_id}" if record_id else ""
                         
                         display_data.append({
-                            'Link': deal_link,
-                            'Deal Name': row.get('Deal Name', ''),
-                            'Amount': '$0.00',
-                            'Status': row.get('Status', ''),
-                            'Pipeline': row.get('Pipeline', ''),
-                            'Close Date': row.get('Close Date', ''),
-                            'Product Type': row.get('Product Type', '')
+                            'Deal Name': str(row.get('Deal Name', ''))[:50],  # Truncate long names
+                            'Pipeline': str(row.get('Pipeline', '')),
+                            'Close Date': str(row.get('Close Date', '')),
+                            'Product Type': str(row.get('Product Type', '')),
+                            'HubSpot Link': deal_link
                         })
                     
                     if display_data:
                         display_df = pd.DataFrame(display_data)
                         
-                        # Format as clickable links
-                        if 'Link' in display_df.columns:
-                            display_df['Link'] = display_df['Link'].apply(
-                                lambda x: f'<a href="{x}" target="_blank">View Deal</a>' if x else ''
-                            )
-                        
-                        # Display the table with HTML links
-                        st.markdown(display_df.to_html(escape=False, index=False), unsafe_allow_html=True)
+                        # Use Streamlit's native dataframe with link column config
+                        st.dataframe(
+                            display_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                'HubSpot Link': st.column_config.LinkColumn(
+                                    "HubSpot",
+                                    display_text="View Deal",
+                                    help="Open deal in HubSpot"
+                                ),
+                                'Deal Name': st.column_config.TextColumn(
+                                    "Deal Name",
+                                    width="medium"
+                                )
+                            }
+                        )
                     else:
                         st.info("No deals to display")
     else:
@@ -4478,36 +4509,50 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     # Add expandable breakdown details
     with st.expander("🔍 View Calculation Breakdowns", expanded=False):
         st.markdown("#### Detailed Component Breakdown")
+        st.markdown("")  # Add spacing
         
         breakdown_col1, breakdown_col2 = st.columns(2)
         
         with breakdown_col1:
             st.markdown("##### 💪 High Confidence Forecast")
             st.markdown(f"""
-            - **Invoiced:** ${team_invoiced:,.0f}
-            - **Pending Fulfillment (with date):** ${team_pf:,.0f}
-            - **Pending Approval (with date):** ${team_pa:,.0f}
-            - **HubSpot Expect/Commit:** ${team_hs:,.0f}
-            - **Total:** ${base_forecast:,.0f}
-            - **% of Quota:** {base_attainment_pct:.1f}%
+**Invoiced:** ${team_invoiced:,.0f}
+
+**Pending Fulfillment (with date):** ${team_pf:,.0f}
+
+**Pending Approval (with date):** ${team_pa:,.0f}
+
+**HubSpot Expect/Commit:** ${team_hs:,.0f}
+
+**Total:** ${base_forecast:,.0f}
+
+**% of Quota:** {base_attainment_pct:.1f}%
             """)
         
         with breakdown_col2:
             st.markdown("##### 📊 Full Forecast (All Sources)")
             st.markdown(f"""
-            **High Confidence Components:**
-            - Invoiced: ${team_invoiced:,.0f}
-            - PF (with date): ${team_pf:,.0f}
-            - PA (with date): ${team_pa:,.0f}
-            - HS Expect/Commit: ${team_hs:,.0f}
-            
-            **Additional Sources:**
-            - PF (no date): ${team_pf_no_date:,.0f}
-            - PA (no date): ${team_pa_no_date:,.0f}
-            - PA (>2 weeks): ${team_old_pa:,.0f}
-            
-            **Total:** ${full_forecast:,.0f}
-            - **% of Quota:** {full_attainment_pct:.1f}%
+**High Confidence Components:**
+
+Invoiced: ${team_invoiced:,.0f}
+
+PF (with date): ${team_pf:,.0f}
+
+PA (with date): ${team_pa:,.0f}
+
+HS Expect/Commit: ${team_hs:,.0f}
+
+**Additional Sources:**
+
+PF (no date): ${team_pf_no_date:,.0f}
+
+PA (no date): ${team_pa_no_date:,.0f}
+
+PA (>2 weeks): ${team_old_pa:,.0f}
+
+**Total:** ${full_forecast:,.0f}
+
+**% of Quota:** {full_attainment_pct:.1f}%
             """)
         
         st.markdown("---")
@@ -4517,22 +4562,22 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
         with breakdown_col3:
             st.markdown("##### 📈 Optimistic Scenario")
             st.markdown(f"""
-            - **High Confidence:** ${base_forecast:,.0f}
-            - **Plus: HS Best Case:** ${team_best_case:,.0f}
-            - **Plus: PF (no date):** ${team_pf_no_date:,.0f}
-            - **Plus: PA (no date):** ${team_pa_no_date:,.0f}
-            - **Plus: PA (>2 weeks):** ${team_old_pa:,.0f}
-            - **Optimistic Total:** ${optimistic_forecast:,.0f}
-            - **Gap to Quota:** ${optimistic_gap:,.0f}
+**High Confidence:** ${base_forecast:,.0f}
+
+**Plus: HS Best Case:** ${team_best_case:,.0f}
+
+**Plus: PF (no date):** ${team_pf_no_date:,.0f}
+
+**Plus: PA (no date):** ${team_pa_no_date:,.0f}
+
+**Plus: PA (>2 weeks):** ${team_old_pa:,.0f}
+
+**Optimistic Total:** ${optimistic_forecast:,.0f}
+
+**Gap to Quota:** ${optimistic_gap:,.0f}
             """)
    
-    # Invoices section and audit section
-    st.markdown("---")
-    
-    # Change detection and audit section
-    if st.checkbox("📊 Show Day-Over-Day Audit", value=False):
-        create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_df)
-    
+    # Invoices section
     st.markdown("---")
     
     # Invoices section
@@ -4968,7 +5013,14 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
         st.info("📭 Nothing to see here... yet!")
 
 # Main app
-def main():
+def main(external_view_mode=None):
+    """
+    Main function for Q1 Revenue Snapshot.
+    
+    Args:
+        external_view_mode: If provided from app.py, skips internal navigation.
+                           Expects "👥 Team Overview" or "👤 Individual Rep"
+    """
     
     # Initialize session state for data load timestamp
     if 'data_load_time' not in st.session_state:
@@ -4983,14 +5035,91 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     
-    # Sidebar
-    with st.sidebar:
-        # Sexy header with gradient
-        st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 25px;
-            border-radius: 15px;
+    # Determine if we should show internal navigation or use external
+    if external_view_mode:
+        # Called from app.py - use provided view mode, don't show internal sidebar header/nav
+        view_mapping = {
+            "👥 Team Overview": "Team Overview",
+            "👤 Individual Rep": "Individual Rep"
+        }
+        view_mode = view_mapping.get(external_view_mode, "Team Overview")
+        
+        # Still show Q1-specific sidebar info (stats & refresh), just not the full navigation
+        with st.sidebar:
+            # Sexy metrics cards for quick stats
+            biz_days = calculate_business_days_remaining()
+            
+            # Get data load time from session state
+            data_load_time = st.session_state.data_load_time
+            current_mst_time = get_mst_time()
+            time_since_load = current_mst_time - data_load_time
+            minutes_ago = int(time_since_load.total_seconds() / 60)
+            
+            if minutes_ago < 1:
+                time_ago_text = "Just now"
+            elif minutes_ago < 60:
+                time_ago_text = f"{minutes_ago} min ago"
+            else:
+                hours_ago = minutes_ago // 60
+                time_ago_text = f"{hours_ago} hr ago"
+            
+            st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.2) 100%);
+                border: 1px solid rgba(16, 185, 129, 0.3);
+                border-radius: 12px;
+                padding: 15px;
+                margin-bottom: 15px;
+            ">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <span style="font-size: 24px;">⏱️</span>
+                    <div>
+                        <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px;">Q1 Days Left</div>
+                        <div style="font-size: 24px; font-weight: 700; color: #10b981;">""" + str(biz_days) + """</div>
+                    </div>
+                </div>
+                <div style="font-size: 10px; opacity: 0.6;">Business days until Mar 31, 2026</div>
+            </div>
+            
+            <div style="
+                background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(37, 99, 235, 0.2) 100%);
+                border: 1px solid rgba(59, 130, 246, 0.3);
+                border-radius: 12px;
+                padding: 15px;
+                margin-bottom: 15px;
+            ">
+                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+                    <span style="font-size: 24px;">🔄</span>
+                    <div style="flex: 1;">
+                        <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px;">Last Sync</div>
+                        <div style="font-size: 14px; font-weight: 600; color: #3b82f6;">""" + data_load_time.strftime('%I:%M %p %Z') + """</div>
+                    </div>
+                </div>
+                <div style="font-size: 10px; opacity: 0.6;">""" + time_ago_text + """ • Manual refresh only</div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Refresh button with gradient
+            if st.button("🔄 Refresh Data Now", use_container_width=True, key="q1_refresh_external"):
+                # Store snapshot before clearing cache
+                if 'current_snapshot' in st.session_state:
+                    st.session_state.previous_snapshot = st.session_state.current_snapshot
+                
+                # Clear cache and update timestamp
+                st.cache_data.clear()
+                st.session_state.data_load_time = get_mst_time()
+                
+                st.rerun()
+    else:
+        # Standalone mode - show full sidebar with navigation
+        # Sidebar
+        with st.sidebar:
+            # Sexy header with gradient
+            st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                padding: 25px;
+                border-radius: 15px;
             text-align: center;
             margin-bottom: 20px;
             box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
@@ -5144,26 +5273,6 @@ def main():
             # Note: Your view selection, rep selection, and filters are automatically 
             # preserved via Streamlit's widget keys (nav_selector, rep_selector, etc.)
             st.rerun()
-        
-        st.markdown("---")
-        
-        # Sync Status - collapsed by default, for Xander
-        with st.expander("🔧 Sync Status (for Xander)"):
-            current_spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
-            st.write("**Spreadsheet ID:**")
-            st.code(current_spreadsheet_id)
-            
-            if "service_account" in st.secrets:
-                st.success("✅ GCP credentials found")
-                try:
-                    creds_dict = dict(st.secrets["service_account"])
-                    if 'client_email' in creds_dict:
-                        st.info(f"Service account: {creds_dict['client_email']}")
-                        st.caption("Make sure this email has 'Viewer' access to your Google Sheet")
-                except:
-                    st.error("Error reading credentials")
-            else:
-                st.error("❌ GCP credentials missing")
     
     # Load data
     with st.spinner("Loading data from Google Sheets..."):
@@ -5172,11 +5281,7 @@ def main():
     # Store snapshot for change tracking
     store_snapshot(deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
     
-    # Show change detection dialog if there's a previous snapshot
-    if 'previous_snapshot' in st.session_state and st.session_state.previous_snapshot:
-        with st.expander("🔄 View Changes Since Last Refresh", expanded=False):
-            changes = detect_changes(st.session_state.current_snapshot, st.session_state.previous_snapshot)
-            show_change_dialog(changes)
+    # Change detection removed for cleaner UI
     
     # Check if data loaded successfully
     if deals_df.empty and dashboard_df.empty:
@@ -5234,6 +5339,6 @@ if __name__ == "__main__":
     main()
 
 # Wrapper function for importing into app.py
-def render_q1_revenue_snapshot():
+def render_q1_revenue_snapshot(view_mode=None):
     """Entry point when imported as a module by app.py"""
-    main()
+    main(view_mode)
