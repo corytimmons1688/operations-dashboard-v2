@@ -170,6 +170,242 @@ def load_all_data_yearly():
     return deals_df, dashboard_df, invoices_df, sales_orders_df
 
 
+def categorize_sales_orders(sales_orders_df, rep_name=None):
+    """
+    SINGLE SOURCE OF TRUTH for categorizing sales orders into forecast buckets.
+    
+    Returns a dictionary with categorized DataFrames and their amounts.
+    """
+    if sales_orders_df is None or sales_orders_df.empty:
+        return {
+            'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
+            'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
+            'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
+            'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
+            'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
+            'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
+            'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
+            'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
+            'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
+            'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
+            'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
+        }
+    
+    # Filter by rep if specified
+    if rep_name and 'Sales Rep' in sales_orders_df.columns:
+        orders = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name].copy()
+    else:
+        orders = sales_orders_df.copy()
+    
+    if orders.empty:
+        return {
+            'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
+            'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
+            'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
+            'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
+            'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
+            'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
+            'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
+            'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
+            'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
+            'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
+            'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
+        }
+    
+    # Remove duplicate columns
+    if orders.columns.duplicated().any():
+        orders = orders.loc[:, ~orders.columns.duplicated()]
+    
+    # Helper function
+    def get_col_by_idx(df, index):
+        if df is not None and len(df.columns) > index:
+            return df.iloc[:, index]
+        return pd.Series()
+    
+    # === ADD DISPLAY COLUMNS FOR UI ===
+    orders['Display_SO_Num'] = get_col_by_idx(orders, 1)
+    orders['Display_Type'] = get_col_by_idx(orders, 17).fillna('Standard')
+    orders['Display_Promise_Date'] = pd.to_datetime(get_col_by_idx(orders, 11), errors='coerce')
+    orders['Display_Projected_Date'] = pd.to_datetime(get_col_by_idx(orders, 12), errors='coerce')
+    
+    # PA Date handling
+    if 'Pending Approval Date' in orders.columns:
+        orders['Display_PA_Date'] = pd.to_datetime(orders['Pending Approval Date'], errors='coerce')
+    else:
+        orders['Display_PA_Date'] = pd.to_datetime(get_col_by_idx(orders, 29), errors='coerce')
+    
+    # Define date ranges
+    q4_2025_start = pd.Timestamp('2025-10-01')
+    q4_2025_end = pd.Timestamp('2025-12-31')
+    q1_2026_start = pd.Timestamp('2026-01-01')
+    q1_2026_end = pd.Timestamp('2026-03-31')
+    q2_2026_start = pd.Timestamp('2026-04-01')
+    q2_2026_end = pd.Timestamp('2026-06-30')
+    
+    # === PENDING FULFILLMENT CATEGORIZATION ===
+    pf_orders = orders[orders['Status'].isin(['Pending Fulfillment', 'Pending Billing/Partially Fulfilled'])].copy()
+    
+    if not pf_orders.empty:
+        def has_q1_date(row):
+            if pd.notna(row.get('Customer Promise Date')):
+                if q1_2026_start <= row['Customer Promise Date'] <= q1_2026_end:
+                    return True
+            if pd.notna(row.get('Projected Date')):
+                if q1_2026_start <= row['Projected Date'] <= q1_2026_end:
+                    return True
+            return False
+        
+        def has_q4_2025_date(row):
+            if pd.notna(row.get('Customer Promise Date')):
+                if q4_2025_start <= row['Customer Promise Date'] <= q4_2025_end:
+                    return True
+            if pd.notna(row.get('Projected Date')):
+                if q4_2025_start <= row['Projected Date'] <= q4_2025_end:
+                    return True
+            return False
+        
+        def has_q2_2026_date(row):
+            if pd.notna(row.get('Customer Promise Date')):
+                if q2_2026_start <= row['Customer Promise Date'] <= q2_2026_end:
+                    return True
+            if pd.notna(row.get('Projected Date')):
+                if q2_2026_start <= row['Projected Date'] <= q2_2026_end:
+                    return True
+            return False
+        
+        pf_orders['Has_Q1_Date'] = pf_orders.apply(has_q1_date, axis=1)
+        pf_orders['Has_Q4_2025_Date'] = pf_orders.apply(has_q4_2025_date, axis=1)
+        pf_orders['Has_Q2_2026_Date'] = pf_orders.apply(has_q2_2026_date, axis=1)
+        
+        # Check External/Internal flag
+        is_ext = pd.Series(False, index=pf_orders.index)
+        if 'Calyx External Order' in pf_orders.columns:
+            is_ext = pf_orders['Calyx External Order'].astype(str).str.strip().str.upper() == 'YES'
+        
+        # Q4 2025 Spillover bucket
+        pf_q4_spillover = pf_orders[pf_orders['Has_Q4_2025_Date'] == True].copy()
+        q4_spillover_ids = pf_q4_spillover.index
+        
+        # Q2 2026 Spillover bucket
+        pf_q2_spillover = pf_orders[pf_orders['Has_Q2_2026_Date'] == True].copy()
+        q2_spillover_ids = pf_q2_spillover.index
+        
+        # Categorize Q1 PF orders
+        excluded_ids = q4_spillover_ids.union(q2_spillover_ids)
+        q1_candidates = pf_orders[(pf_orders['Has_Q1_Date'] == True) & (~pf_orders.index.isin(excluded_ids))]
+        pf_date_ext = q1_candidates[is_ext.loc[q1_candidates.index]].copy()
+        pf_date_int = q1_candidates[~is_ext.loc[q1_candidates.index]].copy()
+        
+        # No date means BOTH dates are missing
+        no_date_mask = (
+            (pf_orders['Customer Promise Date'].isna()) &
+            (pf_orders['Projected Date'].isna())
+        )
+        pf_nodate_ext = pf_orders[no_date_mask & is_ext].copy()
+        pf_nodate_int = pf_orders[no_date_mask & ~is_ext].copy()
+    else:
+        pf_date_ext = pf_date_int = pf_nodate_ext = pf_nodate_int = pf_q4_spillover = pf_q2_spillover = pd.DataFrame()
+    
+    # === PENDING APPROVAL CATEGORIZATION ===
+    pa_orders = orders[orders['Status'] == 'Pending Approval'].copy()
+    
+    if not pa_orders.empty:
+        if 'Age_Business_Days' not in pa_orders.columns:
+            pa_orders['Age_Business_Days'] = 0
+        
+        # Parse Pending Approval Date
+        if 'Pending Approval Date' in pa_orders.columns:
+            pa_orders['PA_Date_Parsed'] = pd.to_datetime(pa_orders['Pending Approval Date'], errors='coerce')
+            
+            # Fix 1900s dates
+            if pa_orders['PA_Date_Parsed'].notna().any():
+                mask_1900s = (pa_orders['PA_Date_Parsed'].dt.year < 2000) & (pa_orders['PA_Date_Parsed'].notna())
+                if mask_1900s.any():
+                    pa_orders.loc[mask_1900s, 'PA_Date_Parsed'] = pa_orders.loc[mask_1900s, 'PA_Date_Parsed'] + pd.DateOffset(years=100)
+        else:
+            pa_orders['PA_Date_Parsed'] = pd.NaT
+        
+        # Q1 2026 PA Date
+        has_q1_pa_date = (
+            (pa_orders['PA_Date_Parsed'].notna()) &
+            (pa_orders['PA_Date_Parsed'] >= q1_2026_start) &
+            (pa_orders['PA_Date_Parsed'] <= q1_2026_end)
+        )
+        
+        # Q4 2025 PA Date
+        has_q4_2025_pa_date = (
+            (pa_orders['PA_Date_Parsed'].notna()) &
+            (pa_orders['PA_Date_Parsed'] >= q4_2025_start) &
+            (pa_orders['PA_Date_Parsed'] <= q4_2025_end)
+        )
+        
+        # Q2 2026 PA Date
+        has_q2_2026_pa_date = (
+            (pa_orders['PA_Date_Parsed'].notna()) &
+            (pa_orders['PA_Date_Parsed'] >= q2_2026_start)
+        )
+        
+        # No PA Date
+        has_no_pa_date = (
+            (pa_orders['PA_Date_Parsed'].isna()) |
+            (pa_orders['Pending Approval Date'].astype(str).str.strip() == 'No Date') |
+            (pa_orders['Pending Approval Date'].astype(str).str.strip() == '')
+        )
+        
+        # PA Q4 2025 Spillover bucket
+        pa_q4_spillover = pa_orders[has_q4_2025_pa_date].copy()
+        q4_spillover_pa_ids = pa_q4_spillover.index
+        
+        # PA Q2 2026 Spillover bucket
+        pa_q2_spillover = pa_orders[has_q2_2026_pa_date].copy()
+        q2_spillover_pa_ids = pa_q2_spillover.index
+        
+        # Exclude spillover from remaining PA categorization
+        excluded_pa_ids = q4_spillover_pa_ids.union(q2_spillover_pa_ids)
+        pa_orders_remaining = pa_orders[~pa_orders.index.isin(excluded_pa_ids)].copy()
+        
+        # PA Old (>= 13 business days)
+        pa_old = pa_orders_remaining[pa_orders_remaining['Age_Business_Days'] >= 13].copy()
+        
+        # Only "young" orders (< 13 days)
+        young_pa = pa_orders_remaining[pa_orders_remaining['Age_Business_Days'] < 13].copy()
+        
+        # PA with Date
+        pa_date = young_pa[has_q1_pa_date.loc[young_pa.index]].copy() if not young_pa.empty else pd.DataFrame()
+        
+        # PA No Date
+        pa_nodate = young_pa[has_no_pa_date.loc[young_pa.index]].copy() if not young_pa.empty else pd.DataFrame()
+    else:
+        pa_old = pa_date = pa_nodate = pa_q4_spillover = pa_q2_spillover = pd.DataFrame()
+    
+    # Calculate amounts
+    def get_amount(df):
+        return df['Amount'].sum() if not df.empty and 'Amount' in df.columns else 0
+    
+    return {
+        'pf_date_ext': pf_date_ext,
+        'pf_date_ext_amount': get_amount(pf_date_ext),
+        'pf_date_int': pf_date_int,
+        'pf_date_int_amount': get_amount(pf_date_int),
+        'pf_nodate_ext': pf_nodate_ext,
+        'pf_nodate_ext_amount': get_amount(pf_nodate_ext),
+        'pf_nodate_int': pf_nodate_int,
+        'pf_nodate_int_amount': get_amount(pf_nodate_int),
+        'pa_date': pa_date,
+        'pa_date_amount': get_amount(pa_date),
+        'pa_nodate': pa_nodate,
+        'pa_nodate_amount': get_amount(pa_nodate),
+        'pa_old': pa_old,
+        'pa_old_amount': get_amount(pa_old),
+        'pf_q4_spillover': pf_q4_spillover,
+        'pf_q4_spillover_amount': get_amount(pf_q4_spillover),
+        'pa_q4_spillover': pa_q4_spillover,
+        'pa_q4_spillover_amount': get_amount(pa_q4_spillover),
+        'pf_q2_spillover': pf_q2_spillover,
+        'pf_q2_spillover_amount': get_amount(pf_q2_spillover),
+        'pa_q2_spillover': pa_q2_spillover,
+        'pa_q2_spillover_amount': get_amount(pa_q2_spillover)
+    }
 # ========== DATE CONSTANTS ==========
 Q1_2026_START = pd.Timestamp('2026-01-01')
 Q1_2026_END = pd.Timestamp('2026-03-31')
