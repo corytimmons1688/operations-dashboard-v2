@@ -1658,16 +1658,16 @@ def load_line_items():
 
 def load_item_master():
     """
-    Load Item Master data for SKU descriptions
+    Load Raw_Items data for SKU descriptions
     
-    Item Master tab columns:
+    Raw_Items tab columns:
     - Column A: Item (SKU code)
     - Column C: Description
     
     Returns a dictionary mapping SKU -> Description
     """
     
-    item_master_df = load_google_sheets_data("Item Master", "A:C", version=CACHE_VERSION)
+    item_master_df = load_google_sheets_data("Raw_Items", "A:C", version=CACHE_VERSION)
     
     if item_master_df.empty:
         return {}
@@ -1870,7 +1870,7 @@ def calculate_customer_product_metrics(historical_df, line_items_df, sku_to_desc
     Args:
         historical_df: Historical orders dataframe
         line_items_df: Line items dataframe
-        sku_to_desc: Dictionary mapping SKU codes to descriptions (from Item Master)
+        sku_to_desc: Dictionary mapping SKU codes to descriptions (from Raw_Items)
     
     Returns DataFrame with:
     - Customer, Product Type, Order count, Revenue, Cadence, Expected Q1 orders
@@ -1951,7 +1951,7 @@ def calculate_customer_product_metrics(historical_df, line_items_df, sku_to_desc
                 avg_rate = total_line_value / total_qty if total_qty > 0 else 0
                 sku_count = product_line_items['Item'].nunique()
                 
-                # Get top 3 SKUs by total value, with descriptions from Item Master
+                # Get top 3 SKUs by total value, with descriptions from Raw_Items
                 sku_totals = product_line_items.groupby('Item')['Line_Total'].sum().sort_values(ascending=False)
                 top_sku_list = sku_totals.head(3).index.tolist()
                 
@@ -2942,7 +2942,7 @@ def render_yearly_planning_2026():
         # Load line items - THIS IS THE KEY DATA
         line_items_df = load_line_items()
         
-        # Load Item Master for SKU descriptions
+        # Load Raw_Items for SKU descriptions
         sku_to_desc = load_item_master()
     
     # Debug section - EXPANDED
@@ -2985,9 +2985,9 @@ def render_yearly_planning_2026():
                     st.write(f"**Sample Rates:** {line_items_df['Item_Rate'].head(5).tolist()}")
         
         with col3:
-            st.write("**Item Master (SKU Descriptions):**")
+            st.write("**Raw_Items (SKU Descriptions):**")
             if not sku_to_desc:
-                st.warning("⚠️ No Item Master loaded - check tab name 'Item Master'")
+                st.warning("⚠️ No Raw_Items loaded - check tab name 'Raw_Items'")
             else:
                 st.success(f"✅ {len(sku_to_desc)} SKU descriptions loaded")
                 # Show sample mappings
@@ -3086,7 +3086,7 @@ def render_yearly_planning_2026():
                     return True
             return False
         
-        # Calculate NEW product-level metrics (with SKU descriptions from Item Master)
+        # Calculate NEW product-level metrics (with SKU descriptions from Raw_Items)
         product_metrics_df = calculate_customer_product_metrics(historical_df, line_items_df, sku_to_desc)
         
         if product_metrics_df.empty:
