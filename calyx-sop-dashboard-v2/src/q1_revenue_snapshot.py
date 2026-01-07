@@ -5227,6 +5227,6 @@ if __name__ == "__main__":
     main()
 
 # Wrapper function for importing into app.py
-def render_q1_revenue_snapshot():
+def render_q1_revenue_snapshot(view_mode=None):
     """Entry point when imported as a module by app.py"""
     main()
