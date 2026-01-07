@@ -2658,32 +2658,52 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     gap_class = "gap-behind" if gap_to_quota > 0 else "gap-ahead"
     gap_label = "GAP" if gap_to_quota > 0 else "AHEAD"
     gap_display = f"${abs(gap_to_quota):,.0f}"
+    gap_color = "#f87171" if gap_to_quota > 0 else "#4ade80"
+    gap_shadow = "rgba(248, 113, 113, 0.5)" if gap_to_quota > 0 else "rgba(74, 222, 128, 0.5)"
     
     st.markdown(f"""
-    <div class="sticky-forecast-bar">
-        <div class="sticky-forecast-item">
-            <div class="sticky-forecast-label">Invoiced</div>
-            <div class="sticky-forecast-value invoiced">${invoiced_shipped:,.0f}</div>
+    <div style="
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: calc(100% - 380px);
+        max-width: 1100px;
+        z-index: 999999;
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        border-radius: 24px;
+        box-shadow: 0 0 40px rgba(99, 102, 241, 0.2), 0 20px 60px rgba(0, 0, 0, 0.5);
+        padding: 16px 32px;
+        display: flex;
+        justify-content: space-around;
+        align-items: center;
+    ">
+        <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
+            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">INVOICED</div>
+            <div style="font-size: 1.25rem; font-weight: 800; color: #4ade80; text-shadow: 0 0 15px rgba(74, 222, 128, 0.5);">${invoiced_shipped:,.0f}</div>
         </div>
-        <div class="sticky-forecast-divider"></div>
-        <div class="sticky-forecast-item">
-            <div class="sticky-forecast-label">+ Pending</div>
-            <div class="sticky-forecast-value pending">${selected_pending:,.0f}</div>
+        <div style="width: 1px; height: 40px; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent);"></div>
+        <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
+            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">+ PENDING</div>
+            <div style="font-size: 1.25rem; font-weight: 800; color: #fbbf24; text-shadow: 0 0 15px rgba(251, 191, 36, 0.5);">${selected_pending:,.0f}</div>
         </div>
-        <div class="sticky-forecast-divider"></div>
-        <div class="sticky-forecast-item">
-            <div class="sticky-forecast-label">+ Pipeline</div>
-            <div class="sticky-forecast-value pipeline">${selected_pipeline:,.0f}</div>
+        <div style="width: 1px; height: 40px; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent);"></div>
+        <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
+            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">+ PIPELINE</div>
+            <div style="font-size: 1.25rem; font-weight: 800; color: #60a5fa; text-shadow: 0 0 15px rgba(96, 165, 250, 0.5);">${selected_pipeline:,.0f}</div>
         </div>
-        <div class="sticky-forecast-divider"></div>
-        <div class="sticky-forecast-item">
-            <div class="sticky-forecast-label">= Forecast</div>
-            <div class="sticky-forecast-value total">${total_forecast:,.0f}</div>
+        <div style="width: 1px; height: 40px; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent);"></div>
+        <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
+            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">= FORECAST</div>
+            <div style="font-size: 1.5rem; font-weight: 800; background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; filter: drop-shadow(0 0 20px rgba(139, 92, 246, 0.5));">${total_forecast:,.0f}</div>
         </div>
-        <div class="sticky-forecast-divider"></div>
-        <div class="sticky-forecast-item">
-            <div class="sticky-forecast-label">{gap_label}</div>
-            <div class="sticky-forecast-value {gap_class}">{gap_display}</div>
+        <div style="width: 1px; height: 40px; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent);"></div>
+        <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
+            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">{gap_label}</div>
+            <div style="font-size: 1.25rem; font-weight: 800; color: {gap_color}; text-shadow: 0 0 15px {gap_shadow};">{gap_display}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
