@@ -3,6 +3,14 @@ Sales Forecasting Dashboard - Q1 2026 Version
 Reads from Google Sheets and displays gap-to-goal analysis with interactive visualizations
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
 
+VERSION 8 CHANGES:
+- Added Probability Toggle for HubSpot deals in Build Your Own Forecast section
+- Toggle switches between Raw Amount and Probability-Adjusted amounts
+- Loads "Probability Rev" column (Column U) from All Reps All Pipelines sheet
+- Displays both amounts in data tables with active mode highlighted
+- Export includes both Amount and Prob_Amount columns
+- Calculations respect the toggle selection
+
 VERSION 7 CHANGES:
 - Sales Order categorization now uses pre-calculated "Updated Status" column (Column AF)
 - Removed complex Python logic for categorizing PA/PF statuses
@@ -892,8 +900,8 @@ def load_all_data():
     
     #st.sidebar.info("🔄 Loading data from Google Sheets...")
     
-    # Load deals data - extend range to include Q2 2026 Spillover column
-    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:R", version=CACHE_VERSION)
+    # Load deals data - extend range to include Q2 2026 Spillover column AND Probability Rev (Column U)
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:U", version=CACHE_VERSION)
     
     # DEBUG: Show what we got from HubSpot
     if not deals_df.empty:
@@ -966,6 +974,13 @@ def load_all_data():
         
         if 'Amount' in deals_df.columns:
             deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
+        
+        # Process Probability Rev column (Column U) - probability-weighted amount
+        if 'Probability Rev' in deals_df.columns:
+            deals_df['Probability Rev'] = deals_df['Probability Rev'].apply(clean_numeric)
+        else:
+            # If column doesn't exist, default to same as Amount
+            deals_df['Probability Rev'] = deals_df['Amount'] if 'Amount' in deals_df.columns else 0
         
         # Convert Close Date to datetime
         if 'Close Date' in deals_df.columns:
@@ -2011,6 +2026,13 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
 
         if 'Amount' in hs_data.columns:
             hs_data['Amount_Numeric'] = pd.to_numeric(hs_data['Amount'], errors='coerce').fillna(0)
+        
+        # Add Probability-adjusted amount column
+        if 'Probability Rev' in hs_data.columns:
+            hs_data['Prob_Amount_Numeric'] = pd.to_numeric(hs_data['Probability Rev'], errors='coerce').fillna(0)
+        else:
+            # If no probability column, default to same as Amount
+            hs_data['Prob_Amount_Numeric'] = hs_data['Amount_Numeric'] if 'Amount_Numeric' in hs_data.columns else 0
     else:
         hs_data = pd.DataFrame()
 
@@ -2417,9 +2439,54 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         # === HUBSPOT COLUMN ===
         with col_hs:
             st.markdown("#### 🎯 HubSpot Pipeline")
+            
+            # --- PROBABILITY TOGGLE ---
+            # Let user choose between Raw Amount and Probability-Weighted Amount
+            st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
+                border: 1px solid rgba(99, 102, 241, 0.3);
+                border-radius: 12px;
+                padding: 12px 16px;
+                margin-bottom: 16px;
+            ">
+                <div style="font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8; margin-bottom: 8px;">
+                    💰 Amount Display Mode
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            amount_mode_key = f"amount_mode_{rep_name}"
+            amount_mode = st.radio(
+                "Select amount type:",
+                options=["Raw Amount", "Probability-Adjusted"],
+                key=amount_mode_key,
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+            
+            # Determine which amount column to use based on toggle
+            use_probability = (amount_mode == "Probability-Adjusted")
+            amount_col_display = 'Prob_Amount_Numeric' if use_probability else 'Amount_Numeric'
+            
+            # Show info about the selected mode
+            if use_probability:
+                st.caption("📊 Showing probability-weighted amounts from HubSpot")
+            else:
+                st.caption("📊 Showing raw deal amounts")
+            
+            st.markdown("---")
+            
             for key, data in hs_categories.items():
                 df = hs_dfs.get(key, pd.DataFrame())
-                val = df['Amount_Numeric'].sum() if not df.empty else 0
+                # Use the appropriate amount column based on toggle
+                if not df.empty:
+                    if use_probability and 'Prob_Amount_Numeric' in df.columns:
+                        val = df['Prob_Amount_Numeric'].sum()
+                    else:
+                        val = df['Amount_Numeric'].sum() if 'Amount_Numeric' in df.columns else 0
+                else:
+                    val = 0
                 
                 # Determine default checkbox value based on planning status
                 checkbox_key = f"chk_{key}_{rep_name}"
@@ -2448,7 +2515,18 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                         with st.expander(f"🔎 View Deals ({data['label']})"):
                             if not df.empty:
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
-                                cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Amount_Numeric']
+                                
+                                # Dynamic columns based on probability mode
+                                # Always show both columns but highlight the active one
+                                if use_probability:
+                                    cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Prob_Amount_Numeric', 'Amount_Numeric']
+                                    primary_amount_col = 'Prob_Amount_Numeric'
+                                else:
+                                    cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Amount_Numeric', 'Prob_Amount_Numeric']
+                                    primary_amount_col = 'Amount_Numeric'
+                                
+                                # Filter cols to only those that exist in df
+                                cols = [c for c in cols if c in df.columns]
                                 
                                 if enable_edit:
                                     df_edit = df.copy()
@@ -2520,7 +2598,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                             "Type": st.column_config.TextColumn("Type", width="small"),
                                             "Close": st.column_config.TextColumn("Close Date", width="small"),
                                             "PA Date": st.column_config.TextColumn("PA Date", width="small"),
-                                            "Amount_Numeric": st.column_config.NumberColumn("Amount", format="$%d")
+                                            "Amount_Numeric": st.column_config.NumberColumn("Raw $" if use_probability else "Amount ✓", format="$%d"),
+                                            "Prob_Amount_Numeric": st.column_config.NumberColumn("Prob $ ✓" if use_probability else "Prob $", format="$%d")
                                         },
                                         disabled=[c for c in display_with_status if c not in ['Select', 'Status', 'Notes']],
                                         hide_index=True,
@@ -2559,7 +2638,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     
                                     export_buckets[key] = selected_rows
                                     
-                                    current_total = selected_rows['Amount_Numeric'].sum()
+                                    # Use the appropriate amount column based on toggle
+                                    if use_probability and 'Prob_Amount_Numeric' in selected_rows.columns:
+                                        current_total = selected_rows['Prob_Amount_Numeric'].sum()
+                                    else:
+                                        current_total = selected_rows['Amount_Numeric'].sum()
                                     st.caption(f"Selected: ${current_total:,.0f}")
                                 else:
                                     # Read-only view
@@ -2574,6 +2657,9 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     else:
                                         display_readonly = cols
                                     
+                                    # Filter display_readonly to only columns that exist
+                                    display_readonly = [c for c in display_readonly if c in df_readonly.columns]
+                                    
                                     st.dataframe(
                                         df_readonly[display_readonly],
                                         column_config={
@@ -2583,7 +2669,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                             "Type": st.column_config.TextColumn("Type", width="small"),
                                             "Close": st.column_config.TextColumn("Close Date", width="small"),
                                             "PA Date": st.column_config.TextColumn("PA Date", width="small"),
-                                            "Amount_Numeric": st.column_config.NumberColumn("Amount", format="$%d")
+                                            "Amount_Numeric": st.column_config.NumberColumn("Raw $" if use_probability else "Amount ✓", format="$%d"),
+                                            "Prob_Amount_Numeric": st.column_config.NumberColumn("Prob $ ✓" if use_probability else "Prob $", format="$%d")
                                         },
                                         hide_index=True,
                                         use_container_width=True
@@ -2592,20 +2679,30 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
 
     # --- 5. CALCULATE RESULTS ---
     
+    # Get probability mode from session state
+    amount_mode_key = f"amount_mode_{rep_name}"
+    use_probability_for_calc = st.session_state.get(amount_mode_key, "Raw Amount") == "Probability-Adjusted"
+    
     # Calculate totals from export buckets (which reflect custom selections)
-    def safe_sum(df):
+    def safe_sum(df, is_hubspot=False):
         if df.empty:
             return 0
         # Handle both Amount and Amount_Numeric columns (NS uses Amount, HS uses Amount_Numeric)
-        if 'Amount_Numeric' in df.columns:
-            return df['Amount_Numeric'].sum()
-        elif 'Amount' in df.columns:
-            return df['Amount'].sum()
+        if is_hubspot and use_probability_for_calc:
+            # Use probability-weighted amount for HubSpot if toggle is on
+            if 'Prob_Amount_Numeric' in df.columns:
+                return df['Prob_Amount_Numeric'].sum()
+            elif 'Amount_Numeric' in df.columns:
+                return df['Amount_Numeric'].sum()
         else:
-            return 0
+            if 'Amount_Numeric' in df.columns:
+                return df['Amount_Numeric'].sum()
+            elif 'Amount' in df.columns:
+                return df['Amount'].sum()
+        return 0
     
-    selected_pending = sum(safe_sum(df) for k, df in export_buckets.items() if k in ns_categories)
-    selected_pipeline = sum(safe_sum(df) for k, df in export_buckets.items() if k in hs_categories)
+    selected_pending = sum(safe_sum(df, is_hubspot=False) for k, df in export_buckets.items() if k in ns_categories)
+    selected_pipeline = sum(safe_sum(df, is_hubspot=True) for k, df in export_buckets.items() if k in hs_categories)
     
     total_forecast = invoiced_shipped + selected_pending + selected_pipeline
     gap_to_quota = quota - total_forecast
@@ -2616,6 +2713,10 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     gap_display = f"${abs(gap_to_quota):,.0f}"
     gap_color = "#f87171" if gap_to_quota > 0 else "#4ade80"
     gap_shadow = "rgba(248, 113, 113, 0.5)" if gap_to_quota > 0 else "rgba(74, 222, 128, 0.5)"
+    
+    # Determine pipeline label based on probability mode
+    pipeline_label = "+ PIPELINE (Prob)" if use_probability_for_calc else "+ PIPELINE (Raw)"
+    pipeline_color = "#a78bfa" if use_probability_for_calc else "#60a5fa"  # Purple for prob, blue for raw
     
     st.markdown(f"""
     <div style="
@@ -2648,8 +2749,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         </div>
         <div style="width: 1px; height: 40px; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent);"></div>
         <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
-            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">+ PIPELINE</div>
-            <div style="font-size: 1.25rem; font-weight: 800; color: #60a5fa; text-shadow: 0 0 15px rgba(96, 165, 250, 0.5);">${selected_pipeline:,.0f}</div>
+            <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 4px;">{pipeline_label}</div>
+            <div style="font-size: 1.25rem; font-weight: 800; color: {pipeline_color}; text-shadow: 0 0 15px rgba(96, 165, 250, 0.5);">${selected_pipeline:,.0f}</div>
         </div>
         <div style="width: 1px; height: 40px; background: linear-gradient(180deg, transparent, rgba(99, 102, 241, 0.5), transparent);"></div>
         <div style="display: flex; flex-direction: column; align-items: center; padding: 0 1rem;">
@@ -2792,7 +2893,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         export_summary.append({'Category': 'Quota', 'Amount': f"${quota:,.0f}"})
         export_summary.append({'Category': 'Invoiced (Always Included)', 'Amount': f"${invoiced_shipped:,.0f}"})
         export_summary.append({'Category': 'Pending Orders (Selected)', 'Amount': f"${selected_pending:,.0f}"})
-        export_summary.append({'Category': 'Pipeline Deals (Selected)', 'Amount': f"${selected_pipeline:,.0f}"})
+        
+        # Indicate which pipeline mode is being used
+        pipeline_mode_label = "Pipeline Deals (Probability-Adjusted)" if use_probability_for_calc else "Pipeline Deals (Raw Amount)"
+        export_summary.append({'Category': pipeline_mode_label, 'Amount': f"${selected_pipeline:,.0f}"})
+        
         export_summary.append({'Category': 'Total Forecast', 'Amount': f"${total_forecast:,.0f}"})
         export_summary.append({'Category': 'Gap to Goal', 'Amount': f"${gap_to_quota:,.0f}"})
         export_summary.append({'Category': '', 'Amount': ''})
@@ -2865,6 +2970,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     deal_type = row.get('Type', row.get('Display_Type', ''))
                     # NetSuite uses 'Amount' not 'Amount_Numeric'
                     amount = pd.to_numeric(row.get('Amount', 0), errors='coerce')
+                    prob_amount = amount  # NetSuite doesn't have probability, use same as amount
                     # Get Sales Rep - try multiple column names
                     rep = row.get('Sales Rep', row.get('Rep Master', ''))
                     # Ensure it's not NaN
@@ -2879,6 +2985,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     date_val = row.get('Close', row.get('Close Date', ''))
                     deal_type = row.get('Type', row.get('Display_Type', ''))
                     amount = pd.to_numeric(row.get('Amount_Numeric', 0), errors='coerce')
+                    prob_amount = pd.to_numeric(row.get('Prob_Amount_Numeric', 0), errors='coerce')
                     # Get Deal Owner - try multiple possible column names
                     rep = row.get('Deal Owner', '')
                     # If Deal Owner is empty, try to construct from First + Last Name
@@ -2928,6 +3035,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     'Order/Deal Type': deal_type,
                     'Date': date_val,
                     'Amount': amount,
+                    'Prob_Amount': prob_amount,
                     'Status': planning_status,
                     'Notes': planning_notes,
                     'Rep': rep
@@ -2938,8 +3046,9 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             summary_df = pd.DataFrame(export_summary)
             data_df = pd.DataFrame(export_data)
             
-            # Format Amount in Data DF
+            # Format Amount columns in Data DF
             data_df['Amount'] = data_df['Amount'].apply(lambda x: f"${x:,.2f}")
+            data_df['Prob_Amount'] = data_df['Prob_Amount'].apply(lambda x: f"${x:,.2f}")
             
             final_csv = summary_df.to_csv(index=False) + "\n" + data_df.to_csv(index=False)
             
