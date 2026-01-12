@@ -2,6 +2,12 @@
 Sales Forecasting Dashboard - Q1 2026 Version
 Reads from Google Sheets and displays gap-to-goal analysis with interactive visualizations
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
+
+VERSION 7 CHANGES:
+- Sales Order categorization now uses pre-calculated "Updated Status" column (Column AF)
+- Removed complex Python logic for categorizing PA/PF statuses
+- Updated Status values from sheet: PA No Date, PA with Date, PF with Date (Ext), 
+  PF with Date (Int), PF No Date (Int), PF No Date (Ext), PA Old (>2 Weeks)
 """
 
 import streamlit as st
@@ -672,7 +678,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # Cache version for manual refresh control
 # No TTL - data only refreshes when user clicks refresh button
-CACHE_VERSION = "v64_simplified_deals"
+CACHE_VERSION = "v65_updated_status_column"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
 def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
@@ -1176,13 +1182,20 @@ def load_all_data():
         
         # NEW COLUMN POSITIONS after adding Calyx | External Order in column AC
         if len(col_names) > 28:
-            rename_dict[col_names[28]] = 'Calyx External Order'  # Column AC - NEW!
+            rename_dict[col_names[28]] = 'Calyx External Order'  # Column AC
         if len(col_names) > 29 and 'Pending Approval Date' not in rename_dict.values():
-            rename_dict[col_names[29]] = 'Pending Approval Date'  # Column AD (was AB)
+            rename_dict[col_names[29]] = 'Pending Approval Date'  # Column AD
         if len(col_names) > 30:
-            rename_dict[col_names[30]] = 'Corrected Customer Name'  # Column AE (was AC)
+            rename_dict[col_names[30]] = 'Corrected Customer Name'  # Column AE
         if len(col_names) > 31:
-            rename_dict[col_names[31]] = 'Rep Master'  # Column AF (was AD)
+            rename_dict[col_names[31]] = 'Updated Status'  # Column AF - Pre-calculated SO status category
+        
+        # Rep Master lookup - search for it by column name if not found by position
+        for idx, col in enumerate(col_names):
+            col_str = str(col).lower().strip()
+            if 'rep master' in col_str and 'Rep Master' not in rename_dict.values():
+                rename_dict[col_names[idx]] = 'Rep Master'
+                break
         
         # NEW: Map PI || CSM column (Column G based on screenshot)
         for idx, col in enumerate(col_names):
@@ -1454,7 +1467,7 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
         current_metrics = calculate_team_metrics(deals_df, dashboard_df)
         previous_metrics = calculate_team_metrics(previous['deals'], previous['dashboard'])
         
-        # Helper function to calculate sales order metrics
+        # Helper function to calculate sales order metrics using Updated Status column
         def calculate_so_metrics(so_df):
             metrics = {
                 'pending_fulfillment': 0,
@@ -1470,53 +1483,28 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
             so_df = so_df.copy()
             so_df['Amount_Numeric'] = pd.to_numeric(so_df.get('Amount', 0), errors='coerce')
             
-            # Q1 2026 date range for filtering
-            q1_start = pd.Timestamp('2026-01-01')
-            q1_end = pd.Timestamp('2026-03-31')
-            
-            # Parse dates
-            if 'Estimated Ship Date' in so_df.columns:
-                so_df['Ship_Date_Parsed'] = pd.to_datetime(so_df['Estimated Ship Date'], errors='coerce')
-            else:
-                so_df['Ship_Date_Parsed'] = pd.NaT
-            
-            # Parse Pending Approval Date for PA filtering
-            if 'Pending Approval Date' in so_df.columns:
-                so_df['PA_Date_Parsed'] = pd.to_datetime(so_df['Pending Approval Date'], errors='coerce')
-                # Fix any dates that got parsed as 1900s (2-digit year issue: 26 -> 1926 instead of 2026)
-                if so_df['PA_Date_Parsed'].notna().any():
-                    mask_1900s = (so_df['PA_Date_Parsed'].dt.year < 2000) & (so_df['PA_Date_Parsed'].notna())
-                    if mask_1900s.any():
-                        so_df.loc[mask_1900s, 'PA_Date_Parsed'] = so_df.loc[mask_1900s, 'PA_Date_Parsed'] + pd.DateOffset(years=100)
-            else:
-                so_df['PA_Date_Parsed'] = pd.NaT
-            
-            # Pending Fulfillment
-            pf_df = so_df[so_df.get('Status', '') == 'Pending Fulfillment']
-            metrics['pending_fulfillment'] = pf_df[pf_df['Ship_Date_Parsed'].notna()]['Amount_Numeric'].sum()
-            metrics['pending_fulfillment_no_date'] = pf_df[pf_df['Ship_Date_Parsed'].isna()]['Amount_Numeric'].sum()
-            
-            # Pending Approval - filtered by Pending Approval Date within Q1 2026
-            pa_df = so_df[so_df.get('Status', '') == 'Pending Approval'].copy()
-            
-            # PA with date: must have a valid date WITHIN Q1 2026
-            pa_with_q1_date = pa_df[
-                (pa_df['PA_Date_Parsed'].notna()) &
-                (pa_df['PA_Date_Parsed'] >= q1_start) &
-                (pa_df['PA_Date_Parsed'] <= q1_end)
-            ]
-            metrics['pending_approval'] = pa_with_q1_date['Amount_Numeric'].sum()
-            
-            # PA no date: missing or invalid Pending Approval Date
-            pa_no_date = pa_df[pa_df['PA_Date_Parsed'].isna()]
-            metrics['pending_approval_no_date'] = pa_no_date['Amount_Numeric'].sum()
-            
-            # Pending Approval > 2 weeks old
-            if 'Transaction Date' in so_df.columns:
-                so_df['Transaction_Date_Parsed'] = pd.to_datetime(so_df['Transaction Date'], errors='coerce')
-                two_weeks_ago = datetime.now() - timedelta(days=14)
-                old_pa = pa_df[pa_df['Transaction_Date_Parsed'] < two_weeks_ago]
-                metrics['pending_approval_old'] = old_pa['Amount_Numeric'].sum()
+            # Use Updated Status column if available
+            if 'Updated Status' in so_df.columns:
+                so_df['Updated_Status_Clean'] = so_df['Updated Status'].astype(str).str.strip()
+                
+                # Pending Fulfillment with date (Ext + Int)
+                pf_date_ext = so_df[so_df['Updated_Status_Clean'] == 'PF with Date (Ext)']['Amount_Numeric'].sum()
+                pf_date_int = so_df[so_df['Updated_Status_Clean'] == 'PF with Date (Int)']['Amount_Numeric'].sum()
+                metrics['pending_fulfillment'] = pf_date_ext + pf_date_int
+                
+                # Pending Fulfillment no date (Ext + Int)
+                pf_nodate_ext = so_df[so_df['Updated_Status_Clean'] == 'PF No Date (Ext)']['Amount_Numeric'].sum()
+                pf_nodate_int = so_df[so_df['Updated_Status_Clean'] == 'PF No Date (Int)']['Amount_Numeric'].sum()
+                metrics['pending_fulfillment_no_date'] = pf_nodate_ext + pf_nodate_int
+                
+                # Pending Approval with date
+                metrics['pending_approval'] = so_df[so_df['Updated_Status_Clean'] == 'PA with Date']['Amount_Numeric'].sum()
+                
+                # Pending Approval no date
+                metrics['pending_approval_no_date'] = so_df[so_df['Updated_Status_Clean'] == 'PA No Date']['Amount_Numeric'].sum()
+                
+                # Pending Approval old (>2 weeks)
+                metrics['pending_approval_old'] = so_df[so_df['Updated_Status_Clean'] == 'PA Old (>2 Weeks)']['Amount_Numeric'].sum()
             
             return metrics
         
@@ -3098,27 +3086,41 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     """
     SINGLE SOURCE OF TRUTH for categorizing sales orders into forecast buckets.
     
-    This function ensures consistent categorization across:
-    - Team Dashboard bar charts
-    - Individual Rep views
-    - Build Your Own Forecast section
+    SIMPLIFIED VERSION: Uses the pre-calculated "Updated Status" column (Column AF)
+    from the Google Sheet instead of calculating status categories in Python.
+    
+    Valid "Updated Status" values:
+    - PA No Date
+    - PA with Date
+    - PF with Date (Ext)
+    - PF with Date (Int)
+    - PF No Date (Int)
+    - PF No Date (Ext)
+    - PA Old (>2 Weeks)
     
     Returns a dictionary with categorized DataFrames and their amounts.
     """
+    empty_result = {
+        'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
+        'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
+        'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
+        'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
+        'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
+        'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
+        'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
+        'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
+        'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
+        'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
+        'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
+    }
+    
     if sales_orders_df is None or sales_orders_df.empty:
-        return {
-            'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
-            'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
-            'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
-            'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
-            'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
-            'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
-            'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
-            'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
-            'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
-            'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
-            'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
-        }
+        return empty_result
+    
+    # Check if Updated Status column exists
+    if 'Updated Status' not in sales_orders_df.columns:
+        st.warning("⚠️ 'Updated Status' column not found in Sales Orders data. Using empty results.")
+        return empty_result
     
     # Filter by rep if specified
     if rep_name and 'Sales Rep' in sales_orders_df.columns:
@@ -3127,26 +3129,13 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         orders = sales_orders_df.copy()
     
     if orders.empty:
-        return {
-            'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
-            'pf_date_int': pd.DataFrame(), 'pf_date_int_amount': 0,
-            'pf_nodate_ext': pd.DataFrame(), 'pf_nodate_ext_amount': 0,
-            'pf_nodate_int': pd.DataFrame(), 'pf_nodate_int_amount': 0,
-            'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
-            'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
-            'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
-            'pf_q4_spillover': pd.DataFrame(), 'pf_q4_spillover_amount': 0,
-            'pa_q4_spillover': pd.DataFrame(), 'pa_q4_spillover_amount': 0,
-            'pf_q2_spillover': pd.DataFrame(), 'pf_q2_spillover_amount': 0,
-            'pa_q2_spillover': pd.DataFrame(), 'pa_q2_spillover_amount': 0
-        }
+        return empty_result
     
     # Remove duplicate columns
     if orders.columns.duplicated().any():
         orders = orders.loc[:, ~orders.columns.duplicated()]
     
     # === ADD DISPLAY COLUMNS FOR UI ===
-    # Add display columns to orders dataframe
     orders['Display_SO_Num'] = get_col_by_index(orders, 1)  # Col B: SO#
     orders['Display_Type'] = get_col_by_index(orders, 17).fillna('Standard')  # Col R: Order Type
     orders['Display_Promise_Date'] = pd.to_datetime(get_col_by_index(orders, 11), errors='coerce')  # Col L: Promise Date
@@ -3158,158 +3147,38 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     else:
         orders['Display_PA_Date'] = pd.to_datetime(get_col_by_index(orders, 29), errors='coerce')  # Col AD: PA Date
     
-    # Define Q1 2026 (primary), Q4 2025 (spillover backward), and Q2 2026 (spillover forward) date ranges
-    q4_2025_start = pd.Timestamp('2025-10-01')
-    q4_2025_end = pd.Timestamp('2025-12-31')
-    q1_2026_start = pd.Timestamp('2026-01-01')
-    q1_2026_end = pd.Timestamp('2026-03-31')
-    q2_2026_start = pd.Timestamp('2026-04-01')
-    q2_2026_end = pd.Timestamp('2026-06-30')
+    # === CATEGORIZE USING "Updated Status" COLUMN ===
+    # Clean and normalize the Updated Status values for matching
+    orders['Updated_Status_Clean'] = orders['Updated Status'].astype(str).str.strip()
     
-    # === PENDING FULFILLMENT CATEGORIZATION ===
-    pf_orders = orders[orders['Status'].isin(['Pending Fulfillment', 'Pending Billing/Partially Fulfilled'])].copy()
+    # Map Updated Status values to categories
+    # PF with Date (Ext) -> pf_date_ext
+    pf_date_ext = orders[orders['Updated_Status_Clean'] == 'PF with Date (Ext)'].copy()
     
-    if not pf_orders.empty:
-        # Check if dates are in Q1 2026 range (primary quarter)
-        def has_q1_date(row):
-            if pd.notna(row.get('Customer Promise Date')):
-                if q1_2026_start <= row['Customer Promise Date'] <= q1_2026_end:
-                    return True
-            if pd.notna(row.get('Projected Date')):
-                if q1_2026_start <= row['Projected Date'] <= q1_2026_end:
-                    return True
-            return False
-        
-        # Check if dates are in Q4 2025 range (backward spillover - carryover from Q4)
-        def has_q4_2025_date(row):
-            if pd.notna(row.get('Customer Promise Date')):
-                if q4_2025_start <= row['Customer Promise Date'] <= q4_2025_end:
-                    return True
-            if pd.notna(row.get('Projected Date')):
-                if q4_2025_start <= row['Projected Date'] <= q4_2025_end:
-                    return True
-            return False
-        
-        # Check if dates are in Q2 2026 range (forward spillover)
-        def has_q2_2026_date(row):
-            if pd.notna(row.get('Customer Promise Date')):
-                if q2_2026_start <= row['Customer Promise Date'] <= q2_2026_end:
-                    return True
-            if pd.notna(row.get('Projected Date')):
-                if q2_2026_start <= row['Projected Date'] <= q2_2026_end:
-                    return True
-            return False
-        
-        pf_orders['Has_Q1_Date'] = pf_orders.apply(has_q1_date, axis=1)
-        pf_orders['Has_Q4_2025_Date'] = pf_orders.apply(has_q4_2025_date, axis=1)
-        pf_orders['Has_Q2_2026_Date'] = pf_orders.apply(has_q2_2026_date, axis=1)
-        
-        # Check External/Internal flag
-        is_ext = pd.Series(False, index=pf_orders.index)
-        if 'Calyx External Order' in pf_orders.columns:
-            is_ext = pf_orders['Calyx External Order'].astype(str).str.strip().str.upper() == 'YES'
-        
-        # Q4 2025 Spillover bucket (carryover from Q4 that hasn't shipped)
-        pf_q4_spillover = pf_orders[pf_orders['Has_Q4_2025_Date'] == True].copy()
-        q4_spillover_ids = pf_q4_spillover.index
-        
-        # Q2 2026 Spillover bucket (forward spillover)
-        pf_q2_spillover = pf_orders[pf_orders['Has_Q2_2026_Date'] == True].copy()
-        q2_spillover_ids = pf_q2_spillover.index
-        
-        # Categorize Q1 PF orders (exclude both spillover buckets to avoid double counting)
-        excluded_ids = q4_spillover_ids.union(q2_spillover_ids)
-        q1_candidates = pf_orders[(pf_orders['Has_Q1_Date'] == True) & (~pf_orders.index.isin(excluded_ids))]
-        pf_date_ext = q1_candidates[is_ext.loc[q1_candidates.index]].copy()
-        pf_date_int = q1_candidates[~is_ext.loc[q1_candidates.index]].copy()
-        
-        # No date means BOTH dates are missing (not Q1, not Q4, not Q2)
-        no_date_mask = (
-            (pf_orders['Customer Promise Date'].isna()) &
-            (pf_orders['Projected Date'].isna())
-        )
-        pf_nodate_ext = pf_orders[no_date_mask & is_ext].copy()
-        pf_nodate_int = pf_orders[no_date_mask & ~is_ext].copy()
-    else:
-        pf_date_ext = pf_date_int = pf_nodate_ext = pf_nodate_int = pf_q4_spillover = pf_q2_spillover = pd.DataFrame()
+    # PF with Date (Int) -> pf_date_int
+    pf_date_int = orders[orders['Updated_Status_Clean'] == 'PF with Date (Int)'].copy()
     
-    # === PENDING APPROVAL CATEGORIZATION ===
-    # Logic:
-    # 1. PA with Date (within Q1): Has PA Date in Q1 2026 AND Age < 13 business days
-    # 2. PA No Date: No PA Date AND Age < 13 business days  
-    # 3. PA Old (>2 Weeks): Age >= 13 business days (regardless of whether they have a PA date or not)
-    pa_orders = orders[orders['Status'] == 'Pending Approval'].copy()
+    # PF No Date (Ext) -> pf_nodate_ext
+    pf_nodate_ext = orders[orders['Updated_Status_Clean'] == 'PF No Date (Ext)'].copy()
     
-    if not pa_orders.empty:
-        # Check if Age_Business_Days column exists
-        if 'Age_Business_Days' not in pa_orders.columns:
-            pa_orders['Age_Business_Days'] = 0
-        
-        # Parse Pending Approval Date for all PA orders
-        if 'Pending Approval Date' in pa_orders.columns:
-            pa_orders['PA_Date_Parsed'] = pd.to_datetime(pa_orders['Pending Approval Date'], errors='coerce')
-            
-            # Fix any dates that got parsed as 1900s (2-digit year issue: 26 -> 1926 instead of 2026)
-            if pa_orders['PA_Date_Parsed'].notna().any():
-                mask_1900s = (pa_orders['PA_Date_Parsed'].dt.year < 2000) & (pa_orders['PA_Date_Parsed'].notna())
-                if mask_1900s.any():
-                    pa_orders.loc[mask_1900s, 'PA_Date_Parsed'] = pa_orders.loc[mask_1900s, 'PA_Date_Parsed'] + pd.DateOffset(years=100)
-        else:
-            pa_orders['PA_Date_Parsed'] = pd.NaT
-        
-        # Determine which orders have a valid Q1 2026 PA Date (primary quarter)
-        has_q1_pa_date = (
-            (pa_orders['PA_Date_Parsed'].notna()) &
-            (pa_orders['PA_Date_Parsed'] >= q1_2026_start) &
-            (pa_orders['PA_Date_Parsed'] <= q1_2026_end)
-        )
-        
-        # Determine which orders have a Q4 2025 PA Date (backward spillover)
-        has_q4_2025_pa_date = (
-            (pa_orders['PA_Date_Parsed'].notna()) &
-            (pa_orders['PA_Date_Parsed'] >= q4_2025_start) &
-            (pa_orders['PA_Date_Parsed'] <= q4_2025_end)
-        )
-        
-        # Determine which orders have a Q2 2026 PA Date (forward spillover)
-        has_q2_2026_pa_date = (
-            (pa_orders['PA_Date_Parsed'].notna()) &
-            (pa_orders['PA_Date_Parsed'] >= q2_2026_start)
-        )
-        
-        # Determine which orders have NO PA Date (or invalid)
-        has_no_pa_date = (
-            (pa_orders['PA_Date_Parsed'].isna()) |
-            (pa_orders['Pending Approval Date'].astype(str).str.strip() == 'No Date') |
-            (pa_orders['Pending Approval Date'].astype(str).str.strip() == '')
-        )
-        
-        # PA Q4 2025 Spillover bucket (carryover from Q4)
-        pa_q4_spillover = pa_orders[has_q4_2025_pa_date].copy()
-        q4_spillover_pa_ids = pa_q4_spillover.index
-        
-        # PA Q2 2026 Spillover bucket (forward spillover)
-        pa_q2_spillover = pa_orders[has_q2_2026_pa_date].copy()
-        q2_spillover_pa_ids = pa_q2_spillover.index
-        
-        # Exclude spillover from remaining PA categorization
-        excluded_pa_ids = q4_spillover_pa_ids.union(q2_spillover_pa_ids)
-        pa_orders_remaining = pa_orders[~pa_orders.index.isin(excluded_pa_ids)].copy()
-        
-        # CATEGORY 3: PA Old (>= 13 business days) - ANY PA order that is old, regardless of PA date
-        # This takes priority - old orders go here first
-        pa_old = pa_orders_remaining[pa_orders_remaining['Age_Business_Days'] >= 13].copy()
-        
-        # Only "young" orders (< 13 days) are eligible for PA with Date or PA No Date
-        young_pa = pa_orders_remaining[pa_orders_remaining['Age_Business_Days'] < 13].copy()
-        
-        # CATEGORY 1: PA with Date - has Q1 PA date AND is NOT old (< 13 days)
-        pa_date = young_pa[has_q1_pa_date.loc[young_pa.index]].copy() if not young_pa.empty else pd.DataFrame()
-        
-        # CATEGORY 2: PA No Date - no PA date AND is NOT old (< 13 days)
-        pa_nodate = young_pa[has_no_pa_date.loc[young_pa.index]].copy() if not young_pa.empty else pd.DataFrame()
-    else:
-        pa_old = pa_date = pa_nodate = pa_q4_spillover = pa_q2_spillover = pd.DataFrame()
+    # PF No Date (Int) -> pf_nodate_int
+    pf_nodate_int = orders[orders['Updated_Status_Clean'] == 'PF No Date (Int)'].copy()
+    
+    # PA with Date -> pa_date
+    pa_date = orders[orders['Updated_Status_Clean'] == 'PA with Date'].copy()
+    
+    # PA No Date -> pa_nodate
+    pa_nodate = orders[orders['Updated_Status_Clean'] == 'PA No Date'].copy()
+    
+    # PA Old (>2 Weeks) -> pa_old
+    pa_old = orders[orders['Updated_Status_Clean'] == 'PA Old (>2 Weeks)'].copy()
+    
+    # Spillover categories - check for Q4/Q2 spillover values if they exist
+    # These may be added later; for now, return empty DataFrames
+    pf_q4_spillover = pd.DataFrame()
+    pa_q4_spillover = pd.DataFrame()
+    pf_q2_spillover = pd.DataFrame()
+    pa_q2_spillover = pd.DataFrame()
     
     # Calculate amounts
     def get_amount(df):
