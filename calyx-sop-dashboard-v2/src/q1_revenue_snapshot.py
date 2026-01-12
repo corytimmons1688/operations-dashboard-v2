@@ -2215,6 +2215,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     # We use this dict to store the ACTUAL dataframes to be exported
     export_buckets = {}
     
+    # Initialize amount mode in session state if not set (preserves across reruns)
+    amount_mode_key = f"amount_mode_{rep_name}"
+    if amount_mode_key not in st.session_state:
+        st.session_state[amount_mode_key] = "Raw Amount"
+    
     # --- SELECT ALL / UNSELECT ALL BUTTONS (Toolbar style) ---
     st.markdown("#### 🛠️ Forecast Builder")
     t_col1, t_col2 = st.columns([1, 1])
@@ -2456,7 +2461,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             </div>
             """, unsafe_allow_html=True)
             
-            amount_mode_key = f"amount_mode_{rep_name}"
+            # Radio button - key ensures state persists across reruns
+            # Session state initialized earlier in the function
             amount_mode = st.radio(
                 "Select amount type:",
                 options=["Raw Amount", "Probability-Adjusted"],
