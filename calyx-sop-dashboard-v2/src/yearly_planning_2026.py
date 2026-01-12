@@ -77,37 +77,44 @@ def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silen
 
 
 def load_all_data_yearly():
-    """Load all necessary data for yearly planning module"""
+    """Load all necessary data for yearly planning module
     
-    # Load deals data from All Reps All Pipelines
-    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
+    Matches Q1 snapshot data processing logic:
+    - HubSpot deals: loads A:U to include Probability Rev column
+    - Invoices: uses Rep Master and Corrected Customer Name, filters to Q1 date range
+    - Sales Orders: uses Updated Status column, Rep Master, and Corrected Customer Name
+    """
+    
+    # Load deals data - extend range to include Q2 2026 Spillover column AND Probability Rev (Column U)
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:U", version=CACHE_VERSION)
     
     # Load dashboard info (rep quotas)
     dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
     
-    # Load invoice data from NetSuite
+    # Load invoice data from NetSuite - includes Corrected Customer Name and Rep Master
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
     
-    # Load sales orders data from NetSuite
+    # Load sales orders data from NetSuite - includes Updated Status column (AF)
     sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
     
-    # Process Dashboard Info - rename columns
+    # Helper function for cleaning numeric values
+    def clean_numeric(value):
+        if pd.isna(value) or str(value).strip() == '':
+            return 0
+        cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
+        try:
+            return float(cleaned)
+        except:
+            return 0
+    
+    # =========================================================================
+    # PROCESS DASHBOARD INFO
+    # =========================================================================
     if not dashboard_df.empty:
         if len(dashboard_df.columns) >= 3:
             dashboard_df.columns = ['Rep Name', 'Quota', 'NetSuite Orders']
         
-        # Filter out empty rows
         dashboard_df = dashboard_df[dashboard_df['Rep Name'].notna() & (dashboard_df['Rep Name'] != '')]
-        
-        # Clean numeric values
-        def clean_numeric(value):
-            if pd.isna(value) or str(value).strip() == '':
-                return 0
-            cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
-            try:
-                return float(cleaned)
-            except:
-                return 0
         
         if 'Quota' in dashboard_df.columns:
             dashboard_df['Quota'] = dashboard_df['Quota'].apply(clean_numeric)
@@ -116,7 +123,9 @@ def load_all_data_yearly():
         
         dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
     
-    # Process deals data
+    # =========================================================================
+    # PROCESS DEALS DATA FROM "All Reps All Pipelines" SHEET
+    # =========================================================================
     if not deals_df.empty and len(deals_df.columns) >= 6:
         col_names = deals_df.columns.tolist()
         rename_dict = {}
@@ -139,7 +148,7 @@ def load_all_data_yearly():
         
         deals_df = deals_df.rename(columns=rename_dict)
         
-        # Create Deal Owner if not exists
+        # Clean Deal Owner
         if 'Deal Owner' not in deals_df.columns:
             if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
                 deals_df['Deal Owner'] = deals_df['Deal Owner First Name'].fillna('') + ' ' + deals_df['Deal Owner Last Name'].fillna('')
@@ -148,39 +157,300 @@ def load_all_data_yearly():
             deals_df['Deal Owner'] = deals_df['Deal Owner'].astype(str).str.strip()
         
         # Clean Amount
-        def clean_numeric(value):
-            if pd.isna(value) or str(value).strip() == '':
-                return 0
-            cleaned = str(value).replace(',', '').replace('$', '').replace(' ', '').strip()
-            try:
-                return float(cleaned)
-            except:
-                return 0
-        
         if 'Amount' in deals_df.columns:
             deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
         
-        # Convert dates
+        # Process Probability Rev column (Column U) - probability-weighted amount
+        if 'Probability Rev' in deals_df.columns:
+            deals_df['Probability Rev'] = deals_df['Probability Rev'].apply(clean_numeric)
+        else:
+            # If column doesn't exist, default to same as Amount
+            deals_df['Probability Rev'] = deals_df['Amount'] if 'Amount' in deals_df.columns else 0
+        
+        # Convert Close Date to datetime
         if 'Close Date' in deals_df.columns:
             deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
         
         if 'Pending Approval Date' in deals_df.columns:
             deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
     
+    # =========================================================================
+    # PROCESS INVOICE DATA
+    # =========================================================================
+    if not invoices_df.empty:
+        if len(invoices_df.columns) >= 15:
+            rename_dict = {
+                invoices_df.columns[0]: 'Invoice Number',
+                invoices_df.columns[1]: 'Status',
+                invoices_df.columns[2]: 'Date',
+                invoices_df.columns[6]: 'Customer',
+                invoices_df.columns[10]: 'Amount',
+                invoices_df.columns[14]: 'Sales Rep'
+            }
+            
+            # Map Corrected Customer Name (Column T - index 19) and Rep Master (Column U - index 20)
+            if len(invoices_df.columns) > 19:
+                rename_dict[invoices_df.columns[19]] = 'Corrected Customer Name'
+            if len(invoices_df.columns) > 20:
+                rename_dict[invoices_df.columns[20]] = 'Rep Master'
+            
+            # Map Product Type (Column Y - index 24)
+            if len(invoices_df.columns) > 24:
+                rename_dict[invoices_df.columns[24]] = 'Product Type'
+            
+            invoices_df = invoices_df.rename(columns=rename_dict)
+            
+            # CRITICAL: Replace Sales Rep with Rep Master
+            if 'Rep Master' in invoices_df.columns:
+                invoices_df['Rep Master'] = invoices_df['Rep Master'].astype(str).str.strip()
+                invalid_values = ['', 'nan', 'None', '#N/A', '#REF!', '#VALUE!', '#ERROR!']
+                invoices_df = invoices_df[~invoices_df['Rep Master'].isin(invalid_values)]
+                invoices_df['Sales Rep'] = invoices_df['Rep Master']
+                invoices_df = invoices_df.drop(columns=['Rep Master'])
+            
+            # Replace Customer with Corrected Customer Name where available
+            if 'Corrected Customer Name' in invoices_df.columns:
+                invoices_df['Corrected Customer Name'] = invoices_df['Corrected Customer Name'].astype(str).str.strip()
+                invalid_values = ['', 'nan', 'None', '#N/A', '#REF!', '#VALUE!', '#ERROR!']
+                mask = invoices_df['Corrected Customer Name'].isin(invalid_values)
+                invoices_df.loc[~mask, 'Customer'] = invoices_df.loc[~mask, 'Corrected Customer Name']
+                invoices_df = invoices_df.drop(columns=['Corrected Customer Name'])
+            
+            invoices_df['Amount'] = invoices_df['Amount'].apply(clean_numeric)
+            invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
+            
+            # Filter to Q1 2026 only (1/1/2026 - 3/31/2026)
+            q1_start = pd.Timestamp('2026-01-01')
+            q1_end = pd.Timestamp('2026-03-31')
+            invoices_df = invoices_df[
+                (invoices_df['Date'] >= q1_start) & 
+                (invoices_df['Date'] <= q1_end)
+            ]
+            
+            # Clean up Sales Rep field
+            invoices_df['Sales Rep'] = invoices_df['Sales Rep'].astype(str).str.strip()
+            invoices_df = invoices_df[
+                (invoices_df['Sales Rep'].notna()) & 
+                (invoices_df['Sales Rep'] != '') &
+                (invoices_df['Sales Rep'].str.lower() != 'nan') &
+                (invoices_df['Sales Rep'].str.lower() != 'house')
+            ]
+            
+            # Remove duplicate invoices
+            if 'Invoice Number' in invoices_df.columns:
+                invoices_df = invoices_df.drop_duplicates(subset=['Invoice Number'], keep='first')
+            
+            # Update dashboard with invoice totals
+            invoice_totals = invoices_df.groupby('Sales Rep')['Amount'].sum().reset_index()
+            invoice_totals.columns = ['Rep Name', 'Invoice Total']
+            
+            dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
+            dashboard_df = dashboard_df.merge(invoice_totals, on='Rep Name', how='left')
+            dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
+            dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
+            dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
+    
+    # =========================================================================
+    # PROCESS SALES ORDERS DATA
+    # =========================================================================
+    if not sales_orders_df.empty:
+        col_names = sales_orders_df.columns.tolist()
+        rename_dict = {}
+        
+        # Map Internal Id column (Column A)
+        if len(col_names) > 0:
+            col_a_lower = str(col_names[0]).lower()
+            if 'internal' in col_a_lower and 'id' in col_a_lower:
+                rename_dict[col_names[0]] = 'Internal ID'
+        
+        # Find standard columns - only map FIRST occurrence
+        for idx, col in enumerate(col_names):
+            col_lower = str(col).lower()
+            if 'status' in col_lower and 'Status' not in rename_dict.values():
+                rename_dict[col] = 'Status'
+            elif ('amount' in col_lower or 'total' in col_lower) and 'Amount' not in rename_dict.values():
+                rename_dict[col] = 'Amount'
+            elif ('sales rep' in col_lower or 'salesrep' in col_lower) and 'Sales Rep' not in rename_dict.values():
+                rename_dict[col] = 'Sales Rep'
+            elif 'customer' in col_lower and 'customer promise' not in col_lower and 'Customer' not in rename_dict.values():
+                rename_dict[col] = 'Customer'
+            elif ('doc' in col_lower or 'document' in col_lower) and 'Document Number' not in rename_dict.values():
+                rename_dict[col] = 'Document Number'
+        
+        # Map specific columns by position
+        if len(col_names) > 8 and 'Order Start Date' not in rename_dict.values():
+            rename_dict[col_names[8]] = 'Order Start Date'
+        if len(col_names) > 11 and 'Customer Promise Date' not in rename_dict.values():
+            rename_dict[col_names[11]] = 'Customer Promise Date'
+        if len(col_names) > 12 and 'Projected Date' not in rename_dict.values():
+            rename_dict[col_names[12]] = 'Projected Date'
+        
+        # Map new columns after Calyx | External Order
+        if len(col_names) > 28:
+            rename_dict[col_names[28]] = 'Calyx External Order'
+        if len(col_names) > 29 and 'Pending Approval Date' not in rename_dict.values():
+            rename_dict[col_names[29]] = 'Pending Approval Date'
+        if len(col_names) > 30:
+            rename_dict[col_names[30]] = 'Corrected Customer Name'
+        if len(col_names) > 31:
+            rename_dict[col_names[31]] = 'Updated Status'  # Pre-calculated SO status category
+        
+        # Rep Master lookup
+        for idx, col in enumerate(col_names):
+            col_str = str(col).lower().strip()
+            if 'rep master' in col_str and 'Rep Master' not in rename_dict.values():
+                rename_dict[col_names[idx]] = 'Rep Master'
+                break
+        
+        sales_orders_df = sales_orders_df.rename(columns=rename_dict)
+        
+        # CRITICAL: Replace Sales Rep with Rep Master
+        if 'Rep Master' in sales_orders_df.columns:
+            sales_orders_df['Rep Master'] = sales_orders_df['Rep Master'].astype(str).str.strip()
+            invalid_values = ['', 'nan', 'None', '#N/A', '#REF!', '#VALUE!', '#ERROR!']
+            sales_orders_df = sales_orders_df[~sales_orders_df['Rep Master'].isin(invalid_values)]
+            sales_orders_df['Sales Rep'] = sales_orders_df['Rep Master']
+            sales_orders_df = sales_orders_df.drop(columns=['Rep Master'])
+        
+        # Replace Customer with Corrected Customer Name
+        if 'Corrected Customer Name' in sales_orders_df.columns:
+            sales_orders_df['Customer'] = sales_orders_df['Corrected Customer Name']
+            sales_orders_df = sales_orders_df.drop(columns=['Corrected Customer Name'])
+        
+        # Remove duplicate columns
+        if sales_orders_df.columns.duplicated().any():
+            sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
+        
+        # Clean numeric values
+        if 'Amount' in sales_orders_df.columns:
+            sales_orders_df['Amount'] = sales_orders_df['Amount'].apply(clean_numeric)
+        
+        if 'Sales Rep' in sales_orders_df.columns:
+            sales_orders_df['Sales Rep'] = sales_orders_df['Sales Rep'].astype(str).str.strip()
+        
+        if 'Status' in sales_orders_df.columns:
+            sales_orders_df['Status'] = sales_orders_df['Status'].astype(str).str.strip()
+        
+        # Convert date columns
+        date_columns = ['Order Start Date', 'Customer Promise Date', 'Projected Date', 'Pending Approval Date']
+        for col in date_columns:
+            if col in sales_orders_df.columns:
+                sales_orders_df[col] = pd.to_datetime(sales_orders_df[col], errors='coerce')
+                # Fix any dates that got parsed as 1900s (2-digit year issue)
+                if sales_orders_df[col].notna().any():
+                    mask = (sales_orders_df[col].dt.year < 2000) & (sales_orders_df[col].notna())
+                    if mask.any():
+                        sales_orders_df.loc[mask, col] = sales_orders_df.loc[mask, col] + pd.DateOffset(years=100)
+        
+        # Filter to include Pending Approval, Pending Fulfillment, AND Pending Billing/Partially Fulfilled
+        if 'Status' in sales_orders_df.columns:
+            sales_orders_df = sales_orders_df[
+                sales_orders_df['Status'].isin(['Pending Approval', 'Pending Fulfillment', 'Pending Billing/Partially Fulfilled'])
+            ]
+        
+        # Calculate age for Old Pending Approval
+        if 'Order Start Date' in sales_orders_df.columns:
+            today = pd.Timestamp.now()
+            
+            def business_days_between(start_date, end_date):
+                if pd.isna(start_date):
+                    return 0
+                days = pd.bdate_range(start=start_date, end=end_date).size - 1
+                return max(0, days)
+            
+            sales_orders_df['Age_Business_Days'] = sales_orders_df['Order Start Date'].apply(
+                lambda x: business_days_between(x, today)
+            )
+        else:
+            sales_orders_df['Age_Business_Days'] = 0
+        
+        # Remove rows without amount or sales rep
+        if 'Amount' in sales_orders_df.columns and 'Sales Rep' in sales_orders_df.columns:
+            sales_orders_df = sales_orders_df[
+                (sales_orders_df['Amount'] > 0) & 
+                (sales_orders_df['Sales Rep'].notna()) & 
+                (sales_orders_df['Sales Rep'] != '') &
+                (sales_orders_df['Sales Rep'] != 'nan') &
+                (~sales_orders_df['Sales Rep'].str.lower().isin(['house']))
+            ]
+    
     return deals_df, dashboard_df, invoices_df, sales_orders_df
+
+
+def get_col_by_index(df, idx):
+    """Safely get column by position index"""
+    if df is None or df.empty or idx >= len(df.columns):
+        return pd.Series([''] * len(df) if df is not None and not df.empty else [])
+    return df.iloc[:, idx]
+
+
+# ========== SPILLOVER COLUMN HELPER FUNCTIONS ==========
+# These functions handle both old ('Q1 2026 Spillover') and new ('Q2 2026 Spillover') column names
+# to provide backwards compatibility during the spreadsheet transition
+
+def get_spillover_column(df):
+    """
+    Get the spillover column name - handles both old and new column names.
+    Returns the column name if found, None otherwise.
+    Checks for 'Q2 2026 Spillover' first, falls back to 'Q1 2026 Spillover'.
+    """
+    if df is None or df.empty:
+        return None
+    if 'Q2 2026 Spillover' in df.columns:
+        return 'Q2 2026 Spillover'
+    elif 'Q1 2026 Spillover' in df.columns:
+        return 'Q1 2026 Spillover'
+    return None
+
+def get_spillover_value(df, spillover_col):
+    """
+    Get spillover column values, handling the case where column doesn't exist.
+    Returns a Series of the column values or a Series of empty strings if column doesn't exist.
+    """
+    if spillover_col and spillover_col in df.columns:
+        return df[spillover_col]
+    return pd.Series([''] * len(df), index=df.index)
+
+def is_q1_deal(df, spillover_col):
+    """
+    Determine if deals are Q1 2026 deals (primary quarter).
+    Q1 deals are NOT marked as Q2 2026 spillover AND NOT marked as Q4 2025 spillover.
+    Handles various Quarter column value formats: 'Q2 2026', 'Q2', 'Q4 2025', 'Q4', etc.
+    """
+    if df is None or df.empty:
+        return pd.Series([], dtype=bool)
+    if spillover_col is None:
+        return pd.Series([True] * len(df), index=df.index)
+    
+    spillover_vals = get_spillover_value(df, spillover_col).astype(str).str.strip().str.upper()
+    
+    if spillover_col == 'Q2 2026 Spillover':
+        # Exclude Q2 spillover (various formats) and Q4 spillover (various formats)
+        is_q2 = spillover_vals.str.contains('Q2', na=False)
+        is_q4 = spillover_vals.str.contains('Q4', na=False)
+        return ~is_q2 & ~is_q4
+    else:
+        # Old column 'Q1 2026 Spillover': for Q1 dashboard, all deals are primary quarter
+        return pd.Series([True] * len(df), index=df.index)
 
 
 def categorize_sales_orders(sales_orders_df, rep_name=None):
     """
     SINGLE SOURCE OF TRUTH for categorizing sales orders into forecast buckets.
     
-    Returns a dictionary with categorized DataFrames and their amounts.
+    SIMPLIFIED VERSION: Uses the pre-calculated "Updated Status" column (Column AF)
+    from the Google Sheet instead of calculating status categories in Python.
     
-    Column names from _NS_SalesOrders_Data:
-    - Status, Sales Rep, Projected Date, Pending Approval Date
-    - Customer Promise Last Date to Ship (promise date)
-    - Calyx | External Order (external flag)
-    - Amount (Transaction Total) (order amount)
+    Valid "Updated Status" values:
+    - PA No Date
+    - PA with Date
+    - PF with Date (Ext)
+    - PF with Date (Int)
+    - PF No Date (Int)
+    - PF No Date (Ext)
+    - PA Old (>2 Weeks)
+    
+    Returns a dictionary with categorized DataFrames and their amounts.
     """
     empty_result = {
         'pf_date_ext': pd.DataFrame(), 'pf_date_ext_amount': 0,
@@ -199,6 +469,11 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     if sales_orders_df is None or sales_orders_df.empty:
         return empty_result
     
+    # Check if Updated Status column exists
+    if 'Updated Status' not in sales_orders_df.columns:
+        st.warning("⚠️ 'Updated Status' column not found in Sales Orders data. Using empty results.")
+        return empty_result
+    
     # Filter by rep if specified
     if rep_name and 'Sales Rep' in sales_orders_df.columns:
         orders = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name].copy()
@@ -212,180 +487,54 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     if orders.columns.duplicated().any():
         orders = orders.loc[:, ~orders.columns.duplicated()]
     
-    # === CONVERT DATE COLUMNS TO DATETIME ===
-    # Actual column names from _NS_SalesOrders_Data
-    date_columns = ['Customer Promise Last Date to Ship', 'Projected Date', 'Pending Approval Date']
-    for col in date_columns:
-        if col in orders.columns:
-            orders[col] = pd.to_datetime(orders[col], errors='coerce')
+    # === ADD DISPLAY COLUMNS FOR UI ===
+    orders['Display_SO_Num'] = get_col_by_index(orders, 1)  # Col B: SO#
+    orders['Display_Type'] = get_col_by_index(orders, 17).fillna('Standard')  # Col R: Order Type
+    orders['Display_Promise_Date'] = pd.to_datetime(get_col_by_index(orders, 11), errors='coerce')  # Col L: Promise Date
+    orders['Display_Projected_Date'] = pd.to_datetime(get_col_by_index(orders, 12), errors='coerce')  # Col M: Projected Date
     
-    # === CONVERT AMOUNT TO NUMERIC ===
-    amount_col = 'Amount (Transaction Total)'
-    if amount_col in orders.columns:
-        orders[amount_col] = pd.to_numeric(
-            orders[amount_col].astype(str).str.replace(',', '').str.replace('$', ''),
-            errors='coerce'
-        ).fillna(0)
-    
-    # Define date ranges
-    q4_2025_start = pd.Timestamp('2025-10-01')
-    q4_2025_end = pd.Timestamp('2025-12-31')
-    q1_2026_start = pd.Timestamp('2026-01-01')
-    q1_2026_end = pd.Timestamp('2026-03-31')
-    q2_2026_start = pd.Timestamp('2026-04-01')
-    q2_2026_end = pd.Timestamp('2026-06-30')
-    
-    # === PENDING FULFILLMENT CATEGORIZATION ===
-    pf_orders = orders[orders['Status'].isin(['Pending Fulfillment', 'Pending Billing/Partially Fulfilled'])].copy()
-    
-    if not pf_orders.empty:
-        # Use actual column names
-        promise_col = 'Customer Promise Last Date to Ship'
-        projected_col = 'Projected Date'
-        
-        def has_q1_date(row):
-            if promise_col in row.index and pd.notna(row.get(promise_col)):
-                if q1_2026_start <= row[promise_col] <= q1_2026_end:
-                    return True
-            if projected_col in row.index and pd.notna(row.get(projected_col)):
-                if q1_2026_start <= row[projected_col] <= q1_2026_end:
-                    return True
-            return False
-        
-        def has_q4_2025_date(row):
-            if promise_col in row.index and pd.notna(row.get(promise_col)):
-                if q4_2025_start <= row[promise_col] <= q4_2025_end:
-                    return True
-            if projected_col in row.index and pd.notna(row.get(projected_col)):
-                if q4_2025_start <= row[projected_col] <= q4_2025_end:
-                    return True
-            return False
-        
-        def has_q2_2026_date(row):
-            if promise_col in row.index and pd.notna(row.get(promise_col)):
-                if q2_2026_start <= row[promise_col] <= q2_2026_end:
-                    return True
-            if projected_col in row.index and pd.notna(row.get(projected_col)):
-                if q2_2026_start <= row[projected_col] <= q2_2026_end:
-                    return True
-            return False
-        
-        pf_orders['Has_Q1_Date'] = pf_orders.apply(has_q1_date, axis=1)
-        pf_orders['Has_Q4_2025_Date'] = pf_orders.apply(has_q4_2025_date, axis=1)
-        pf_orders['Has_Q2_2026_Date'] = pf_orders.apply(has_q2_2026_date, axis=1)
-        
-        # Check External/Internal flag - actual column name
-        is_ext = pd.Series(False, index=pf_orders.index)
-        ext_col = 'Calyx | External Order'
-        if ext_col in pf_orders.columns:
-            is_ext = pf_orders[ext_col].astype(str).str.strip().str.upper() == 'YES'
-        
-        # Q4 2025 Spillover bucket
-        pf_q4_spillover = pf_orders[pf_orders['Has_Q4_2025_Date'] == True].copy()
-        q4_spillover_ids = pf_q4_spillover.index
-        
-        # Q2 2026 Spillover bucket
-        pf_q2_spillover = pf_orders[pf_orders['Has_Q2_2026_Date'] == True].copy()
-        q2_spillover_ids = pf_q2_spillover.index
-        
-        # Categorize Q1 PF orders
-        excluded_ids = q4_spillover_ids.union(q2_spillover_ids)
-        q1_candidates = pf_orders[(pf_orders['Has_Q1_Date'] == True) & (~pf_orders.index.isin(excluded_ids))]
-        pf_date_ext = q1_candidates[is_ext.loc[q1_candidates.index]].copy()
-        pf_date_int = q1_candidates[~is_ext.loc[q1_candidates.index]].copy()
-        
-        # No date means BOTH dates are missing
-        no_date_mask = pd.Series(True, index=pf_orders.index)
-        if promise_col in pf_orders.columns:
-            no_date_mask = no_date_mask & pf_orders[promise_col].isna()
-        if projected_col in pf_orders.columns:
-            no_date_mask = no_date_mask & pf_orders[projected_col].isna()
-        
-        pf_nodate_ext = pf_orders[no_date_mask & is_ext].copy()
-        pf_nodate_int = pf_orders[no_date_mask & ~is_ext].copy()
+    # PA Date handling
+    if 'Pending Approval Date' in orders.columns:
+        orders['Display_PA_Date'] = pd.to_datetime(orders['Pending Approval Date'], errors='coerce')
     else:
-        pf_date_ext = pf_date_int = pf_nodate_ext = pf_nodate_int = pf_q4_spillover = pf_q2_spillover = pd.DataFrame()
+        orders['Display_PA_Date'] = pd.to_datetime(get_col_by_index(orders, 29), errors='coerce')  # Col AD: PA Date
     
-    # === PENDING APPROVAL CATEGORIZATION ===
-    pa_orders = orders[orders['Status'] == 'Pending Approval'].copy()
+    # === CATEGORIZE USING "Updated Status" COLUMN ===
+    # Clean and normalize the Updated Status values for matching
+    orders['Updated_Status_Clean'] = orders['Updated Status'].astype(str).str.strip()
     
-    if not pa_orders.empty:
-        if 'Age_Business_Days' not in pa_orders.columns:
-            pa_orders['Age_Business_Days'] = 0
-        
-        # Parse Pending Approval Date
-        pa_date_col = 'Pending Approval Date'
-        if pa_date_col in pa_orders.columns:
-            pa_orders['PA_Date_Parsed'] = pd.to_datetime(pa_orders[pa_date_col], errors='coerce')
-            
-            # Fix 1900s dates
-            if pa_orders['PA_Date_Parsed'].notna().any():
-                mask_1900s = (pa_orders['PA_Date_Parsed'].dt.year < 2000) & (pa_orders['PA_Date_Parsed'].notna())
-                if mask_1900s.any():
-                    pa_orders.loc[mask_1900s, 'PA_Date_Parsed'] = pa_orders.loc[mask_1900s, 'PA_Date_Parsed'] + pd.DateOffset(years=100)
-        else:
-            pa_orders['PA_Date_Parsed'] = pd.NaT
-        
-        # Q1 2026 PA Date
-        has_q1_pa_date = (
-            (pa_orders['PA_Date_Parsed'].notna()) &
-            (pa_orders['PA_Date_Parsed'] >= q1_2026_start) &
-            (pa_orders['PA_Date_Parsed'] <= q1_2026_end)
-        )
-        
-        # Q4 2025 PA Date
-        has_q4_2025_pa_date = (
-            (pa_orders['PA_Date_Parsed'].notna()) &
-            (pa_orders['PA_Date_Parsed'] >= q4_2025_start) &
-            (pa_orders['PA_Date_Parsed'] <= q4_2025_end)
-        )
-        
-        # Q2 2026 PA Date
-        has_q2_2026_pa_date = (
-            (pa_orders['PA_Date_Parsed'].notna()) &
-            (pa_orders['PA_Date_Parsed'] >= q2_2026_start)
-        )
-        
-        # No PA Date
-        has_no_pa_date = pa_orders['PA_Date_Parsed'].isna()
-        if pa_date_col in pa_orders.columns:
-            has_no_pa_date = has_no_pa_date | (pa_orders[pa_date_col].astype(str).str.strip().isin(['No Date', '']))
-        
-        # PA Q4 2025 Spillover bucket
-        pa_q4_spillover = pa_orders[has_q4_2025_pa_date].copy()
-        q4_spillover_pa_ids = pa_q4_spillover.index
-        
-        # PA Q2 2026 Spillover bucket
-        pa_q2_spillover = pa_orders[has_q2_2026_pa_date].copy()
-        q2_spillover_pa_ids = pa_q2_spillover.index
-        
-        # Exclude spillover from remaining PA categorization
-        excluded_pa_ids = q4_spillover_pa_ids.union(q2_spillover_pa_ids)
-        pa_orders_remaining = pa_orders[~pa_orders.index.isin(excluded_pa_ids)].copy()
-        
-        # PA Old (>= 13 business days)
-        pa_old = pa_orders_remaining[pa_orders_remaining['Age_Business_Days'] >= 13].copy()
-        
-        # Only "young" orders (< 13 days)
-        young_pa = pa_orders_remaining[pa_orders_remaining['Age_Business_Days'] < 13].copy()
-        
-        # PA with Date
-        pa_date = young_pa[has_q1_pa_date.loc[young_pa.index]].copy() if not young_pa.empty else pd.DataFrame()
-        
-        # PA No Date
-        pa_nodate = young_pa[has_no_pa_date.loc[young_pa.index]].copy() if not young_pa.empty else pd.DataFrame()
-    else:
-        pa_old = pa_date = pa_nodate = pa_q4_spillover = pa_q2_spillover = pd.DataFrame()
+    # Map Updated Status values to categories
+    # PF with Date (Ext) -> pf_date_ext
+    pf_date_ext = orders[orders['Updated_Status_Clean'] == 'PF with Date (Ext)'].copy()
     
-    # Calculate amounts using actual column name
+    # PF with Date (Int) -> pf_date_int
+    pf_date_int = orders[orders['Updated_Status_Clean'] == 'PF with Date (Int)'].copy()
+    
+    # PF No Date (Ext) -> pf_nodate_ext
+    pf_nodate_ext = orders[orders['Updated_Status_Clean'] == 'PF No Date (Ext)'].copy()
+    
+    # PF No Date (Int) -> pf_nodate_int
+    pf_nodate_int = orders[orders['Updated_Status_Clean'] == 'PF No Date (Int)'].copy()
+    
+    # PA with Date -> pa_date
+    pa_date = orders[orders['Updated_Status_Clean'] == 'PA with Date'].copy()
+    
+    # PA No Date -> pa_nodate
+    pa_nodate = orders[orders['Updated_Status_Clean'] == 'PA No Date'].copy()
+    
+    # PA Old (>2 Weeks) -> pa_old
+    pa_old = orders[orders['Updated_Status_Clean'] == 'PA Old (>2 Weeks)'].copy()
+    
+    # Spillover categories - check for Q4/Q2 spillover values if they exist
+    # These may be added later; for now, return empty DataFrames
+    pf_q4_spillover = pd.DataFrame()
+    pa_q4_spillover = pd.DataFrame()
+    pf_q2_spillover = pd.DataFrame()
+    pa_q2_spillover = pd.DataFrame()
+    
+    # Calculate amounts
     def get_amount(df):
-        if df.empty:
-            return 0
-        if 'Amount (Transaction Total)' in df.columns:
-            return df['Amount (Transaction Total)'].sum()
-        elif 'Amount' in df.columns:
-            return df['Amount'].sum()
-        return 0
+        return df['Amount'].sum() if not df.empty and 'Amount' in df.columns else 0
     
     return {
         'pf_date_ext': pf_date_ext,
