@@ -2938,6 +2938,9 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     'Order/Deal Type': '',
                     'Date': str(row.get('Date', '')),
                     'Amount': pd.to_numeric(row.get('Amount', 0), errors='coerce'),
+                    'Prob_Amount': pd.to_numeric(row.get('Amount', 0), errors='coerce'),  # Invoices use same as Amount
+                    'Status': '',
+                    'Notes': '',
                     'Rep': row.get('Sales Rep', '')
                 })
         
@@ -2970,6 +2973,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     deal_type = row.get('Type', row.get('Display_Type', ''))
                     # NetSuite uses 'Amount' not 'Amount_Numeric'
                     amount = pd.to_numeric(row.get('Amount', 0), errors='coerce')
+                    if pd.isna(amount):
+                        amount = 0
                     prob_amount = amount  # NetSuite doesn't have probability, use same as amount
                     # Get Sales Rep - try multiple column names
                     rep = row.get('Sales Rep', row.get('Rep Master', ''))
@@ -2985,7 +2990,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     date_val = row.get('Close', row.get('Close Date', ''))
                     deal_type = row.get('Type', row.get('Display_Type', ''))
                     amount = pd.to_numeric(row.get('Amount_Numeric', 0), errors='coerce')
+                    if pd.isna(amount):
+                        amount = 0
                     prob_amount = pd.to_numeric(row.get('Prob_Amount_Numeric', 0), errors='coerce')
+                    if pd.isna(prob_amount):
+                        prob_amount = amount  # Default to raw amount if no probability
                     # Get Deal Owner - try multiple possible column names
                     rep = row.get('Deal Owner', '')
                     # If Deal Owner is empty, try to construct from First + Last Name
@@ -3047,8 +3056,10 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             data_df = pd.DataFrame(export_data)
             
             # Format Amount columns in Data DF
-            data_df['Amount'] = data_df['Amount'].apply(lambda x: f"${x:,.2f}")
-            data_df['Prob_Amount'] = data_df['Prob_Amount'].apply(lambda x: f"${x:,.2f}")
+            if 'Amount' in data_df.columns:
+                data_df['Amount'] = data_df['Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "$0.00")
+            if 'Prob_Amount' in data_df.columns:
+                data_df['Prob_Amount'] = data_df['Prob_Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "$0.00")
             
             final_csv = summary_df.to_csv(index=False) + "\n" + data_df.to_csv(index=False)
             
