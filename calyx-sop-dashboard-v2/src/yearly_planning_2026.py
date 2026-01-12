@@ -240,15 +240,16 @@ def load_all_data_yearly():
             if 'Invoice Number' in invoices_df.columns:
                 invoices_df = invoices_df.drop_duplicates(subset=['Invoice Number'], keep='first')
             
-            # Update dashboard with invoice totals
-            invoice_totals = invoices_df.groupby('Sales Rep')['Amount'].sum().reset_index()
-            invoice_totals.columns = ['Rep Name', 'Invoice Total']
-            
-            dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
-            dashboard_df = dashboard_df.merge(invoice_totals, on='Rep Name', how='left')
-            dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
-            dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
-            dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
+            # Update dashboard with invoice totals (only if dashboard has Rep Name column)
+            if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
+                invoice_totals = invoices_df.groupby('Sales Rep')['Amount'].sum().reset_index()
+                invoice_totals.columns = ['Rep Name', 'Invoice Total']
+                
+                dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
+                dashboard_df = dashboard_df.merge(invoice_totals, on='Rep Name', how='left')
+                dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
+                dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
+                dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
     
     # =========================================================================
     # PROCESS SALES ORDERS DATA
