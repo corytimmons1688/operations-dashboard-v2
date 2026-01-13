@@ -913,8 +913,8 @@ def load_all_data():
         #st.sidebar.error("❌ No HubSpot data loaded!")
         pass
     
-    # Load dashboard info (rep quotas and orders)
-    dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
+    # Load dashboard info (rep quotas)
+    dashboard_df = load_google_sheets_data("Dashboard Info", "A:B", version=CACHE_VERSION)
     
     # Load invoice data from NetSuite - EXTEND to include Columns T:U (Corrected Customer Name, Rep Master)
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
@@ -1013,8 +1013,9 @@ def load_all_data():
     
     if not dashboard_df.empty:
         # Ensure we have the right column names
-        if len(dashboard_df.columns) >= 3:
-            dashboard_df.columns = ['Rep Name', 'Quota', 'NetSuite Orders']
+        if len(dashboard_df.columns) >= 2:
+            dashboard_df.columns = ['Rep Name', 'Quota']
+            dashboard_df['NetSuite Orders'] = 0  # Placeholder - actual data comes from invoices
             
             # Remove any empty rows
             dashboard_df = dashboard_df[dashboard_df['Rep Name'].notna() & (dashboard_df['Rep Name'] != '')]
@@ -1030,7 +1031,6 @@ def load_all_data():
                     return 0
             
             dashboard_df['Quota'] = dashboard_df['Quota'].apply(clean_numeric)
-            dashboard_df['NetSuite Orders'] = dashboard_df['NetSuite Orders'].apply(clean_numeric)
     
     # Process invoice data
     if not invoices_df.empty:
