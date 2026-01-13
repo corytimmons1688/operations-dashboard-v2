@@ -3,10 +3,17 @@ Sales Forecasting Dashboard - Q1 2026 Version
 Reads from Google Sheets and displays gap-to-goal analysis with interactive visualizations
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
 
+VERSION 9 CHANGES:
+- Extended All Reps All Pipelines data range from A:U to A:X
+- Added support for new column Q: "Primary Associated Company"
+- Added support for new column X: "Company Name"
+- Updated column handling for separate "Deal Owner First Name" and "Deal Owner Last Name" columns
+- Deal Owner is now combined from separate first/last name columns when they exist
+
 VERSION 8 CHANGES:
 - Added Probability Toggle for HubSpot deals in Build Your Own Forecast section
 - Toggle switches between Raw Amount and Probability-Adjusted amounts
-- Loads "Probability Rev" column (Column U) from All Reps All Pipelines sheet
+- Loads "Probability Rev" column (Column W) from All Reps All Pipelines sheet
 - Displays both amounts in data tables with active mode highlighted
 - Export includes both Amount and Prob_Amount columns
 - Calculations respect the toggle selection
@@ -686,7 +693,7 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
 # Cache version for manual refresh control
 # No TTL - data only refreshes when user clicks refresh button
-CACHE_VERSION = "v65_updated_status_column"
+CACHE_VERSION = "v66_company_name_columns"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
 def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
@@ -900,8 +907,12 @@ def load_all_data():
     
     #st.sidebar.info("🔄 Loading data from Google Sheets...")
     
-    # Load deals data - extend range to include Q2 2026 Spillover column AND Probability Rev (Column U)
-    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:U", version=CACHE_VERSION)
+    # Load deals data - extend range to include all columns through Company Name (Column X)
+    # Columns: A-Record ID, B-Deal Name, C-Deal Stage, D-Close Date, E-Deal Owner First Name, F-Deal Owner Last Name,
+    #          G-Amount, H-Close Status, I-Pipeline, J-Create Date, K-Deal Type, L-Netsuite SO#, M-Netsuite SO Link,
+    #          N-New Design SKU, O-SKU, P-Netsuite Sales Order Number, Q-Primary Associated Company, R-Average Leadtime,
+    #          S-Pending Approval Date, T-Quarter, U-Deal Stage & Close Status, V-Probability, W-Probability Rev, X-Company Name
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:X", version=CACHE_VERSION)
     
     # DEBUG: Show what we got from HubSpot
     if not deals_df.empty:
@@ -940,11 +951,13 @@ def load_all_data():
         st.sidebar.caption(f"📊 Raw row count: {len(deals_df)}")
         
         # Simple column rename mapping for All Reps All Pipelines sheet
-        # Columns: Record ID, Deal Name, Deal Stage, Close Date, Deal Owner First Name Deal Owner Last Name,
+        # Columns: Record ID, Deal Name, Deal Stage, Close Date, Deal Owner First Name, Deal Owner Last Name,
         #          Amount, Close Status, Pipeline, Create Date, Deal Type, Netsuite SO#, Netsuite SO Link,
-        #          New Design SKU, SKU, Netsuite Sales Order Number, Average Leadtime, Pending Approval Date, Quarter
+        #          New Design SKU, SKU, Netsuite Sales Order Number, Primary Associated Company, Average Leadtime,
+        #          Pending Approval Date, Quarter, Deal Stage & Close Status, Probability, Probability Rev, Company Name
         rename_dict = {}
         for col in col_names:
+            # Handle combined Deal Owner column (old format) or separate columns (new format)
             if 'Deal Owner First Name' in col and 'Deal Owner Last Name' in col:
                 rename_dict[col] = 'Deal Owner'
             elif col == 'Close Status':
@@ -955,6 +968,13 @@ def load_all_data():
                 rename_dict[col] = 'Q2 2026 Spillover'
         
         deals_df = deals_df.rename(columns=rename_dict)
+        
+        # Handle separate First Name / Last Name columns (new format) - combine them into Deal Owner
+        if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
+            deals_df['Deal Owner'] = (deals_df['Deal Owner First Name'].fillna('').astype(str).str.strip() + ' ' + 
+                                      deals_df['Deal Owner Last Name'].fillna('').astype(str).str.strip()).str.strip()
+            # Drop the separate columns
+            deals_df = deals_df.drop(columns=['Deal Owner First Name', 'Deal Owner Last Name'])
         
         st.sidebar.caption(f"Columns after rename: {deals_df.columns.tolist()}")
         
