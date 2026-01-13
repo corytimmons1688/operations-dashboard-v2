@@ -91,8 +91,8 @@ def load_qbr_data():
     # Load Invoices (A:U to include Rep Master)
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:U", version=CACHE_VERSION)
     
-    # Load HubSpot Deals (A:X to include Company Name)
-    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:X", version=CACHE_VERSION)
+    # Load HubSpot Deals - load wider range to ensure we get Company Name
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     
     # =========================================================================
     # PROCESS SALES ORDERS
@@ -195,64 +195,87 @@ def load_qbr_data():
     
     # =========================================================================
     # PROCESS HUBSPOT DEALS
-    # Columns: A=Record ID, B=Deal Name, C=Deal Stage, D=Close Date,
-    # E=Deal Owner First Name, F=Deal Owner Last Name, G=Amount, H=Close Status,
-    # I=Pipeline, J=Create Date, K=Deal Type, L=Netsuite SO#, M=Netsuite SO Link,
-    # N=New Design SKU, O=SKU, P=Netsuite Sales Order Number,
-    # Q=Primary Associated Company, R=Average Leadtime, S=Pending Approval Date,
-    # T=Quarter, U=Deal Stage & Close Status, V=Probability, W=Probability Rev,
-    # X=Company Name
+    # Use actual column names from header row, not positional indices
     # =========================================================================
     if not deals_df.empty:
-        col_names = deals_df.columns.tolist()
+        # Debug: show original columns
+        original_columns = deals_df.columns.tolist()
         
+        # Create a mapping of potential column name variations to standard names
+        column_mapping = {
+            # Standard name variations
+            'Record ID': 'Record ID',
+            'Deal Name': 'Deal Name',
+            'Deal Stage': 'Deal Stage',
+            'Close Date': 'Close Date',
+            'Deal Owner First Name': 'Deal Owner First Name',
+            'Deal Owner Last Name': 'Deal Owner Last Name',
+            'Deal Owner First Name Deal Owner Last Name': 'Deal Owner Combined',
+            'Amount': 'Amount',
+            'Close Status': 'Close Status',
+            'Pipeline': 'Pipeline',
+            'Create Date': 'Create Date',
+            'Deal Type': 'Deal Type',
+            'Netsuite SO#': 'Netsuite SO#',
+            'Netsuite SO Link': 'Netsuite SO Link',
+            'New Design SKU': 'New Design SKU',
+            'SKU': 'SKU',
+            'Netsuite Sales Order Number': 'Netsuite Sales Order Number',
+            'Primary Associated Company': 'Primary Associated Company',
+            'Average Leadtime': 'Average Leadtime',
+            'Pending Approval Date': 'Pending Approval Date',
+            'Quarter': 'Quarter',
+            'Deal Stage & Close Status': 'Deal Stage & Close Status',
+            'Probability': 'Probability',
+            'Probability Rev': 'Probability Rev',
+            'Company Name': 'Company Name',
+        }
+        
+        # Apply any mapping if column names match
         rename_dict = {}
-        if len(col_names) > 0: rename_dict[col_names[0]] = 'Record ID'
-        if len(col_names) > 1: rename_dict[col_names[1]] = 'Deal Name'
-        if len(col_names) > 2: rename_dict[col_names[2]] = 'Deal Stage'
-        if len(col_names) > 3: rename_dict[col_names[3]] = 'Close Date'
-        if len(col_names) > 4: rename_dict[col_names[4]] = 'Deal Owner First Name'
-        if len(col_names) > 5: rename_dict[col_names[5]] = 'Deal Owner Last Name'
-        if len(col_names) > 6: rename_dict[col_names[6]] = 'Amount'
-        if len(col_names) > 7: rename_dict[col_names[7]] = 'Close Status'
-        if len(col_names) > 8: rename_dict[col_names[8]] = 'Pipeline'
-        if len(col_names) > 10: rename_dict[col_names[10]] = 'Deal Type'
-        if len(col_names) > 16: rename_dict[col_names[16]] = 'Primary Associated Company'
-        if len(col_names) > 18: rename_dict[col_names[18]] = 'Pending Approval Date'
-        if len(col_names) > 19: rename_dict[col_names[19]] = 'Quarter'
-        if len(col_names) > 21: rename_dict[col_names[21]] = 'Probability'
-        if len(col_names) > 22: rename_dict[col_names[22]] = 'Probability Rev'
-        if len(col_names) > 23: rename_dict[col_names[23]] = 'Company Name'
+        for col in deals_df.columns:
+            col_stripped = str(col).strip()
+            if col_stripped in column_mapping:
+                rename_dict[col] = column_mapping[col_stripped]
         
-        deals_df = deals_df.rename(columns=rename_dict)
+        if rename_dict:
+            deals_df = deals_df.rename(columns=rename_dict)
         
         # Remove duplicate columns
         if deals_df.columns.duplicated().any():
             deals_df = deals_df.loc[:, ~deals_df.columns.duplicated()]
         
-        # Create Deal Owner by combining First Name + Last Name
+        # Create Deal Owner by combining First Name + Last Name if separate columns exist
         if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
             deals_df['Deal Owner'] = (
                 deals_df['Deal Owner First Name'].fillna('').astype(str).str.strip() + ' ' + 
                 deals_df['Deal Owner Last Name'].fillna('').astype(str).str.strip()
             ).str.strip()
+        elif 'Deal Owner Combined' in deals_df.columns:
+            deals_df['Deal Owner'] = deals_df['Deal Owner Combined'].astype(str).str.strip()
         
-        # Clean data
+        # Clean numeric data
         if 'Amount' in deals_df.columns:
             deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
         if 'Probability Rev' in deals_df.columns:
             deals_df['Probability Rev'] = deals_df['Probability Rev'].apply(clean_numeric)
         else:
             deals_df['Probability Rev'] = deals_df.get('Amount', 0)
+        
+        # Clean date data
         if 'Close Date' in deals_df.columns:
             deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
         if 'Pending Approval Date' in deals_df.columns:
             deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
         
         # Clean text fields - strip whitespace AND newlines
-        for col in ['Deal Owner', 'Deal Name', 'Close Status', 'Company Name']:
+        for col in ['Deal Owner', 'Deal Name', 'Close Status', 'Company Name', 'Primary Associated Company']:
             if col in deals_df.columns:
                 deals_df[col] = deals_df[col].astype(str).str.strip().str.replace('\n', '', regex=False).str.replace('\r', '', regex=False)
+        
+        # FALLBACK: If Company Name doesn't exist, try to use Primary Associated Company
+        if 'Company Name' not in deals_df.columns and 'Primary Associated Company' in deals_df.columns:
+            deals_df['Company Name'] = deals_df['Primary Associated Company']
     
     return sales_orders_df, invoices_df, deals_df
 
@@ -801,15 +824,17 @@ def render_yearly_planning_2026():
         with col3:
             st.write(f"**HubSpot Deals:** {len(deals_df)} rows")
             if not deals_df.empty:
-                st.write(f"Columns: {list(deals_df.columns)}")
+                st.write(f"**All Columns ({len(deals_df.columns)}):** {list(deals_df.columns)}")
                 if 'Deal Owner' in deals_df.columns:
                     st.write(f"Unique Owners: {deals_df['Deal Owner'].nunique()}")
                     st.write(f"Sample Owners: {deals_df['Deal Owner'].head(5).tolist()}")
                 if 'Company Name' in deals_df.columns:
+                    st.write(f"✅ Company Name found!")
                     st.write(f"Unique Companies: {deals_df['Company Name'].nunique()}")
                     st.write(f"Sample Companies: {deals_df['Company Name'].head(5).tolist()}")
                 else:
-                    st.error("Company Name column NOT found!")
+                    st.error("❌ Company Name column NOT found in loaded data!")
+                    st.write("**Tip:** Check if 'Company Name' column (X) has data in Google Sheet")
     
     # Custom CSS for dark dropdown text
     st.markdown("""
