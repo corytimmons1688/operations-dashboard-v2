@@ -27,13 +27,23 @@ CACHE_VERSION = "v1_qbr_generator"
 
 # ========== PDF/HTML GENERATION HELPERS ==========
 
-# Note: Chart export requires kaleido package
+# Note: Chart export to static images requires kaleido package
 # Install with: pip install -U kaleido
+# If kaleido isn't available, charts will be embedded as interactive Plotly HTML
 KALEIDO_AVAILABLE = True
+KALEIDO_ERROR = None
 try:
     import kaleido
-except ImportError:
+    # Test that it actually works
+    test_fig = go.Figure()
+    test_fig.add_trace(go.Scatter(x=[1], y=[1]))
+    test_bytes = test_fig.to_image(format="png", width=100, height=100)
+    if not test_bytes:
+        KALEIDO_AVAILABLE = False
+        KALEIDO_ERROR = "to_image returned empty"
+except Exception as e:
     KALEIDO_AVAILABLE = False
+    KALEIDO_ERROR = str(e)
 
 
 def fig_to_base64(fig, width=700, height=350):
@@ -43,6 +53,21 @@ def fig_to_base64(fig, width=700, height=350):
     try:
         img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
         return base64.b64encode(img_bytes).decode()
+    except Exception as e:
+        # Log the error for debugging
+        print(f"Chart export error: {e}")
+        return None
+
+
+def fig_to_html_embed(fig, height=400):
+    """Convert a plotly figure to embedded HTML (fallback when kaleido unavailable)"""
+    try:
+        return fig.to_html(
+            include_plotlyjs='cdn',
+            full_html=False,
+            config={'displayModeBar': False, 'staticPlot': True},
+            default_height=height
+        )
     except Exception as e:
         return None
 
@@ -240,34 +265,42 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     
     # ===== Generate Charts =====
     charts_html = {}
+    charts_generated = 0
+    
+    def embed_chart(fig, chart_key):
+        """Try to embed chart as image, fall back to interactive HTML"""
+        nonlocal charts_generated
+        if fig is None:
+            return
+        
+        # First try static image (best for PDF)
+        img_b64 = fig_to_base64(fig)
+        if img_b64:
+            charts_html[chart_key] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+            charts_generated += 1
+            return
+        
+        # Fall back to interactive HTML embed
+        html_embed = fig_to_html_embed(fig)
+        if html_embed:
+            charts_html[chart_key] = f'<div class="chart-container">{html_embed}</div>'
+            charts_generated += 1
     
     # Monthly Revenue Chart
     revenue_fig = create_monthly_revenue_chart(customer_invoices)
-    if revenue_fig:
-        img_b64 = fig_to_base64(revenue_fig)
-        if img_b64:
-            charts_html['revenue'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    embed_chart(revenue_fig, 'revenue')
     
     # On-Time Performance Chart
     ontime_fig = create_ontime_chart(customer_orders)
-    if ontime_fig:
-        img_b64 = fig_to_base64(ontime_fig)
-        if img_b64:
-            charts_html['ontime'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    embed_chart(ontime_fig, 'ontime')
     
     # Order Type Mix Chart
     ordertype_fig = create_order_type_chart(customer_orders)
-    if ordertype_fig:
-        img_b64 = fig_to_base64(ordertype_fig)
-        if img_b64:
-            charts_html['ordertype'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    embed_chart(ordertype_fig, 'ordertype')
     
     # Pipeline Chart
     pipeline_fig = create_pipeline_chart(customer_deals)
-    if pipeline_fig:
-        img_b64 = fig_to_base64(pipeline_fig)
-        if img_b64:
-            charts_html['pipeline'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    embed_chart(pipeline_fig, 'pipeline')
     
     # ===== Calculate all metrics =====
     
@@ -1722,6 +1755,14 @@ def render_yearly_planning_2026():
             mime="text/html",
             use_container_width=True
         )
+        
+        # Show chart status
+        if not KALEIDO_AVAILABLE:
+            st.caption(f"📊 Charts: Interactive mode")
+            if KALEIDO_ERROR:
+                st.caption(f"({KALEIDO_ERROR[:50]}...)")
+        else:
+            st.caption("📊 Charts: Static images")
     
     st.markdown("")
     
