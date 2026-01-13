@@ -804,8 +804,12 @@ def render_yearly_planning_2026():
                 st.write(f"Columns: {list(deals_df.columns)}")
                 if 'Deal Owner' in deals_df.columns:
                     st.write(f"Unique Owners: {deals_df['Deal Owner'].nunique()}")
+                    st.write(f"Sample Owners: {deals_df['Deal Owner'].head(5).tolist()}")
                 if 'Company Name' in deals_df.columns:
                     st.write(f"Unique Companies: {deals_df['Company Name'].nunique()}")
+                    st.write(f"Sample Companies: {deals_df['Company Name'].head(5).tolist()}")
+                else:
+                    st.error("Company Name column NOT found!")
     
     # Custom CSS for dark dropdown text
     st.markdown("""
@@ -884,7 +888,7 @@ def render_yearly_planning_2026():
     # Debug: Show filtered counts
     with st.expander("🔍 Debug: Filtered Data for Selected Customer"):
         st.write(f"**Selected Rep:** {selected_rep}")
-        st.write(f"**Selected Customer:** {selected_customer}")
+        st.write(f"**Selected Customer:** `{selected_customer}`")
         st.write(f"**Matching Sales Orders:** {len(customer_orders)}")
         st.write(f"**Matching Invoices:** {len(customer_invoices)}")
         st.write(f"**Matching HubSpot Deals:** {len(customer_deals)}")
@@ -900,7 +904,22 @@ def render_yearly_planning_2026():
             rep_deals = deals_df[deals_df['Deal Owner'] == selected_rep]
             st.write(f"**Total deals for {selected_rep}:** {len(rep_deals)}")
             if len(rep_deals) > 0:
-                st.write(f"**Sample companies in deals:** {rep_deals['Company Name'].head(10).tolist()}")
+                st.write(f"**Sample Company Names in deals:** {rep_deals['Company Name'].head(10).tolist()}")
+                # Show exact match attempt
+                st.write(f"**Looking for exact match:** `{selected_customer}`")
+                exact_matches = rep_deals[rep_deals['Company Name'] == selected_customer]
+                st.write(f"**Exact matches found:** {len(exact_matches)}")
+                
+                # Try contains match for debugging
+                contains_matches = rep_deals[rep_deals['Company Name'].str.contains(selected_customer, case=False, na=False)]
+                st.write(f"**Contains matches found:** {len(contains_matches)}")
+                if len(contains_matches) > 0:
+                    st.write(f"**Contains match Company Names:** {contains_matches['Company Name'].tolist()}")
+                
+                # Show raw bytes of first Company Name to detect hidden chars
+                if len(rep_deals) > 0:
+                    first_company = rep_deals['Company Name'].iloc[0]
+                    st.write(f"**First Company Name repr:** `{repr(first_company)}`")
     
     # Main content
     st.markdown(f"## QBR: {selected_customer}")
