@@ -306,17 +306,136 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     
     # Pending Orders
     pending_statuses = ['Pending Approval', 'Pending Fulfillment', 'PA', 'PF']
-    pending_orders = customer_orders[
-        customer_orders['Updated Status'].isin(pending_statuses) | 
-        customer_orders['Status'].isin(['Pending Approval', 'Pending Fulfillment'])
-    ] if not customer_orders.empty else pd.DataFrame()
+    pending_orders = pd.DataFrame()
+    if not customer_orders.empty:
+        try:
+            if 'Updated Status' in customer_orders.columns:
+                pending_orders = customer_orders[
+                    customer_orders['Updated Status'].isin(pending_statuses) | 
+                    customer_orders['Status'].isin(['Pending Approval', 'Pending Fulfillment'])
+                ]
+            elif 'Status' in customer_orders.columns:
+                pending_orders = customer_orders[
+                    customer_orders['Status'].isin(['Pending Approval', 'Pending Fulfillment'])
+                ]
+        except Exception:
+            pending_orders = pd.DataFrame()
+    
     pending_count = len(pending_orders)
     pending_value = pending_orders['Amount'].sum() if not pending_orders.empty else 0
+    
+    # Pending Orders Detail Table
+    pending_orders_html = ""
+    if not pending_orders.empty:
+        # Group by status first
+        status_col = 'Updated Status' if 'Updated Status' in pending_orders.columns else 'Status'
+        status_summary = pending_orders.groupby(status_col).agg({
+            'Amount': ['sum', 'count']
+        }).round(0)
+        status_summary.columns = ['Value', 'Count']
+        status_summary = status_summary.sort_values('Value', ascending=False)
+        
+        status_rows = ""
+        for status, row in status_summary.iterrows():
+            status_rows += f"<tr><td>{status}</td><td>${row['Value']:,.0f}</td><td>{int(row['Count'])}</td></tr>"
+        
+        pending_status_html = f"""
+        <h4 style="color: #475569; margin: 20px 0 10px 0;">By Status</h4>
+        <table class="data-table">
+            <thead><tr><th>Status</th><th>Value</th><th>Orders</th></tr></thead>
+            <tbody>{status_rows}</tbody>
+        </table>
+        """
+        
+        # Individual order details
+        order_rows = ""
+        for _, order in pending_orders.sort_values('Amount', ascending=False).iterrows():
+            so_num = order.get('SO Number', 'N/A')
+            order_type = order.get('Order Type', 'N/A')
+            amount = order.get('Amount', 0)
+            order_date = order.get('Order Start Date')
+            if pd.notna(order_date):
+                order_date = order_date.strftime('%Y-%m-%d')
+            else:
+                order_date = 'N/A'
+            status = order.get(status_col, 'N/A')
+            order_rows += f"<tr><td>{so_num}</td><td>{order_type}</td><td>${amount:,.0f}</td><td>{order_date}</td><td>{status}</td></tr>"
+        
+        pending_detail_html = f"""
+        <h4 style="color: #475569; margin: 20px 0 10px 0;">Order Details</h4>
+        <table class="data-table">
+            <thead><tr><th>SO #</th><th>Order Type</th><th>Amount</th><th>Order Date</th><th>Status</th></tr></thead>
+            <tbody>{order_rows}</tbody>
+        </table>
+        """
+        
+        pending_orders_html = pending_status_html + pending_detail_html
     
     # Open Invoices
     open_invoices = customer_invoices[customer_invoices['Status'] == 'Open'] if not customer_invoices.empty else pd.DataFrame()
     open_invoice_count = len(open_invoices)
     open_invoice_value = open_invoices['Amount Remaining'].sum() if not open_invoices.empty and 'Amount Remaining' in open_invoices.columns else 0
+    
+    # Open Invoices Detail Table with Aging
+    open_invoices_html = ""
+    if not open_invoices.empty and 'Due Date' in open_invoices.columns:
+        today = pd.Timestamp.now()
+        open_inv = open_invoices.copy()
+        open_inv['Days Overdue'] = (today - open_inv['Due Date']).dt.days
+        
+        # Aging buckets
+        def aging_bucket(days):
+            if days <= 0: return 'Current'
+            elif days <= 30: return '1-30 Days'
+            elif days <= 60: return '31-60 Days'
+            elif days <= 90: return '61-90 Days'
+            else: return '90+ Days'
+        
+        open_inv['Aging'] = open_inv['Days Overdue'].apply(aging_bucket)
+        
+        # Aging summary
+        aging_summary = open_inv.groupby('Aging')['Amount Remaining'].sum()
+        bucket_order = ['Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days']
+        
+        aging_rows = ""
+        for bucket in bucket_order:
+            if bucket in aging_summary.index:
+                amt = aging_summary[bucket]
+                style = 'color: #ef4444; font-weight: 600;' if bucket == '90+ Days' else ''
+                aging_rows += f"<tr><td>{bucket}</td><td style='{style}'>${amt:,.0f}</td></tr>"
+        
+        aging_html = f"""
+        <h4 style="color: #475569; margin: 20px 0 10px 0;">Aging Summary</h4>
+        <table class="data-table">
+            <thead><tr><th>Aging Bucket</th><th>Amount</th></tr></thead>
+            <tbody>{aging_rows}</tbody>
+        </table>
+        """
+        
+        # Individual invoice details
+        invoice_rows = ""
+        for _, inv in open_inv.sort_values('Days Overdue', ascending=False).iterrows():
+            doc_num = inv.get('Document Number', 'N/A')
+            amount = inv.get('Amount Remaining', 0)
+            due_date = inv.get('Due Date')
+            if pd.notna(due_date):
+                due_date = due_date.strftime('%Y-%m-%d')
+            else:
+                due_date = 'N/A'
+            days_over = inv.get('Days Overdue', 0)
+            aging = inv.get('Aging', 'N/A')
+            style = 'color: #ef4444;' if days_over > 90 else 'color: #f59e0b;' if days_over > 30 else ''
+            invoice_rows += f"<tr><td>{doc_num}</td><td>${amount:,.0f}</td><td>{due_date}</td><td style='{style}'>{days_over:.0f}</td><td>{aging}</td></tr>"
+        
+        invoice_detail_html = f"""
+        <h4 style="color: #475569; margin: 20px 0 10px 0;">Invoice Details</h4>
+        <table class="data-table">
+            <thead><tr><th>Invoice #</th><th>Amount</th><th>Due Date</th><th>Days Overdue</th><th>Aging</th></tr></thead>
+            <tbody>{invoice_rows}</tbody>
+        </table>
+        """
+        
+        open_invoices_html = aging_html + invoice_detail_html
     
     # Revenue
     total_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty else 0
@@ -622,6 +741,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <div class="metric-value">${pending_value:,.0f}</div>
                 </div>
             </div>
+            {pending_orders_html}
         </div>
         
         <div class="section">
@@ -636,6 +756,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <div class="metric-value {'warning' if open_invoice_value > 0 else ''}">${open_invoice_value:,.0f}</div>
                 </div>
             </div>
+            {open_invoices_html}
         </div>
         
         <div class="section">
