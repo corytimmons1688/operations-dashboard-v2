@@ -399,6 +399,13 @@ def render_open_invoices_section(customer_invoices):
         st.info("No invoice data found for this customer.")
         return
     
+    # Debug: show what statuses exist
+    with st.expander("🔍 Debug: Invoice Statuses"):
+        st.write(f"**Total invoices for customer:** {len(customer_invoices)}")
+        if 'Status' in customer_invoices.columns:
+            status_counts = customer_invoices['Status'].value_counts().to_dict()
+            st.write(f"**Status breakdown:** {status_counts}")
+    
     # Filter to open invoices only
     open_invoices = customer_invoices[customer_invoices['Status'] == 'Open'].copy()
     
@@ -478,14 +485,30 @@ def render_revenue_section(customer_invoices):
         st.info("No invoice data found for this customer.")
         return
     
+    # Debug: Show what we have
+    with st.expander("🔍 Debug: Invoice Data"):
+        st.write(f"**Total customer invoices:** {len(customer_invoices)}")
+        if 'Status' in customer_invoices.columns:
+            st.write(f"**Unique Status values:** {customer_invoices['Status'].unique().tolist()}")
+        if 'Amount' in customer_invoices.columns:
+            st.write(f"**Total Amount (all statuses):** ${customer_invoices['Amount'].sum():,.0f}")
+        if 'Date' in customer_invoices.columns:
+            st.write(f"**Date range:** {customer_invoices['Date'].min()} to {customer_invoices['Date'].max()}")
+            st.write(f"**Sample dates:** {customer_invoices['Date'].head(5).tolist()}")
+    
     # Filter to paid/open invoices (exclude voided, etc.)
     valid_invoices = customer_invoices[
         customer_invoices['Status'].isin(['Paid in Full', 'Open'])
     ].copy()
     
     if valid_invoices.empty:
-        st.info("No revenue data available.")
-        return
+        # Try without status filter to see if that's the issue
+        st.warning(f"No invoices with Status 'Paid in Full' or 'Open'. Found statuses: {customer_invoices['Status'].unique().tolist()}")
+        # Fall back to all invoices
+        valid_invoices = customer_invoices.copy()
+        if valid_invoices.empty:
+            st.info("No revenue data available.")
+            return
     
     # Get current year
     current_year = datetime.now().year
@@ -917,6 +940,19 @@ def render_yearly_planning_2026():
         st.write(f"**Matching Sales Orders:** {len(customer_orders)}")
         st.write(f"**Matching Invoices:** {len(customer_invoices)}")
         st.write(f"**Matching HubSpot Deals:** {len(customer_deals)}")
+        
+        # Debug customer invoices specifically
+        if not customer_invoices.empty:
+            st.write("---")
+            st.write("**Customer Invoice Details:**")
+            st.write(f"Columns: {list(customer_invoices.columns)}")
+            if 'Status' in customer_invoices.columns:
+                st.write(f"Status values: {customer_invoices['Status'].unique().tolist()}")
+            if 'Amount' in customer_invoices.columns:
+                st.write(f"Total Amount: ${customer_invoices['Amount'].sum():,.0f}")
+            if 'Date' in customer_invoices.columns:
+                st.write(f"Date dtype: {customer_invoices['Date'].dtype}")
+                st.write(f"Sample dates: {customer_invoices['Date'].head(3).tolist()}")
         
         if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns:
             # Show sample of what's in the invoice data for this rep
