@@ -6,146 +6,152 @@ Features:
 - Loads Invoice Lines, Sales Orders, Items, Customers, Deals
 - Properly maps 'Calyx || Product Type' column from Raw_Items
 - Handles duplicate column names
-- Handles Coefficient/HubSpot Import title row in Deals sheet
-- Fixed Amount column detection for pipeline
+- Handles HubSpot Import title row in Deals sheet
+- Provides data preparation functions
 
 Author: Xander @ Calyx Containers
-Version: 3.7.0
-Last Updated: 2026-01-13 09:50 MST
-Changes:
-- v3.7.0: Fixed Coefficient header row detection - properly skips Row 1 when HubSpot Import header detected
-- v3.6.0: Fixed Amount column detection - checks exact match, variations, and 'Probability Rev'
+Version: 3.5.0
+Last Updated: 2026-01-05 17:30 MST
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Optional, List, Dict, Tuple
+import logging
 import gspread
 from google.oauth2.service_account import Credentials
-import logging
-from typing import Optional, Dict, Any
-import hashlib
-import json
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Version info
-VERSION = "3.7.0"
-LAST_UPDATED = "2026-01-13 09:50 MST"
+VERSION = "3.5.0"
+LAST_UPDATED = "2026-01-05 17:30 MST"
 
-# Google Sheets scopes
+# =============================================================================
+# GOOGLE SHEETS CONNECTION
+# =============================================================================
+
 SCOPES = [
     'https://www.googleapis.com/auth/spreadsheets.readonly',
     'https://www.googleapis.com/auth/drive.readonly'
 ]
 
-# Cache duration (seconds)
-CACHE_TTL = 300  # 5 minutes
-
-
-def get_google_credentials():
-    """Get Google credentials from Streamlit secrets."""
+@st.cache_resource
+def get_google_sheets_client():
+    """Get authenticated Google Sheets client."""
     try:
-        creds_dict = st.secrets["gcp_service_account"]
-        credentials = Credentials.from_service_account_info(
-            dict(creds_dict),
-            scopes=SCOPES
-        )
-        return credentials
+        # Try different secret formats
+        if 'service_account' in st.secrets:
+            creds_dict = dict(st.secrets['service_account'])
+        elif 'gcp_service_account' in st.secrets:
+            creds_dict = dict(st.secrets['gcp_service_account'])
+        else:
+            # Try top-level secrets
+            creds_dict = {
+                'type': st.secrets.get('type', 'service_account'),
+                'project_id': st.secrets.get('project_id'),
+                'private_key_id': st.secrets.get('private_key_id'),
+                'private_key': st.secrets.get('private_key'),
+                'client_email': st.secrets.get('client_email'),
+                'client_id': st.secrets.get('client_id'),
+                'auth_uri': st.secrets.get('auth_uri'),
+                'token_uri': st.secrets.get('token_uri'),
+            }
+        
+        credentials = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+        client = gspread.authorize(credentials)
+        return client
     except Exception as e:
-        logger.error(f"Failed to get Google credentials: {e}")
+        logger.error(f"Failed to authenticate with Google Sheets: {e}")
         return None
 
 
-def get_gspread_client():
-    """Get authenticated gspread client."""
-    credentials = get_google_credentials()
-    if credentials is None:
-        return None
-    try:
-        return gspread.authorize(credentials)
-    except Exception as e:
-        logger.error(f"Failed to authorize gspread: {e}")
-        return None
-
-
-@st.cache_data(ttl=CACHE_TTL)
-def get_spreadsheet_id() -> Optional[str]:
+def get_spreadsheet_id():
     """Get spreadsheet ID from secrets."""
-    try:
-        return st.secrets.get("spreadsheet_id", st.secrets.get("SPREADSHEET_ID"))
-    except Exception:
-        return None
+    return st.secrets.get('SPREADSHEET_ID', st.secrets.get('spreadsheet_id', ''))
 
 
-@st.cache_data(ttl=CACHE_TTL)
-def load_sheet_to_dataframe(sheet_name: str) -> Optional[pd.DataFrame]:
-    """Load a specific sheet from Google Sheets into a DataFrame."""
+# =============================================================================
+# SHEET LOADING FUNCTIONS
+# =============================================================================
+
+def load_sheet_to_dataframe(sheet_name: str, handle_duplicates: bool = True) -> Optional[pd.DataFrame]:
+    """
+    Load a Google Sheet into a pandas DataFrame.
+    
+    Args:
+        sheet_name: Name of the sheet to load
+        handle_duplicates: Whether to handle duplicate column names
+    
+    Returns:
+        DataFrame or None if loading fails
+    """
     try:
-        client = get_gspread_client()
+        client = get_google_sheets_client()
         if client is None:
+            logger.error(f"No Google Sheets client available for sheet '{sheet_name}'")
             return None
         
         spreadsheet_id = get_spreadsheet_id()
-        if spreadsheet_id is None:
-            logger.error("Spreadsheet ID not found in secrets")
+        if not spreadsheet_id:
+            logger.error("No spreadsheet ID configured")
             return None
         
+        logger.info(f"Opening spreadsheet {spreadsheet_id} for sheet '{sheet_name}'")
         spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(sheet_name)
-        
-        # Get all values
         data = worksheet.get_all_values()
         
-        if not data or len(data) < 2:
-            logger.warning(f"Sheet '{sheet_name}' is empty or has no data rows")
-            return None
+        if not data:
+            logger.info(f"Sheet '{sheet_name}' has no data")
+            return pd.DataFrame()
         
-        # First row is headers
-        headers = data[0]
-        rows = data[1:]
+        logger.info(f"Sheet '{sheet_name}' has {len(data)} rows")
         
         # Handle duplicate column names
-        seen = {}
-        unique_headers = []
-        for h in headers:
-            h_str = str(h).strip() if h else ''
-            if h_str in seen:
-                seen[h_str] += 1
-                unique_headers.append(f"{h_str}_{seen[h_str]}")
-            else:
-                seen[h_str] = 0
-                unique_headers.append(h_str)
+        headers = data[0]
+        if handle_duplicates:
+            seen = {}
+            new_headers = []
+            for h in headers:
+                if h in seen:
+                    seen[h] += 1
+                    new_headers.append(f"{h}_{seen[h]}")
+                else:
+                    seen[h] = 0
+                    new_headers.append(h)
+            headers = new_headers
         
-        df = pd.DataFrame(rows, columns=unique_headers)
+        df = pd.DataFrame(data[1:], columns=headers)
         
-        # Replace empty strings with NaN
-        df = df.replace('', pd.NA)
+        # Convert numeric columns
+        for col in df.columns:
+            # Try to convert to numeric
+            try:
+                numeric_vals = pd.to_numeric(df[col], errors='coerce')
+                if numeric_vals.notna().sum() > len(df) * 0.5:  # More than 50% numeric
+                    df[col] = numeric_vals
+            except:
+                pass
         
-        logger.info(f"Loaded sheet '{sheet_name}': {len(df)} rows, {len(df.columns)} columns")
-        
+        logger.info(f"Successfully created DataFrame with {len(df)} rows and {len(df.columns)} columns")
         return df
         
-    except gspread.exceptions.WorksheetNotFound:
-        logger.warning(f"Worksheet '{sheet_name}' not found")
-        return None
     except Exception as e:
         logger.error(f"Error loading sheet '{sheet_name}': {e}")
         return None
 
 
-@st.cache_data(ttl=CACHE_TTL)
+# =============================================================================
+# DATA LOADING FUNCTIONS
+# =============================================================================
+
+@st.cache_data(ttl=300)
 def load_invoice_lines() -> Optional[pd.DataFrame]:
-    """Load Invoice Lines data."""
-    df = load_sheet_to_dataframe('Invoice_Lines')
-    
-    if df is None or df.empty:
-        # Try alternate names
-        for sheet_name in ['InvoiceLines', 'Invoice Lines', 'Invoices']:
-            df = load_sheet_to_dataframe(sheet_name)
-            if df is not None and not df.empty:
-                break
+    """Load Invoice Line Item data."""
+    df = load_sheet_to_dataframe('Invoice Line Item')
     
     if df is None or df.empty:
         return None
@@ -153,49 +159,44 @@ def load_invoice_lines() -> Optional[pd.DataFrame]:
     # Standardize column names
     col_mapping = {}
     for col in df.columns:
-        col_lower = str(col).lower()
-        if 'date' in col_lower and 'Date' not in col_mapping.values():
-            col_mapping[col] = 'Date'
-        elif 'quantity' in col_lower or col_lower == 'qty':
-            col_mapping[col] = 'Quantity'
-        elif 'amount' in col_lower or 'total' in col_lower:
-            if 'Amount' not in col_mapping.values():
-                col_mapping[col] = 'Amount'
-        elif 'item' in col_lower and 'name' in col_lower:
-            col_mapping[col] = 'Item Name/Number'
-        elif col_lower == 'item':
-            if 'Item Name/Number' not in col_mapping.values():
-                col_mapping[col] = 'Item Name/Number'
-        elif 'customer' in col_lower:
+        col_lower = col.lower()
+        if 'customer' in col_lower and 'correct' in col_lower:
+            col_mapping[col] = 'Customer'
+        elif col_lower == 'customer' or 'customer name' in col_lower:
             if 'Customer' not in col_mapping.values():
                 col_mapping[col] = 'Customer'
-        elif 'sales' in col_lower and 'rep' in col_lower:
-            col_mapping[col] = 'Sales Rep'
+        elif 'item' in col_lower and 'name' not in col_lower:
+            col_mapping[col] = 'Item'
+        elif 'amount' in col_lower or 'line amount' in col_lower:
+            col_mapping[col] = 'Amount'
+        elif 'qty' in col_lower or 'quantity' in col_lower:
+            col_mapping[col] = 'Quantity'
+        elif 'date' in col_lower and ('invoice' in col_lower or 'tran' in col_lower):
+            col_mapping[col] = 'Date'
+        elif 'rep' in col_lower and 'master' in col_lower:
+            col_mapping[col] = 'Rep'
+        elif 'calyx' in col_lower and 'product type' in col_lower:
+            col_mapping[col] = 'Product Type'
+        elif 'product type' in col_lower and 'Product Type' not in col_mapping.values():
+            col_mapping[col] = 'Product Type'
     
     df = df.rename(columns=col_mapping)
     
-    # Convert numeric columns
-    for col in ['Quantity', 'Amount']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-    
-    # Convert date
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+    # Clean Product Type
+    if 'Product Type' in df.columns:
+        df['Product Type'] = df['Product Type'].fillna('Unknown').replace('', 'Unknown')
     
     return df
 
 
-@st.cache_data(ttl=CACHE_TTL)
+@st.cache_data(ttl=300)
 def load_sales_orders() -> Optional[pd.DataFrame]:
-    """Load Sales Orders data."""
-    df = load_sheet_to_dataframe('Sales_Orders')
+    """Load Sales Orders Main data."""
+    df = load_sheet_to_dataframe('_NS_SalesOrders_Data')
     
     if df is None or df.empty:
-        for sheet_name in ['SalesOrders', 'Sales Orders', 'Orders']:
-            df = load_sheet_to_dataframe(sheet_name)
-            if df is not None and not df.empty:
-                break
+        # Try alternate name
+        df = load_sheet_to_dataframe('Sales Order Line Item')
     
     if df is None or df.empty:
         return None
@@ -203,17 +204,19 @@ def load_sales_orders() -> Optional[pd.DataFrame]:
     # Standardize column names
     col_mapping = {}
     for col in df.columns:
-        col_lower = str(col).lower()
-        if 'date' in col_lower and 'Date' not in col_mapping.values():
-            col_mapping[col] = 'Date'
-        elif 'customer' in col_lower:
+        col_lower = col.lower()
+        if 'customer' in col_lower:
             if 'Customer' not in col_mapping.values():
                 col_mapping[col] = 'Customer'
-        elif 'amount' in col_lower or 'total' in col_lower:
+        elif 'rep' in col_lower:
+            if 'Rep' not in col_mapping.values():
+                col_mapping[col] = 'Rep'
+        elif 'item' in col_lower:
+            if 'Item' not in col_mapping.values():
+                col_mapping[col] = 'Item'
+        elif 'amount' in col_lower:
             if 'Amount' not in col_mapping.values():
                 col_mapping[col] = 'Amount'
-        elif 'sales' in col_lower and 'rep' in col_lower:
-            col_mapping[col] = 'Sales Rep'
         elif 'status' in col_lower:
             if 'Status' not in col_mapping.values():
                 col_mapping[col] = 'Status'
@@ -223,290 +226,227 @@ def load_sales_orders() -> Optional[pd.DataFrame]:
     return df
 
 
-@st.cache_data(ttl=CACHE_TTL)
+@st.cache_data(ttl=300)
 def load_items() -> Optional[pd.DataFrame]:
-    """Load Items/Products data with Calyx Product Type mapping."""
+    """
+    Load Raw_Items data with 'Calyx || Product Type' column.
+    """
     df = load_sheet_to_dataframe('Raw_Items')
-    
-    if df is None or df.empty:
-        for sheet_name in ['Items', 'Products', 'SKUs']:
-            df = load_sheet_to_dataframe(sheet_name)
-            if df is not None and not df.empty:
-                break
     
     if df is None or df.empty:
         return None
     
-    # Look for Calyx || Product Type column
+    # Find and standardize the Calyx Product Type column
     product_type_col = None
     for col in df.columns:
-        if 'calyx' in str(col).lower() and 'product' in str(col).lower() and 'type' in str(col).lower():
+        col_lower = col.lower()
+        if 'calyx' in col_lower and 'product type' in col_lower:
             product_type_col = col
             break
-        elif 'product type' in str(col).lower():
-            product_type_col = col
     
-    if product_type_col and product_type_col != 'Calyx || Product Type':
-        df = df.rename(columns={product_type_col: 'Calyx || Product Type'})
+    if product_type_col:
+        df['Calyx Product Type'] = df[product_type_col].fillna('Unknown').replace('', 'Unknown')
     
-    # Standardize Item Name column
+    # Find Stock Item column
+    stock_item_col = None
     for col in df.columns:
-        col_lower = str(col).lower()
-        if ('item' in col_lower and 'name' in col_lower) or col_lower == 'name' or col_lower == 'item':
-            if col != 'Item Name/Number':
-                df = df.rename(columns={col: 'Item Name/Number'})
+        col_lower = col.lower().strip()
+        if col_lower == 'stock item' or col_lower == 'stockitem' or col_lower == 'stock_item':
+            stock_item_col = col
             break
     
-    logger.info(f"Items loaded with columns: {list(df.columns)[:10]}")
+    if stock_item_col:
+        df['Stock Item'] = df[stock_item_col].fillna('').astype(str).str.strip()
+    else:
+        df['Stock Item'] = ''  # Default to blank if column not found
+    
+    # Also keep original column mapping
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if col_lower in ['item', 'item name', 'name', 'sku']:
+            col_mapping[col] = 'Item'
+        elif 'description' in col_lower:
+            if 'Description' not in col_mapping.values():
+                col_mapping[col] = 'Description'
+    
+    df = df.rename(columns=col_mapping)
     
     return df
 
 
-@st.cache_data(ttl=CACHE_TTL)
-def load_customers() -> Optional[pd.DataFrame]:
-    """Load Customers data."""
-    df = load_sheet_to_dataframe('Customers')
+@st.cache_data(ttl=300)
+def load_stock_items() -> Optional[pd.DataFrame]:
+    """
+    Load Raw_Items data filtered to only include Stock Items.
+    Excludes items where Stock Item = 'No' or blank.
+    
+    Returns only items where Stock Item = 'Yes'
+    """
+    df = load_items()
     
     if df is None or df.empty:
-        for sheet_name in ['Customer', 'Accounts']:
-            df = load_sheet_to_dataframe(sheet_name)
-            if df is not None and not df.empty:
-                break
+        return df
+    
+    # Filter to only stock items (Yes)
+    if 'Stock Item' in df.columns:
+        # Keep only rows where Stock Item is 'Yes' (case insensitive)
+        stock_item_series = df['Stock Item'].astype(str).str.strip().str.lower()
+        df_filtered = df[stock_item_series == 'yes'].copy()
+        
+        logger.info(f"Filtered items: {len(df)} total -> {len(df_filtered)} stock items")
+        return df_filtered
+    
+    # If no Stock Item column, return all items
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_customers() -> Optional[pd.DataFrame]:
+    """Load Customer List data."""
+    df = load_sheet_to_dataframe('_NS_Customer_List')
+    
+    if df is None or df.empty:
+        return None
+    
+    # Standardize column names
+    col_mapping = {}
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'company' in col_lower or 'customer' in col_lower:
+            if 'Customer' not in col_mapping.values():
+                col_mapping[col] = 'Customer'
+        elif 'rep' in col_lower or 'salesperson' in col_lower:
+            if 'Rep' not in col_mapping.values():
+                col_mapping[col] = 'Rep'
+    
+    df = df.rename(columns=col_mapping)
     
     return df
 
 
-@st.cache_data(ttl=CACHE_TTL)
+@st.cache_data(ttl=300)
 def load_deals() -> Optional[pd.DataFrame]:
     """
     Load HubSpot Deals/Pipeline data.
     
-    Handles:
-    - Coefficient/HubSpot Import title row (Row 1) - ALWAYS skips to Row 2 for headers
-    - Column name standardization including Amount
-    
-    v3.7.0 - Fixed Coefficient header row handling
+    Handles case where first row is a title/info row like "HubSpot Import..."
+    and actual headers are in row 2.
     """
-    # Load raw data directly to handle header row ourselves
-    try:
-        client = get_gspread_client()
-        if client is None:
-            return None
-        
-        spreadsheet_id = get_spreadsheet_id()
-        if spreadsheet_id is None:
-            return None
-        
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        
-        # Try to find the Deals sheet
-        worksheet = None
-        sheet_loaded = None
-        for sheet_name in ['Deals', 'All Reps All Pipelines', 'HubSpot Deals', 'Pipeline']:
-            try:
-                worksheet = spreadsheet.worksheet(sheet_name)
-                sheet_loaded = sheet_name
+    df = load_sheet_to_dataframe('Deals')
+    
+    if df is None or df.empty:
+        # Try alternate names
+        for sheet_name in ['All Reps All Pipelines', 'HubSpot Deals', 'Pipeline']:
+            df = load_sheet_to_dataframe(sheet_name)
+            if df is not None and not df.empty:
                 break
-            except gspread.exceptions.WorksheetNotFound:
-                continue
-        
-        if worksheet is None:
-            logger.warning("Deals: No deals sheet found")
-            return None
-        
-        # Get all values
-        data = worksheet.get_all_values()
-        
-        if not data or len(data) < 3:
-            logger.warning(f"Deals: Sheet '{sheet_loaded}' has insufficient data")
-            return None
-        
-        logger.info(f"Deals: Loaded from sheet '{sheet_loaded}', {len(data)} rows")
-        logger.info(f"Deals: Row 1 (raw): {data[0][:5]}...")
-        logger.info(f"Deals: Row 2 (raw): {data[1][:8]}...")
-        
-        # Check if Row 1 is a Coefficient/HubSpot header row
-        row1_text = ' '.join(str(x).lower() for x in data[0][:3])
-        is_coefficient_header = any(kw in row1_text for kw in ['hubspot', 'import', 'coefficient', 'last updated'])
-        
-        # Also check if Row 1 has mostly empty cells (merged header row)
-        row1_empty_count = sum(1 for x in data[0] if str(x).strip() == '')
-        is_merged_header = row1_empty_count > len(data[0]) / 2
-        
-        # Check if Row 2 looks like actual headers
-        row2_text = ' '.join(str(x).lower() for x in data[1][:10])
-        row2_has_headers = any(kw in row2_text for kw in ['deal', 'amount', 'stage', 'date', 'name', 'record'])
-        
-        if (is_coefficient_header or is_merged_header) and row2_has_headers:
-            # Skip Row 1, use Row 2 as headers
-            headers = [str(x).strip() for x in data[1]]
-            rows = data[2:]
-            logger.info(f"Deals: Skipped Coefficient header, using Row 2 as headers: {headers[:8]}...")
-        else:
-            # Normal case - Row 1 is headers
-            headers = [str(x).strip() for x in data[0]]
-            rows = data[1:]
-            logger.info(f"Deals: Using Row 1 as headers: {headers[:8]}...")
-        
-        # Handle duplicate column names
-        seen = {}
-        unique_headers = []
-        for h in headers:
-            if h in seen:
-                seen[h] += 1
-                unique_headers.append(f"{h}_{seen[h]}")
-            else:
-                seen[h] = 0
-                unique_headers.append(h)
-        
-        df = pd.DataFrame(rows, columns=unique_headers)
-        df = df.replace('', pd.NA)
-        
-        logger.info(f"Deals: Final columns: {list(df.columns)[:10]}...")
-        
-    except Exception as e:
-        logger.error(f"Deals: Error loading: {e}")
-        return None
     
     if df is None or df.empty:
         return None
     
-    # Standardize column names - Check for exact matches first!
-    col_mapping = {}
-    found_amount = False
+    # Check if first column header looks like a title row (HubSpot Import, etc.)
+    first_col = str(df.columns[0]).lower() if len(df.columns) > 0 else ''
+    if 'hubspot' in first_col or 'import' in first_col or 'last updated' in first_col:
+        # First row is a title - the actual headers are in the first data row
+        # Use the first row as new headers
+        if len(df) > 0:
+            new_headers = df.iloc[0].astype(str).tolist()
+            df = df.iloc[1:].reset_index(drop=True)
+            df.columns = new_headers
+            logger.info(f"Deals: Detected title row, using row 2 as headers: {new_headers[:5]}...")
     
+    # Also check if columns are generic like '_1', '_2', etc.
+    generic_cols = [c for c in df.columns if str(c).startswith('_') and str(c)[1:].isdigit()]
+    if len(generic_cols) > len(df.columns) / 2:
+        # More than half are generic - first row is likely actual headers
+        if len(df) > 0:
+            new_headers = df.iloc[0].astype(str).tolist()
+            df = df.iloc[1:].reset_index(drop=True)
+            df.columns = new_headers
+            logger.info(f"Deals: Detected generic columns, using row 1 as headers: {new_headers[:5]}...")
+    
+    # Standardize column names
+    col_mapping = {}
     for col in df.columns:
-        col_str = str(col).strip()
-        col_lower = col_str.lower()
-        
-        # Exact match for Amount (highest priority)
-        if col_lower == 'amount':
-            col_mapping[col] = 'Amount'
-            found_amount = True
-            logger.info(f"Deals: Found Amount column (exact match) as '{col}'")
-        # Deal Name
-        elif 'deal' in col_lower and 'name' in col_lower:
+        col_lower = str(col).lower()
+        if 'deal' in col_lower and 'name' in col_lower:
             col_mapping[col] = 'Deal Name'
-        # Company/Customer
-        elif col_lower == 'company' or col_lower == 'customer':
+        elif 'company' in col_lower or 'customer' in col_lower:
             if 'Company' not in col_mapping.values():
                 col_mapping[col] = 'Company'
-        # Stage (exact match first)
-        elif col_lower == 'stage':
+        elif col_lower == 'amount' or (('amount' in col_lower or 'value' in col_lower) and 'Amount' not in col_mapping.values()):
+            col_mapping[col] = 'Amount'
+        elif 'stage' in col_lower:
             if 'Stage' not in col_mapping.values():
                 col_mapping[col] = 'Stage'
-        # Close Date
         elif 'close' in col_lower and 'date' in col_lower:
-            if 'Close Date' not in col_mapping.values():
-                col_mapping[col] = 'Close Date'
-        # SKU
-        elif col_lower == 'sku':
+            col_mapping[col] = 'Close Date'
+        elif 'product' in col_lower:
+            if 'Product' not in col_mapping.values():
+                col_mapping[col] = 'Product'
+        elif col_lower == 'sku' or col_lower == 'item':
             col_mapping[col] = 'SKU'
-    
-    # Second pass - look for Amount variations if not found yet
-    if not found_amount:
-        for col in df.columns:
-            col_str = str(col).strip()
-            col_lower = col_str.lower()
-            
-            # Check variations: 'deal amount', 'total amount', 'value', 'deal value', 'probability rev'
-            if any(x in col_lower for x in ['amount', 'deal value', 'probability rev', 'revenue']):
-                if col not in col_mapping:  # Don't override existing mappings
-                    col_mapping[col] = 'Amount'
-                    found_amount = True
-                    logger.info(f"Deals: Found Amount column (variation) as '{col}'")
-                    break
     
     df = df.rename(columns=col_mapping)
     
-    # If Amount still not found, log a warning with all columns
-    if 'Amount' not in df.columns:
-        logger.warning(f"Deals: Amount column NOT FOUND! All columns: {list(df.columns)}")
-    else:
-        # Convert Amount to numeric
-        df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
-        non_null = df['Amount'].notna().sum()
-        total = df['Amount'].sum()
-        logger.info(f"Deals: Amount column - {non_null} non-null values, total ${total:,.2f}")
-    
-    # Convert Close Date to datetime
-    if 'Close Date' in df.columns:
-        df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
-        logger.info(f"Deals: Close Date - {df['Close Date'].notna().sum()} valid dates")
-    
-    logger.info(f"Deals loaded: {len(df)} rows, final columns: {list(df.columns)}")
+    # Log the actual column names for debugging
+    logger.info(f"Deals columns after processing: {list(df.columns)[:10]}...")
     
     return df
 
 
-@st.cache_data(ttl=CACHE_TTL)
+@st.cache_data(ttl=300)
 def load_inventory() -> Optional[pd.DataFrame]:
-    """Load Inventory data."""
-    df = load_sheet_to_dataframe('Inventory')
+    """Load Raw_Inventory data."""
+    df = load_sheet_to_dataframe('Raw_Inventory')
     
     if df is None or df.empty:
-        for sheet_name in ['Stock', 'Inventory_Levels']:
-            df = load_sheet_to_dataframe(sheet_name)
-            if df is not None and not df.empty:
-                break
+        return None
     
     return df
 
 
-@st.cache_data(ttl=CACHE_TTL)
-def load_revenue_forecast() -> Optional[pd.DataFrame]:
-    """Load Revenue Forecast data from Google Sheets."""
-    df = load_sheet_to_dataframe('Revenue Forecast')
+@st.cache_data(ttl=300)
+def load_vendors() -> Optional[pd.DataFrame]:
+    """Load Raw_Vendors data."""
+    df = load_sheet_to_dataframe('Raw_Vendors')
     
     if df is None or df.empty:
-        for sheet_name in ['RevenueForecast', 'Forecast', 'Revenue_Forecast']:
-            df = load_sheet_to_dataframe(sheet_name)
-            if df is not None and not df.empty:
-                break
-    
-    if df is not None:
-        logger.info(f"Revenue Forecast loaded: {len(df)} rows, columns: {list(df.columns)[:10]}")
+        return None
     
     return df
 
 
-def get_product_type_mapping() -> Dict[str, str]:
-    """Get mapping of Item Name to Calyx Product Type."""
-    items = load_items()
+@st.cache_data(ttl=300)
+def load_invoices() -> Optional[pd.DataFrame]:
+    """Load Invoices Main data."""
+    df = load_sheet_to_dataframe('_NS_Invoices_Data')
     
-    if items is None or items.empty:
-        return {}
-    
-    if 'Item Name/Number' not in items.columns or 'Calyx || Product Type' not in items.columns:
-        logger.warning("Items table missing required columns for product type mapping")
-        return {}
-    
-    mapping = items.set_index('Item Name/Number')['Calyx || Product Type'].to_dict()
-    
-    return mapping
-
-
-def enrich_with_product_type(df: pd.DataFrame, item_col: str = 'Item Name/Number') -> pd.DataFrame:
-    """Add Calyx Product Type column to a dataframe based on item name."""
     if df is None or df.empty:
-        return df
-    
-    if item_col not in df.columns:
-        return df
-    
-    mapping = get_product_type_mapping()
-    
-    if not mapping:
-        return df
-    
-    df = df.copy()
-    df['Calyx || Product Type'] = df[item_col].map(mapping)
+        return None
     
     return df
 
 
-def get_all_data() -> Dict[str, Optional[pd.DataFrame]]:
-    """Load all data sources and return as dictionary."""
+@st.cache_data(ttl=300)
+def load_so_lines() -> Optional[pd.DataFrame]:
+    """Load Sales Order Line Items."""
+    df = load_sheet_to_dataframe('Sales Order Line Item')
+    
+    if df is None or df.empty:
+        return None
+    
+    return df
+
+
+# =============================================================================
+# AGGREGATE LOADING
+# =============================================================================
+
+@st.cache_data(ttl=300)
+def load_all_sop_data() -> Dict[str, pd.DataFrame]:
+    """Load all S&OP data at once."""
     return {
         'invoice_lines': load_invoice_lines(),
         'sales_orders': load_sales_orders(),
@@ -514,109 +454,1535 @@ def get_all_data() -> Dict[str, Optional[pd.DataFrame]]:
         'customers': load_customers(),
         'deals': load_deals(),
         'inventory': load_inventory(),
-        'revenue_forecast': load_revenue_forecast()
+        'vendors': load_vendors()
     }
 
 
-@st.cache_data(ttl=CACHE_TTL)
-def load_vendors() -> Optional[pd.DataFrame]:
-    """Load Vendors data."""
-    df = load_sheet_to_dataframe('Vendors')
+# =============================================================================
+# DATA PREPARATION FUNCTIONS
+# =============================================================================
+
+def get_unique_sales_reps(sales_orders: pd.DataFrame = None, customers: pd.DataFrame = None) -> List[str]:
+    """Get list of unique sales reps."""
+    reps = set()
     
-    if df is None or df.empty:
-        for sheet_name in ['Vendor', 'Suppliers', 'Supplier']:
+    if sales_orders is None:
+        sales_orders = load_sales_orders()
+    if customers is None:
+        customers = load_customers()
+    
+    for df in [sales_orders, customers]:
+        if df is not None and not df.empty:
+            # Handle duplicate columns
+            if df.columns.duplicated().any():
+                df = df.loc[:, ~df.columns.duplicated()]
+            
+            # Find rep column
+            rep_col = None
+            for col in df.columns:
+                if 'rep' in col.lower():
+                    rep_col = col
+                    break
+            
+            if rep_col:
+                series = df.loc[:, rep_col]
+                if isinstance(series, pd.DataFrame):
+                    series = series.iloc[:, 0]
+                reps.update(series.dropna().unique())
+    
+    return sorted([str(r).strip() for r in reps if r and str(r).strip()])
+
+
+def get_customers_for_rep(rep: str = None) -> List[str]:
+    """Get customers for a specific rep (or all if rep is None)."""
+    sales_orders = load_sales_orders()
+    
+    if sales_orders is None or sales_orders.empty:
+        return []
+    
+    # Handle duplicate columns
+    if sales_orders.columns.duplicated().any():
+        sales_orders = sales_orders.loc[:, ~sales_orders.columns.duplicated()]
+    
+    # Find rep and customer columns
+    rep_col = None
+    cust_col = None
+    for col in sales_orders.columns:
+        col_lower = col.lower()
+        if rep_col is None and 'rep' in col_lower:
+            rep_col = col
+        if cust_col is None and 'customer' in col_lower:
+            cust_col = col
+    
+    if cust_col is None:
+        return []
+    
+    if rep and rep != "All" and rep_col:
+        rep_series = sales_orders.loc[:, rep_col]
+        if isinstance(rep_series, pd.DataFrame):
+            rep_series = rep_series.iloc[:, 0]
+        filtered = sales_orders[rep_series == rep]
+    else:
+        filtered = sales_orders
+    
+    cust_series = filtered.loc[:, cust_col]
+    if isinstance(cust_series, pd.DataFrame):
+        cust_series = cust_series.iloc[:, 0]
+    
+    customers = cust_series.dropna().unique()
+    return sorted([str(c).strip() for c in customers if c and str(c).strip()])
+
+
+def get_skus_for_customer(customer: str = None) -> List[str]:
+    """Get SKUs/Items for a specific customer (or all if customer is None)."""
+    invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return []
+    
+    # Handle duplicate columns
+    if invoice_lines.columns.duplicated().any():
+        invoice_lines = invoice_lines.loc[:, ~invoice_lines.columns.duplicated()]
+    
+    # Find customer and item columns
+    cust_col = None
+    item_col = None
+    for col in invoice_lines.columns:
+        col_lower = col.lower()
+        if cust_col is None and 'customer' in col_lower:
+            cust_col = col
+        if item_col is None and col_lower in ['item', 'sku']:
+            item_col = col
+    
+    if item_col is None:
+        return []
+    
+    if customer and customer != "All" and cust_col:
+        cust_series = invoice_lines.loc[:, cust_col]
+        if isinstance(cust_series, pd.DataFrame):
+            cust_series = cust_series.iloc[:, 0]
+        filtered = invoice_lines[cust_series == customer]
+    else:
+        filtered = invoice_lines
+    
+    item_series = filtered.loc[:, item_col]
+    if isinstance(item_series, pd.DataFrame):
+        item_series = item_series.iloc[:, 0]
+    
+    items = item_series.dropna().unique()
+    return sorted([str(i).strip() for i in items if i and str(i).strip()])
+
+
+def get_unique_product_types(items: pd.DataFrame = None) -> List[str]:
+    """Get unique product types from items."""
+    if items is None:
+        items = load_items()
+    
+    if items is None or items.empty:
+        return []
+    
+    # Handle duplicate columns
+    if items.columns.duplicated().any():
+        items = items.loc[:, ~items.columns.duplicated()]
+    
+    if 'Calyx Product Type' in items.columns:
+        col = 'Calyx Product Type'
+    elif 'Product Type' in items.columns:
+        col = 'Product Type'
+    else:
+        # Find any column with 'product type' in name
+        col = None
+        for c in items.columns:
+            if 'product type' in c.lower():
+                col = c
+                break
+        if col is None:
+            return []
+    
+    # Get as series safely
+    series = items.loc[:, col]
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    
+    types = series.dropna().unique().tolist()
+    return sorted([str(t).strip() for t in types if t and str(t).strip() and str(t) != 'Unknown'])
+
+
+def get_unique_skus(items: pd.DataFrame = None) -> List[str]:
+    """Get unique SKUs/Items."""
+    if items is None:
+        items = load_items()
+    
+    if items is None or items.empty:
+        return []
+    
+    # Handle duplicate columns
+    if items.columns.duplicated().any():
+        items = items.loc[:, ~items.columns.duplicated()]
+    
+    # Find item column
+    item_col = None
+    for col in items.columns:
+        if col.lower() in ['item', 'sku', 'item name', 'name']:
+            item_col = col
+            break
+    
+    if item_col is None:
+        return []
+    
+    # Get as series safely
+    series = items.loc[:, item_col]
+    if isinstance(series, pd.DataFrame):
+        series = series.iloc[:, 0]
+    
+    skus = series.dropna().unique().tolist()
+    return sorted([str(s).strip() for s in skus if s and str(s).strip()])
+
+
+def prepare_demand_history(invoice_lines: pd.DataFrame = None, 
+                           period: str = 'M',
+                           freq: str = None) -> pd.DataFrame:
+    """Prepare historical demand data aggregated by period."""
+    # Handle freq as alias for period
+    if freq is not None:
+        period = freq
+    
+    # Map common frequency strings to pandas period strings
+    freq_map = {
+        'MS': 'M', 'ME': 'M', 'QS': 'Q', 'QE': 'Q', 
+        'YS': 'Y', 'YE': 'Y', 'W': 'W', 'D': 'D',
+        'M': 'M', 'Q': 'Q', 'Y': 'Y',
+    }
+    period = freq_map.get(period, 'M')
+        
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find date column
+    date_col = None
+    for col in df.columns:
+        if 'date' in col.lower():
+            date_col = col
+            break
+    
+    if date_col is None:
+        return pd.DataFrame()
+    
+    # Get date series safely
+    date_series = df.loc[:, date_col]
+    if isinstance(date_series, pd.DataFrame):
+        date_series = date_series.iloc[:, 0]
+    
+    df['Date'] = pd.to_datetime(date_series, errors='coerce')
+    df = df.dropna(subset=['Date'])
+    df['Period'] = df['Date'].dt.to_period(period)
+    
+    # Aggregate
+    agg_cols = {}
+    if 'Amount' in df.columns:
+        agg_cols['Revenue'] = ('Amount', 'sum')
+    if 'Quantity' in df.columns:
+        agg_cols['Units'] = ('Quantity', 'sum')
+    
+    if not agg_cols:
+        return pd.DataFrame()
+    
+    grouped = df.groupby('Period').agg(**agg_cols).reset_index()
+    grouped['Period'] = grouped['Period'].astype(str)
+    
+    return grouped
+
+
+def prepare_revenue_history(invoice_lines: pd.DataFrame = None,
+                            group_by: str = None,
+                            freq: str = None,
+                            period: str = 'M') -> pd.DataFrame:
+    """Prepare revenue history, optionally grouped."""
+    # Handle freq as alias for period
+    if freq is not None:
+        period = freq
+    
+    # Map common frequency strings to pandas period strings
+    freq_map = {
+        'MS': 'M', 'ME': 'M', 'QS': 'Q', 'QE': 'Q', 
+        'YS': 'Y', 'YE': 'Y', 'W': 'W', 'D': 'D',
+        'M': 'M', 'Q': 'Q', 'Y': 'Y',
+    }
+    period = freq_map.get(period, 'M')
+        
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find date column
+    date_col = None
+    for col in df.columns:
+        if 'date' in col.lower():
+            date_col = col
+            break
+    
+    if date_col is None:
+        return pd.DataFrame()
+    
+    # Get date series safely
+    date_series = df.loc[:, date_col]
+    if isinstance(date_series, pd.DataFrame):
+        date_series = date_series.iloc[:, 0]
+    
+    df['Date'] = pd.to_datetime(date_series, errors='coerce')
+    df = df.dropna(subset=['Date'])
+    df['Month'] = df['Date'].dt.to_period(period)
+    
+    # Find amount column
+    amt_col = None
+    for col in df.columns:
+        if 'amount' in col.lower():
+            amt_col = col
+            break
+    
+    if amt_col is None:
+        return pd.DataFrame()
+    
+    # Get amount series safely
+    amt_series = df.loc[:, amt_col]
+    if isinstance(amt_series, pd.DataFrame):
+        amt_series = amt_series.iloc[:, 0]
+    df['Amount'] = pd.to_numeric(amt_series, errors='coerce')
+    
+    # Group by
+    group_cols = ['Month']
+    if group_by and group_by in df.columns:
+        group_cols.append(group_by)
+    
+    grouped = df.groupby(group_cols)['Amount'].sum().reset_index()
+    grouped.columns = group_cols + ['Revenue']
+    grouped['Month'] = grouped['Month'].astype(str)
+    return grouped
+
+
+# =============================================================================
+# TOP-DOWN REVENUE FORECAST FUNCTIONS
+# =============================================================================
+
+def get_all_worksheet_names() -> list:
+    """Get all worksheet names from the spreadsheet for debugging."""
+    try:
+        client = get_google_sheets_client()
+        if client is None:
+            return []
+        
+        spreadsheet_id = get_spreadsheet_id()
+        if not spreadsheet_id:
+            return []
+        
+        spreadsheet = client.open_by_key(spreadsheet_id)
+        worksheets = spreadsheet.worksheets()
+        return [ws.title for ws in worksheets]
+    except Exception as e:
+        logger.error(f"Error getting worksheet names: {e}")
+        return []
+
+
+@st.cache_data(ttl=60)
+def load_revenue_forecast() -> Optional[pd.DataFrame]:
+    """
+    Load Revenue Forecast data from Google Sheet.
+    """
+    # Try exact name with capital F first
+    sheet_names_to_try = [
+        'Revenue Forecast',  # Capital F - user confirmed this is correct
+        'Revenue forecast',
+        'RevenueForecast',
+        'Forecast',
+    ]
+    
+    for sheet_name in sheet_names_to_try:
+        try:
+            logger.info(f"Trying to load sheet: '{sheet_name}'")
             df = load_sheet_to_dataframe(sheet_name)
             if df is not None and not df.empty:
+                logger.info(f"Successfully loaded Revenue Forecast from: '{sheet_name}' with {len(df)} rows")
+                if df.columns.duplicated().any():
+                    df = df.loc[:, ~df.columns.duplicated()]
+                return df
+            else:
+                logger.info(f"Sheet '{sheet_name}' returned empty or None")
+        except Exception as e:
+            logger.info(f"Sheet '{sheet_name}' not found or error: {e}")
+            continue
+    
+    # If standard names fail, list all sheets and look for any with "forecast"
+    all_sheets = get_all_worksheet_names()
+    logger.info(f"Available worksheets: {all_sheets}")
+    
+    try:
+        st.session_state.available_sheets = all_sheets
+    except:
+        pass
+    
+    forecast_sheets = [s for s in all_sheets if 'forecast' in s.lower() and s not in sheet_names_to_try]
+    
+    for sheet_name in forecast_sheets:
+        try:
+            df = load_sheet_to_dataframe(sheet_name)
+            if df is not None and not df.empty:
+                logger.info(f"Successfully loaded from: '{sheet_name}'")
+                if df.columns.duplicated().any():
+                    df = df.loc[:, ~df.columns.duplicated()]
+                return df
+        except Exception as e:
+            continue
+    
+    logger.warning(f"Could not find Revenue Forecast. Available: {all_sheets}")
+    return None
+
+
+def parse_revenue_forecast(revenue_forecast_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse the Revenue Forecast sheet to long format (Category, Period, Forecast_Revenue).
+    
+    Supports two formats:
+    1. Wide format: Category + monthly columns (January, February, etc.)
+    2. Long format with Month/Year columns: Category, Month, Year, Amount
+    """
+    if revenue_forecast_df is None or revenue_forecast_df.empty:
+        return pd.DataFrame()
+    
+    df = revenue_forecast_df.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Check if this is the new long format with Month and Year columns
+    has_month_col = any('month' in str(col).lower() for col in df.columns)
+    has_year_col = any('year' in str(col).lower() for col in df.columns)
+    
+    if has_month_col and has_year_col:
+        return parse_revenue_forecast_long_format(df)
+    else:
+        return parse_revenue_forecast_wide_format(df)
+
+
+def parse_revenue_forecast_long_format(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse Revenue Forecast in long format with Month and Year columns.
+    Expected columns: Category, Month, Year, Amount/Revenue
+    """
+    # Find columns
+    cat_col = None
+    month_col = None
+    year_col = None
+    amount_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower().strip()
+        
+        if cat_col is None and ('category' in col_lower or 'product' in col_lower or col_lower == 'type'):
+            cat_col = col
+        if month_col is None and col_lower == 'month':
+            month_col = col
+        if year_col is None and col_lower == 'year':
+            year_col = col
+        if amount_col is None and ('amount' in col_lower or 'revenue' in col_lower or 'forecast' in col_lower):
+            amount_col = col
+    
+    # If no category column found, use first column
+    if cat_col is None:
+        cat_col = df.columns[0]
+    
+    # If no amount column found, try to find any numeric column
+    if amount_col is None:
+        for col in df.columns:
+            if col not in [cat_col, month_col, year_col]:
+                # Check if column has numeric data
+                try:
+                    sample = df[col].iloc[0] if len(df) > 0 else None
+                    if sample is not None:
+                        if isinstance(sample, (int, float)):
+                            amount_col = col
+                            break
+                        elif isinstance(sample, str) and sample.replace('$', '').replace(',', '').replace('.', '').isdigit():
+                            amount_col = col
+                            break
+                except:
+                    pass
+    
+    if month_col is None or year_col is None:
+        return pd.DataFrame()
+    
+    # Month name to number mapping
+    month_to_num = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+        'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9,
+        'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    result_rows = []
+    
+    for _, row in df.iterrows():
+        category = row[cat_col]
+        if pd.isna(category) or str(category).strip() == '':
+            continue
+        
+        # Get month
+        month_val = row[month_col]
+        if pd.isna(month_val):
+            continue
+        
+        # Convert month to number
+        if isinstance(month_val, str):
+            month_num = month_to_num.get(month_val.lower().strip())
+            if month_num is None:
+                # Try to parse as number
+                try:
+                    month_num = int(month_val)
+                except:
+                    continue
+        else:
+            try:
+                month_num = int(month_val)
+            except:
+                continue
+        
+        # Get year
+        year_val = row[year_col]
+        if pd.isna(year_val):
+            continue
+        try:
+            year = int(year_val)
+        except:
+            continue
+        
+        # Get amount
+        if amount_col:
+            value = row[amount_col]
+            if isinstance(value, str):
+                value = value.replace('$', '').replace(',', '').strip()
+            try:
+                forecast_revenue = float(value)
+            except:
+                forecast_revenue = 0
+        else:
+            forecast_revenue = 0
+        
+        if forecast_revenue > 0:
+            period = f"{year}-{month_num:02d}"
+            result_rows.append({
+                'Category': str(category).strip(),
+                'Period': period,
+                'Forecast_Revenue': forecast_revenue
+            })
+    
+    return pd.DataFrame(result_rows)
+
+
+def parse_revenue_forecast_wide_format(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Parse Revenue Forecast in wide format (Category + monthly columns).
+    Handles columns like "January", "January 2026", "Jan 2026", etc.
+    """
+    import re
+    
+    # Find the category column
+    cat_col = None
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if 'category' in col_lower or 'product' in col_lower or col_lower == 'type':
+            cat_col = col
+            break
+    
+    if cat_col is None:
+        cat_col = df.columns[0]
+    
+    # Month name mapping
+    month_names = {
+        'january': 1, 'february': 2, 'march': 3, 'april': 4,
+        'may': 5, 'june': 6, 'july': 7, 'august': 8,
+        'september': 9, 'october': 10, 'november': 11, 'december': 12,
+        'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4,
+        'jun': 6, 'jul': 7, 'aug': 8, 'sep': 9,
+        'oct': 10, 'nov': 11, 'dec': 12
+    }
+    
+    # Default forecast year
+    current_date = datetime.now()
+    default_year = current_date.year + 1 if current_date.month >= 6 else current_date.year
+    
+    result_rows = []
+    
+    for _, row in df.iterrows():
+        category = row[cat_col]
+        if pd.isna(category) or str(category).strip() == '':
+            continue
+        
+        for col in df.columns:
+            if col == cat_col:
+                continue
+            
+            col_str = str(col).lower().strip()
+            
+            # Try to find month name within column string
+            month_num = None
+            for month_name, month_val in month_names.items():
+                if month_name in col_str:
+                    month_num = month_val
+                    break
+            
+            if month_num is None:
+                continue  # Not a month column
+            
+            # Try to extract year from column (e.g., "January 2026")
+            year_match = re.search(r'20\d{2}', str(col))
+            year = int(year_match.group()) if year_match else default_year
+            
+            value = row[col]
+            if isinstance(value, str):
+                value = value.replace('$', '').replace(',', '').strip()
+            
+            try:
+                forecast_revenue = float(value)
+            except:
+                forecast_revenue = 0
+            
+            if forecast_revenue > 0:
+                period = f"{year}-{month_num:02d}"
+                result_rows.append({
+                    'Category': str(category).strip(),
+                    'Period': period,
+                    'Forecast_Revenue': forecast_revenue
+                })
+    
+    return pd.DataFrame(result_rows)
+
+
+def calculate_item_unit_mix_rolling12(sales_orders: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Calculate historical percentage mix of items by UNITS within each category.
+    Uses Sales Order Lines data with Quantity Ordered and Sales Manager Approval Date.
+    Joins with Items table to get Product Type (Category).
+    Rolling 12 months only.
+    
+    Returns DataFrame with columns: Category, Item, Total_Units, Mix_Pct
+    """
+    # Store debug info
+    debug_info = {}
+    
+    if sales_orders is None:
+        sales_orders = load_sales_orders()
+    
+    if sales_orders is None or sales_orders.empty:
+        debug_info['sales_orders_status'] = 'Empty or None - falling back to invoices'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
+        return calculate_item_unit_mix_from_invoices()
+    
+    df = sales_orders.copy()
+    debug_info['sales_orders_rows'] = len(df)
+    debug_info['sales_orders_columns'] = list(df.columns)[:20]  # First 20 columns
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Load Items to get Product Type mapping
+    items_df = load_items()
+    item_to_category = {}
+    
+    if items_df is not None and not items_df.empty:
+        debug_info['items_rows'] = len(items_df)
+        debug_info['items_columns'] = list(items_df.columns)[:20]
+        
+        # Handle duplicate columns in items
+        if items_df.columns.duplicated().any():
+            items_df = items_df.loc[:, ~items_df.columns.duplicated()]
+        
+        # Find item and category columns in Items table
+        item_col_items = None
+        cat_col_items = None
+        
+        for col in items_df.columns:
+            col_lower = str(col).lower()
+            if item_col_items is None and col_lower in ['item', 'sku', 'item name', 'name', 'item/sku']:
+                item_col_items = col
+            if cat_col_items is None:
+                if 'product type' in col_lower or 'calyx' in col_lower:
+                    cat_col_items = col
+        
+        debug_info['items_item_col'] = item_col_items
+        debug_info['items_cat_col'] = cat_col_items
+        
+        if item_col_items and cat_col_items:
+            # Create mapping
+            for _, row in items_df.iterrows():
+                item = row[item_col_items]
+                cat = row[cat_col_items]
+                if pd.notna(item) and pd.notna(cat):
+                    item_to_category[str(item).strip()] = str(cat).strip()
+            
+            debug_info['item_to_category_count'] = len(item_to_category)
+            # Sample of mappings
+            sample_items = list(item_to_category.items())[:5]
+            debug_info['item_to_category_sample'] = sample_items
+    else:
+        debug_info['items_status'] = 'Empty or None'
+    
+    # Find required columns in Sales Orders
+    date_col = None
+    qty_col = None
+    item_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        
+        # Date column - prefer "Sales Manager Approval Date"
+        if date_col is None:
+            if 'sales manager' in col_lower and 'date' in col_lower:
+                date_col = col
+            elif 'approval' in col_lower and 'date' in col_lower:
+                date_col = col
+        
+        # Quantity column - prefer "Quantity Ordered"
+        if qty_col is None:
+            if 'quantity ordered' in col_lower:
+                qty_col = col
+            elif 'qty ordered' in col_lower:
+                qty_col = col
+        
+        # Item column
+        if item_col is None:
+            if col_lower in ['item', 'sku', 'item name', 'item/sku']:
+                item_col = col
+    
+    # If we didn't find specific columns, try broader search
+    if date_col is None:
+        for col in df.columns:
+            if 'date' in str(col).lower():
+                date_col = col
                 break
     
-    return df
-
-
-# Aliases for backwards compatibility
-load_invoices = load_invoice_lines
-load_so_lines = load_sales_orders
-load_so = load_sales_orders
-
-
-def get_data_hash(df: Optional[pd.DataFrame]) -> str:
-    """Generate a hash for a dataframe for caching purposes."""
-    if df is None or df.empty:
-        return "empty"
+    if qty_col is None:
+        for col in df.columns:
+            col_lower = str(col).lower()
+            if 'qty' in col_lower or 'quantity' in col_lower:
+                qty_col = col
+                break
     
-    # Use shape and first/last values as a quick hash
+    if item_col is None:
+        for col in df.columns:
+            if 'item' in str(col).lower():
+                item_col = col
+                break
+    
+    debug_info['so_date_col'] = date_col
+    debug_info['so_qty_col'] = qty_col
+    debug_info['so_item_col'] = item_col
+    
+    # Store debug info
     try:
-        hash_str = f"{df.shape}_{df.iloc[0].tolist()}_{df.iloc[-1].tolist()}"
-        return hashlib.md5(hash_str.encode()).hexdigest()[:8]
-    except Exception:
-        return str(hash(str(df.shape)))
+        st.session_state.item_mix_debug = debug_info
+    except:
+        pass
+    
+    if item_col is None or qty_col is None:
+        debug_info['fallback_reason'] = f'Missing columns: item_col={item_col}, qty_col={qty_col}'
+        return calculate_item_unit_mix_from_invoices()
+    
+    # Get series safely
+    def safe_get_series(dataframe, column):
+        if column not in dataframe.columns:
+            return None
+        result = dataframe.loc[:, column]
+        if isinstance(result, pd.DataFrame):
+            return result.iloc[:, 0]
+        return result
+    
+    item_series = safe_get_series(df, item_col)
+    qty_series = safe_get_series(df, qty_col)
+    date_series = safe_get_series(df, date_col) if date_col else None
+    
+    if item_series is None or qty_series is None:
+        return calculate_item_unit_mix_from_invoices()
+    
+    temp_df = pd.DataFrame({
+        'Item': item_series.astype(str).str.strip(),
+        'Quantity': pd.to_numeric(qty_series, errors='coerce').fillna(0)
+    })
+    
+    # Map items to categories using Items table
+    temp_df['Category'] = temp_df['Item'].map(item_to_category)
+    
+    # Count how many mapped vs not
+    mapped_count = temp_df['Category'].notna().sum()
+    total_count = len(temp_df)
+    debug_info['mapped_items'] = mapped_count
+    debug_info['total_items'] = total_count
+    
+    temp_df['Category'] = temp_df['Category'].fillna('Unknown')
+    
+    # Filter to rolling 12 months
+    if date_series is not None:
+        temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
+        cutoff_date = datetime.now() - timedelta(days=365)
+        before_filter = len(temp_df)
+        temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+        debug_info['rows_before_date_filter'] = before_filter
+        debug_info['rows_after_date_filter'] = len(temp_df)
+    
+    if temp_df.empty:
+        return calculate_item_unit_mix_from_invoices()
+    
+    # Remove Unknown categories (items without mapping)
+    before_unknown_filter = len(temp_df)
+    temp_df = temp_df[temp_df['Category'] != 'Unknown']
+    debug_info['rows_after_unknown_filter'] = len(temp_df)
+    
+    if temp_df.empty:
+        debug_info['fallback_reason'] = 'All items mapped to Unknown category'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
+        return calculate_item_unit_mix_from_invoices()
+    
+    # Calculate units by category and item
+    by_cat_item = temp_df.groupby(['Category', 'Item'])['Quantity'].sum().reset_index()
+    by_cat_item.columns = ['Category', 'Item', 'Total_Units']
+    
+    # Calculate category totals
+    cat_totals = temp_df.groupby('Category')['Quantity'].sum().reset_index()
+    cat_totals.columns = ['Category', 'Category_Total_Units']
+    
+    # Merge and calculate percentage
+    by_cat_item = by_cat_item.merge(cat_totals, on='Category')
+    by_cat_item['Mix_Pct'] = np.where(
+        by_cat_item['Category_Total_Units'] > 0,
+        (by_cat_item['Total_Units'] / by_cat_item['Category_Total_Units'] * 100),
+        0
+    )
+    
+    debug_info['final_categories'] = by_cat_item['Category'].unique().tolist()
+    debug_info['final_rows'] = len(by_cat_item)
+    
+    try:
+        st.session_state.item_mix_debug = debug_info
+    except:
+        pass
+    
+    return by_cat_item[['Category', 'Item', 'Total_Units', 'Mix_Pct']]
 
 
-@st.cache_data(ttl=CACHE_TTL)
+def calculate_item_unit_mix_from_invoices() -> pd.DataFrame:
+    """
+    Fallback: Calculate item unit mix from Invoice Lines if Sales Orders don't work.
+    """
+    debug_info = {'source': 'invoice_lines_fallback'}
+    
+    invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        debug_info['status'] = 'Invoice lines empty or None'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    debug_info['invoice_rows'] = len(df)
+    debug_info['invoice_columns'] = list(df.columns)[:20]
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find columns
+    item_col = None
+    qty_col = None
+    cat_col = None
+    date_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if item_col is None and col_lower in ['item', 'sku']:
+            item_col = col
+        if qty_col is None and ('qty' in col_lower or 'quantity' in col_lower):
+            qty_col = col
+        if cat_col is None and ('product type' in col_lower or 'calyx' in col_lower):
+            cat_col = col
+        if date_col is None and 'date' in col_lower:
+            date_col = col
+    
+    debug_info['inv_item_col'] = item_col
+    debug_info['inv_qty_col'] = qty_col
+    debug_info['inv_cat_col'] = cat_col
+    debug_info['inv_date_col'] = date_col
+    
+    if item_col is None or cat_col is None:
+        debug_info['status'] = f'Missing columns: item={item_col}, category={cat_col}'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
+        return pd.DataFrame()
+    
+    # Get series safely
+    def safe_get_series(dataframe, column):
+        if column not in dataframe.columns:
+            return None
+        result = dataframe.loc[:, column]
+        if isinstance(result, pd.DataFrame):
+            return result.iloc[:, 0]
+        return result
+    
+    item_series = safe_get_series(df, item_col)
+    cat_series = safe_get_series(df, cat_col)
+    qty_series = safe_get_series(df, qty_col) if qty_col else None
+    date_series = safe_get_series(df, date_col) if date_col else None
+    
+    if item_series is None or cat_series is None:
+        debug_info['status'] = 'Could not extract item or category series'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
+        return pd.DataFrame()
+    
+    temp_df = pd.DataFrame({
+        'Item': item_series,
+        'Category': cat_series
+    })
+    
+    if qty_series is not None:
+        temp_df['Quantity'] = pd.to_numeric(qty_series, errors='coerce').fillna(1)
+    else:
+        temp_df['Quantity'] = 1  # Count rows as units if no quantity
+    
+    # Filter to rolling 12 months
+    if date_series is not None:
+        temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
+        cutoff_date = datetime.now() - timedelta(days=365)
+        before_filter = len(temp_df)
+        temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+        debug_info['rows_before_date_filter'] = before_filter
+        debug_info['rows_after_date_filter'] = len(temp_df)
+    
+    if temp_df.empty:
+        debug_info['status'] = 'Empty after date filter'
+        try:
+            st.session_state.item_mix_debug = debug_info
+        except:
+            pass
+        return pd.DataFrame()
+    
+    # Calculate units by category and item
+    by_cat_item = temp_df.groupby(['Category', 'Item'])['Quantity'].sum().reset_index()
+    by_cat_item.columns = ['Category', 'Item', 'Total_Units']
+    
+    # Calculate category totals
+    cat_totals = temp_df.groupby('Category')['Quantity'].sum().reset_index()
+    cat_totals.columns = ['Category', 'Category_Total_Units']
+    
+    # Merge and calculate percentage
+    by_cat_item = by_cat_item.merge(cat_totals, on='Category')
+    by_cat_item['Mix_Pct'] = np.where(
+        by_cat_item['Category_Total_Units'] > 0,
+        (by_cat_item['Total_Units'] / by_cat_item['Category_Total_Units'] * 100),
+        0
+    )
+    
+    debug_info['final_categories'] = by_cat_item['Category'].unique().tolist()
+    debug_info['final_rows'] = len(by_cat_item)
+    debug_info['status'] = 'Success'
+    
+    try:
+        st.session_state.item_mix_debug = debug_info
+    except:
+        pass
+    
+    return by_cat_item[['Category', 'Item', 'Total_Units', 'Mix_Pct']]
+
+
+def calculate_item_asp_rolling12(invoice_lines: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Calculate historical Average Selling Price (ASP) by item.
+    Uses Invoice Lines data for actual sales prices.
+    Rolling 12 months only.
+    
+    EXCLUDES lines with $0 amounts to avoid skewing ASP calculations.
+    
+    Returns DataFrame with columns: Item, ASP, Total_Units, Total_Revenue
+    """
+    if invoice_lines is None:
+        invoice_lines = load_invoice_lines()
+    
+    if invoice_lines is None or invoice_lines.empty:
+        return pd.DataFrame()
+    
+    df = invoice_lines.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find required columns
+    item_col = None
+    amount_col = None
+    qty_col = None
+    date_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower()
+        
+        if item_col is None and col_lower in ['item', 'sku', 'item name']:
+            item_col = col
+        if amount_col is None and 'amount' in col_lower:
+            amount_col = col
+        if qty_col is None and ('qty' in col_lower or 'quantity' in col_lower):
+            qty_col = col
+        if date_col is None and 'date' in col_lower:
+            date_col = col
+    
+    if item_col is None or amount_col is None:
+        return pd.DataFrame()
+    
+    # Get series safely
+    def safe_get_series(dataframe, column):
+        if column not in dataframe.columns:
+            return None
+        result = dataframe.loc[:, column]
+        if isinstance(result, pd.DataFrame):
+            return result.iloc[:, 0]
+        return result
+    
+    item_series = safe_get_series(df, item_col)
+    amt_series = safe_get_series(df, amount_col)
+    qty_series = safe_get_series(df, qty_col) if qty_col else None
+    date_series = safe_get_series(df, date_col) if date_col else None
+    
+    if item_series is None or amt_series is None:
+        return pd.DataFrame()
+    
+    temp_df = pd.DataFrame({
+        'Item': item_series,
+        'Amount': pd.to_numeric(amt_series, errors='coerce').fillna(0)
+    })
+    
+    if qty_series is not None:
+        temp_df['Quantity'] = pd.to_numeric(qty_series, errors='coerce').fillna(0)
+    else:
+        temp_df['Quantity'] = 1
+    
+    # Filter to rolling 12 months
+    if date_series is not None:
+        temp_df['Date'] = pd.to_datetime(date_series, errors='coerce')
+        cutoff_date = datetime.now() - timedelta(days=365)
+        temp_df = temp_df[temp_df['Date'] >= cutoff_date]
+    
+    if temp_df.empty:
+        return pd.DataFrame()
+    
+    # CRITICAL: Exclude $0 lines from ASP calculation
+    # These are often samples, returns, or adjustments that would skew ASP
+    temp_df = temp_df[temp_df['Amount'] > 0]
+    
+    # Also exclude lines with 0 quantity
+    temp_df = temp_df[temp_df['Quantity'] > 0]
+    
+    if temp_df.empty:
+        return pd.DataFrame()
+    
+    # Aggregate by item
+    by_item = temp_df.groupby('Item').agg({
+        'Amount': 'sum',
+        'Quantity': 'sum'
+    }).reset_index()
+    
+    by_item.columns = ['Item', 'Total_Revenue', 'Total_Units']
+    
+    # Calculate ASP (avoid division by zero)
+    by_item['ASP'] = np.where(
+        by_item['Total_Units'] > 0,
+        by_item['Total_Revenue'] / by_item['Total_Units'],
+        0
+    )
+    
+    return by_item
+
+
+def allocate_topdown_forecast(revenue_forecast: pd.DataFrame = None,
+                              item_mix: pd.DataFrame = None,
+                              item_asp: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Top-down allocation of category-level revenue forecast to item level.
+    
+    Logic:
+    1. Take category revenue forecast
+    2. Apply item unit mix % to get item's share of category units
+    3. But we need revenue first - so: Category Revenue × Item Mix % = Item Revenue
+    4. Item Revenue ÷ Item ASP = Item Units
+    
+    Returns DataFrame with: Item, Category, Period, Forecast_Revenue, Forecast_Units, Mix_Pct, ASP
+    """
+    if revenue_forecast is None or revenue_forecast.empty:
+        return pd.DataFrame()
+    if item_mix is None or item_mix.empty:
+        return pd.DataFrame()
+    
+    result_rows = []
+    
+    # Get available categories in item_mix for matching
+    available_categories = item_mix['Category'].unique().tolist() if 'Category' in item_mix.columns else []
+    
+    for _, forecast_row in revenue_forecast.iterrows():
+        try:
+            category = str(forecast_row.get('Category', '')).strip()
+            period = str(forecast_row.get('Period', ''))
+            
+            # SAFE: Convert revenue to float
+            cat_forecast_revenue_raw = forecast_row.get('Forecast_Revenue', 0)
+            try:
+                if pd.isna(cat_forecast_revenue_raw):
+                    cat_forecast_revenue = 0.0
+                elif isinstance(cat_forecast_revenue_raw, str):
+                    cat_forecast_revenue = float(cat_forecast_revenue_raw.replace('$', '').replace(',', '').strip() or 0)
+                else:
+                    cat_forecast_revenue = float(cat_forecast_revenue_raw)
+            except (ValueError, TypeError):
+                cat_forecast_revenue = 0.0
+            
+            if cat_forecast_revenue <= 0:
+                continue
+            
+            # Try to find matching category in item_mix
+            cat_items = item_mix[item_mix['Category'] == category].copy()
+            
+            # If no exact match, try case-insensitive
+            if cat_items.empty:
+                category_lower = category.lower()
+                for avail_cat in available_categories:
+                    if str(avail_cat).lower() == category_lower:
+                        cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
+                        break
+            
+            # If still no match, try partial match
+            if cat_items.empty:
+                for avail_cat in available_categories:
+                    if category_lower in str(avail_cat).lower() or str(avail_cat).lower() in category_lower:
+                        cat_items = item_mix[item_mix['Category'] == avail_cat].copy()
+                        break
+            
+            if cat_items.empty:
+                # No historical data - keep at category level
+                result_rows.append({
+                    'Item': f'{category} (Unallocated)',
+                    'Category': category,
+                    'Period': period,
+                    'Forecast_Revenue': float(cat_forecast_revenue),
+                    'Forecast_Units': 0.0,
+                    'Mix_Pct': 100.0,
+                    'ASP': 0.0
+                })
+                continue
+            
+            # Normalize mix percentages to sum to 100%
+            # SAFE: Ensure Mix_Pct is numeric
+            cat_items['Mix_Pct'] = pd.to_numeric(cat_items['Mix_Pct'], errors='coerce').fillna(0)
+            total_mix = cat_items['Mix_Pct'].sum()
+            if total_mix > 0:
+                cat_items['Mix_Pct_Normalized'] = cat_items['Mix_Pct'] / total_mix * 100
+            else:
+                cat_items['Mix_Pct_Normalized'] = 100 / len(cat_items)
+            
+            # Allocate to each item
+            for _, item_row in cat_items.iterrows():
+                try:
+                    item_name = str(item_row.get('Item', '')).strip()
+                    
+                    # SAFE: Get mix percentage as float
+                    mix_pct_raw = item_row.get('Mix_Pct_Normalized', 0)
+                    try:
+                        mix_pct = float(mix_pct_raw) / 100.0 if pd.notna(mix_pct_raw) else 0
+                    except (ValueError, TypeError):
+                        mix_pct = 0
+                    
+                    # Item's share of category revenue (all floats)
+                    item_forecast_revenue = float(cat_forecast_revenue) * float(mix_pct)
+                    
+                    # Get ASP for this item
+                    asp = 0.0
+                    forecast_units = 0.0
+                    
+                    if item_asp is not None and not item_asp.empty:
+                        item_asp_row = item_asp[item_asp['Item'] == item_name]
+                        if not item_asp_row.empty:
+                            asp_raw = item_asp_row['ASP'].iloc[0]
+                            try:
+                                asp = float(asp_raw) if pd.notna(asp_raw) else 0.0
+                            except (ValueError, TypeError):
+                                asp = 0.0
+                            if asp > 0:
+                                forecast_units = float(item_forecast_revenue) / float(asp)
+                    
+                    result_rows.append({
+                        'Item': item_name,
+                        'Category': category,
+                        'Period': period,
+                        'Forecast_Revenue': round(float(item_forecast_revenue), 2),
+                        'Forecast_Units': round(float(forecast_units), 0),
+                        'Mix_Pct': round(float(mix_pct_raw) if pd.notna(mix_pct_raw) else 0, 2),
+                        'ASP': round(float(asp), 2)
+                    })
+                except Exception as e:
+                    logger.warning(f"Error allocating item {item_row.get('Item', 'unknown')}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.warning(f"Error processing forecast row: {e}")
+            continue
+    
+    return pd.DataFrame(result_rows)
+
+
 def get_topdown_item_forecast() -> pd.DataFrame:
     """
-    Generate top-down item-level forecast by allocating category forecasts to items
-    based on historical sales mix.
+    Main function to create top-down item-level forecast.
+    
+    1. Load Revenue Forecast (category level by month)
+    2. Calculate rolling 12-month item unit mix from Sales Orders (joined with Items for category)
+    3. Calculate rolling 12-month ASP from Invoice Lines
+    4. Allocate category forecast → items
+    
+    Returns DataFrame with item-level forecasts
     """
-    invoice_lines = load_invoice_lines()
-    items = load_items()
-    revenue_forecast = load_revenue_forecast()
-    
-    if invoice_lines is None or items is None:
+    # Load and parse category-level forecast
+    revenue_forecast_raw = load_revenue_forecast()
+    if revenue_forecast_raw is None or revenue_forecast_raw.empty:
         return pd.DataFrame()
     
-    # Enrich invoice lines with product type
-    df = enrich_with_product_type(invoice_lines)
-    
-    if 'Calyx || Product Type' not in df.columns:
-        logger.warning("Could not map product types for top-down forecast")
+    revenue_forecast = parse_revenue_forecast(revenue_forecast_raw)
+    if revenue_forecast.empty:
         return pd.DataFrame()
     
-    # Calculate historical item mix within each category
-    if 'Amount' not in df.columns or 'Item Name/Number' not in df.columns:
+    # Calculate item mix from Sales Orders (by units, rolling 12 months)
+    # This will try Sales Orders first, then fall back to Invoice Lines
+    item_mix = calculate_item_unit_mix_rolling12()
+    
+    # Calculate ASP from Invoice Lines (rolling 12 months)
+    item_asp = calculate_item_asp_rolling12()
+    
+    # Debug: Log category names from both sources
+    forecast_categories = revenue_forecast['Category'].unique().tolist() if 'Category' in revenue_forecast.columns else []
+    mix_categories = item_mix['Category'].unique().tolist() if not item_mix.empty and 'Category' in item_mix.columns else []
+    
+    # Store debug info for display
+    try:
+        if 'forecast_debug' not in st.session_state:
+            st.session_state.forecast_debug = {}
+        st.session_state.forecast_debug['forecast_categories'] = forecast_categories
+        st.session_state.forecast_debug['mix_categories'] = mix_categories
+        st.session_state.forecast_debug['item_mix_rows'] = len(item_mix) if not item_mix.empty else 0
+        st.session_state.forecast_debug['item_asp_rows'] = len(item_asp) if not item_asp.empty else 0
+        st.session_state.forecast_debug['revenue_forecast_rows'] = len(revenue_forecast)
+    except:
+        pass  # Ignore session state errors
+    
+    # Allocate forecast to items
+    item_forecast = allocate_topdown_forecast(
+        revenue_forecast=revenue_forecast, 
+        item_mix=item_mix, 
+        item_asp=item_asp
+    )
+    
+    return item_forecast
+
+
+def get_revenue_forecast_by_period(category: str = None) -> pd.DataFrame:
+    """
+    Get Revenue Forecast aggregated by period for charting.
+    Optionally filter by category.
+    
+    Falls back to category-level data if item-level allocation fails.
+    
+    Returns DataFrame with Period and Forecast_Revenue columns.
+    """
+    # First try to get item-level forecast
+    item_forecast = get_topdown_item_forecast()
+    
+    # If item forecast is empty, fall back to parsed category-level forecast
+    if item_forecast.empty:
+        # Load and parse the raw forecast
+        revenue_forecast_raw = load_revenue_forecast()
+        if revenue_forecast_raw is None or revenue_forecast_raw.empty:
+            return pd.DataFrame()
+        
+        parsed_forecast = parse_revenue_forecast(revenue_forecast_raw)
+        if parsed_forecast.empty:
+            return pd.DataFrame()
+        
+        # Filter by category if specified
+        if category and category != 'All':
+            # Try exact match first
+            filtered = parsed_forecast[parsed_forecast['Category'] == category]
+            
+            # If no exact match, try case-insensitive
+            if filtered.empty:
+                category_lower = category.lower().strip()
+                filtered = parsed_forecast[parsed_forecast['Category'].str.lower().str.strip() == category_lower]
+            
+            # If still no match, try contains
+            if filtered.empty:
+                filtered = parsed_forecast[parsed_forecast['Category'].str.lower().str.contains(category_lower, na=False)]
+            
+            parsed_forecast = filtered
+        
+        if parsed_forecast.empty:
+            return pd.DataFrame()
+        
+        # Aggregate by period
+        by_period = parsed_forecast.groupby('Period')['Forecast_Revenue'].sum().reset_index()
+        by_period = by_period.sort_values('Period')
+        
+        return by_period
+    
+    # If we have item-level forecast, use it
+    # Filter by category if specified (with fuzzy matching)
+    if category and category != 'All':
+        # Try exact match first
+        filtered = item_forecast[item_forecast['Category'] == category]
+        
+        # If no exact match, try case-insensitive
+        if filtered.empty:
+            category_lower = category.lower().strip()
+            filtered = item_forecast[item_forecast['Category'].str.lower().str.strip() == category_lower]
+        
+        # If still no match, try contains
+        if filtered.empty:
+            filtered = item_forecast[item_forecast['Category'].str.lower().str.contains(category_lower, na=False)]
+        
+        item_forecast = filtered
+    
+    if item_forecast.empty:
         return pd.DataFrame()
     
-    # Group by category and item to get historical proportions
-    category_totals = df.groupby('Calyx || Product Type')['Amount'].sum()
-    item_totals = df.groupby(['Calyx || Product Type', 'Item Name/Number'])['Amount'].sum()
+    # Aggregate by period
+    by_period = item_forecast.groupby('Period').agg({
+        'Forecast_Revenue': 'sum',
+        'Forecast_Units': 'sum'
+    }).reset_index()
     
-    # Calculate mix percentage
-    item_mix = item_totals / item_totals.groupby(level=0).transform('sum')
-    item_mix = item_mix.reset_index()
-    item_mix.columns = ['Category', 'Item', 'Mix_Pct']
+    by_period = by_period.sort_values('Period')
     
-    # Calculate average selling price
-    item_qty = df.groupby('Item Name/Number')['Quantity'].sum()
-    item_rev = df.groupby('Item Name/Number')['Amount'].sum()
-    item_asp = (item_rev / item_qty).reset_index()
-    item_asp.columns = ['Item', 'ASP']
-    
-    # Merge ASP into mix
-    item_mix = item_mix.merge(item_asp, on='Item', how='left')
-    item_mix['ASP'] = item_mix['ASP'].fillna(item_mix['ASP'].median())
-    
-    return item_mix
+    return by_period
 
 
-# Utility functions for data validation
-def validate_data_loaded() -> Dict[str, bool]:
-    """Check which data sources loaded successfully."""
-    data = get_all_data()
-    return {key: (df is not None and not df.empty) for key, df in data.items()}
+def get_pipeline_by_period(deals: pd.DataFrame = None,
+                           period: str = 'M',
+                           freq: str = None) -> pd.DataFrame:
+    """
+    Get pipeline/deals aggregated by expected close period.
+    
+    Args:
+        deals: Deals DataFrame (optional, will load if not provided)
+        period: Period frequency ('M' for monthly, 'Q' for quarterly, etc.)
+        freq: Alias for period (for backwards compatibility)
+    """
+    # Handle freq as alias for period
+    if freq is not None:
+        period = freq
+    
+    # Map common frequency strings to pandas period strings
+    freq_map = {
+        'MS': 'M',   # Month Start -> Month
+        'ME': 'M',   # Month End -> Month
+        'QS': 'Q',   # Quarter Start -> Quarter
+        'QE': 'Q',   # Quarter End -> Quarter
+        'YS': 'Y',   # Year Start -> Year
+        'YE': 'Y',   # Year End -> Year
+        'W': 'W',
+        'D': 'D',
+        'M': 'M',
+        'Q': 'Q',
+        'Y': 'Y',
+    }
+    period = freq_map.get(period, 'M')  # Default to 'M' if not found
+    
+    if deals is None:
+        deals = load_deals()
+    
+    if deals is None or deals.empty:
+        return pd.DataFrame()
+    
+    df = deals.copy()
+    
+    # Handle duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Find close date column
+    close_date_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'close' in col_lower and 'date' in col_lower:
+            close_date_col = col
+            break
+        elif col_lower == 'close date':
+            close_date_col = col
+            break
+    
+    if close_date_col is None:
+        # Try any date column
+        for col in df.columns:
+            if 'date' in col.lower():
+                close_date_col = col
+                break
+    
+    if close_date_col is None:
+        return pd.DataFrame()
+    
+    # Get date series safely
+    date_series = df.loc[:, close_date_col]
+    if isinstance(date_series, pd.DataFrame):
+        date_series = date_series.iloc[:, 0]
+    
+    df['Close Date'] = pd.to_datetime(date_series, errors='coerce')
+    df = df.dropna(subset=['Close Date'])
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    df['Period'] = df['Close Date'].dt.to_period(period)
+    
+    # Find amount column
+    amt_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'amount' in col_lower or 'value' in col_lower:
+            amt_col = col
+            break
+    
+    if amt_col is None:
+        return pd.DataFrame()
+    
+    # Get amount series safely
+    amt_series = df.loc[:, amt_col]
+    if isinstance(amt_series, pd.DataFrame):
+        amt_series = amt_series.iloc[:, 0]
+    
+    df['Amount'] = pd.to_numeric(amt_series, errors='coerce')
+    
+    grouped = df.groupby('Period')['Amount'].sum().reset_index()
+    grouped.columns = ['Period', 'Pipeline Value']
+    grouped['Period'] = grouped['Period'].astype(str)
+    
+    return grouped
 
 
-def get_data_summary() -> Dict[str, Any]:
-    """Get summary statistics for all loaded data."""
-    data = get_all_data()
-    summary = {}
+def calculate_lead_times(items: pd.DataFrame = None, 
+                         vendors: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Calculate lead times for items based on vendor data.
     
-    for key, df in data.items():
-        if df is not None and not df.empty:
-            summary[key] = {
-                'rows': len(df),
-                'columns': len(df.columns),
-                'column_names': list(df.columns)[:10]
-            }
-        else:
-            summary[key] = {'rows': 0, 'columns': 0, 'column_names': []}
+    Args:
+        items: Items dataframe
+        vendors: Vendors dataframe
     
-    return summary
+    Returns:
+        DataFrame with item lead time information
+    """
+    if items is None:
+        items = load_items()
+    if vendors is None:
+        vendors = load_vendors()
+    
+    if items is None or items.empty:
+        return pd.DataFrame()
+    
+    df = items.copy()
+    
+    # Look for lead time column in items
+    lead_time_col = None
+    for col in df.columns:
+        col_lower = col.lower()
+        if 'lead' in col_lower and 'time' in col_lower:
+            lead_time_col = col
+            break
+        elif 'leadtime' in col_lower:
+            lead_time_col = col
+            break
+    
+    # If no lead time column, try to get from vendors
+    if lead_time_col is None and vendors is not None and not vendors.empty:
+        # Find vendor column in items
+        vendor_col = None
+        for col in df.columns:
+            col_lower = col.lower()
+            if 'vendor' in col_lower or 'supplier' in col_lower:
+                vendor_col = col
+                break
+        
+        if vendor_col:
+            # Find lead time in vendors
+            vendor_lead_col = None
+            for col in vendors.columns:
+                col_lower = col.lower()
+                if 'lead' in col_lower and 'time' in col_lower:
+                    vendor_lead_col = col
+                    break
+            
+            if vendor_lead_col:
+                # Find vendor name column
+                vendor_name_col = None
+                for col in vendors.columns:
+                    col_lower = col.lower()
+                    if col_lower in ['vendor', 'name', 'vendor name', 'supplier']:
+                        vendor_name_col = col
+                        break
+                
+                if vendor_name_col:
+                    vendor_lead_times = vendors.set_index(vendor_name_col)[vendor_lead_col].to_dict()
+                    df['Lead Time'] = df[vendor_col].map(vendor_lead_times)
+    
+    # If we found a lead time column, standardize it
+    if lead_time_col:
+        df['Lead Time'] = pd.to_numeric(df[lead_time_col], errors='coerce').fillna(0)
+    elif 'Lead Time' not in df.columns:
+        # Default lead time
+        df['Lead Time'] = 30  # Default 30 days
+    
+    # Create summary
+    result_cols = ['Item'] if 'Item' in df.columns else [df.columns[0]]
+    if 'Calyx Product Type' in df.columns:
+        result_cols.append('Calyx Product Type')
+    elif 'Product Type' in df.columns:
+        result_cols.append('Product Type')
+    result_cols.append('Lead Time')
+    
+    # Add vendor if available
+    vendor_col = next((c for c in df.columns if 'vendor' in c.lower()), None)
+    if vendor_col:
+        result_cols.insert(-1, vendor_col)
+    
+    return df[[c for c in result_cols if c in df.columns]]
