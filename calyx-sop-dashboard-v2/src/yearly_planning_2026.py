@@ -714,7 +714,7 @@ def render_pipeline_section(customer_deals, customer_name):
 
 # ========== MAIN RENDER FUNCTION ==========
 
-def render_qbr_generator():
+def render_yearly_planning_2026():
     """Main entry point for QBR Generator"""
     
     st.title("📋 QBR Generator")
@@ -802,4 +802,4 @@ if __name__ == "__main__":
         page_icon="📋",
         layout="wide"
     )
-    render_qbr_generator()
+    render_yearly_planning_2026()
