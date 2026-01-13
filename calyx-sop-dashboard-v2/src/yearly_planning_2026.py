@@ -96,22 +96,25 @@ def load_qbr_data():
     
     # =========================================================================
     # PROCESS SALES ORDERS
+    # Columns: A=Internal ID, B=SO Number, C=Status, D=Customer, E=Customer External ID,
+    # F=Sales Rep, G=PI||CSM, H=Amount, I=Order Start Date, J=Pending Fulfillment Date,
+    # K=Actual Ship Date, L=Customer Promise Last Date to Ship, M=Projected Date,
+    # N=Do Not Ship Before, O=Memo, P=Created By, Q=Terms, R=Order Type, S=Quote,
+    # T=Shipping State/Province, U=Amount (Shipping), V=Amount (Tax), W=HubSpot Pipeline,
+    # X=Sales Management Approved Date, Y=Customer's PO Number, Z=Sales Approved Date,
+    # AA=Name, AB=Calyx|External Order, AC=Pending Approval Date, AD=Corrected Customer Name,
+    # AE=Rep Master, AF=Updated Status
     # =========================================================================
     if not sales_orders_df.empty:
         col_names = sales_orders_df.columns.tolist()
         
-        # Map columns by position (based on documented structure)
         rename_dict = {}
         if len(col_names) > 0: rename_dict[col_names[0]] = 'Internal ID'
         if len(col_names) > 1: rename_dict[col_names[1]] = 'SO Number'
         if len(col_names) > 2: rename_dict[col_names[2]] = 'Status'
         if len(col_names) > 3: rename_dict[col_names[3]] = 'Customer'
-        if len(col_names) > 4: rename_dict[col_names[4]] = 'Customer External ID'
-        if len(col_names) > 5: rename_dict[col_names[5]] = 'Sales Rep'
-        if len(col_names) > 6: rename_dict[col_names[6]] = 'PI_CSM'
         if len(col_names) > 7: rename_dict[col_names[7]] = 'Amount'
         if len(col_names) > 8: rename_dict[col_names[8]] = 'Order Start Date'
-        if len(col_names) > 9: rename_dict[col_names[9]] = 'Pending Fulfillment Date'
         if len(col_names) > 10: rename_dict[col_names[10]] = 'Actual Ship Date'
         if len(col_names) > 11: rename_dict[col_names[11]] = 'Customer Promise Date'
         if len(col_names) > 12: rename_dict[col_names[12]] = 'Projected Date'
@@ -122,35 +125,36 @@ def load_qbr_data():
         
         sales_orders_df = sales_orders_df.rename(columns=rename_dict)
         
-        # CRITICAL: Remove duplicate columns
+        # Remove duplicate columns
         if sales_orders_df.columns.duplicated().any():
             sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
         
         # Clean data
-        sales_orders_df['Amount'] = sales_orders_df['Amount'].apply(clean_numeric)
-        sales_orders_df['Order Start Date'] = pd.to_datetime(sales_orders_df['Order Start Date'], errors='coerce')
-        sales_orders_df['Actual Ship Date'] = pd.to_datetime(sales_orders_df['Actual Ship Date'], errors='coerce')
-        sales_orders_df['Customer Promise Date'] = pd.to_datetime(sales_orders_df['Customer Promise Date'], errors='coerce')
+        if 'Amount' in sales_orders_df.columns:
+            sales_orders_df['Amount'] = sales_orders_df['Amount'].apply(clean_numeric)
+        if 'Order Start Date' in sales_orders_df.columns:
+            sales_orders_df['Order Start Date'] = pd.to_datetime(sales_orders_df['Order Start Date'], errors='coerce')
+        if 'Actual Ship Date' in sales_orders_df.columns:
+            sales_orders_df['Actual Ship Date'] = pd.to_datetime(sales_orders_df['Actual Ship Date'], errors='coerce')
+        if 'Customer Promise Date' in sales_orders_df.columns:
+            sales_orders_df['Customer Promise Date'] = pd.to_datetime(sales_orders_df['Customer Promise Date'], errors='coerce')
         
         # Clean text fields
-        if 'Corrected Customer Name' in sales_orders_df.columns:
-            sales_orders_df['Corrected Customer Name'] = sales_orders_df['Corrected Customer Name'].astype(str).str.strip()
-        if 'Rep Master' in sales_orders_df.columns:
-            sales_orders_df['Rep Master'] = sales_orders_df['Rep Master'].astype(str).str.strip()
-        if 'Updated Status' in sales_orders_df.columns:
-            sales_orders_df['Updated Status'] = sales_orders_df['Updated Status'].astype(str).str.strip()
-        if 'Order Type' in sales_orders_df.columns:
-            sales_orders_df['Order Type'] = sales_orders_df['Order Type'].astype(str).str.strip()
-        if 'Status' in sales_orders_df.columns:
-            sales_orders_df['Status'] = sales_orders_df['Status'].astype(str).str.strip()
+        for col in ['Corrected Customer Name', 'Rep Master', 'Updated Status', 'Order Type', 'Status']:
+            if col in sales_orders_df.columns:
+                sales_orders_df[col] = sales_orders_df[col].astype(str).str.strip()
     
     # =========================================================================
     # PROCESS INVOICES
+    # Columns: A=Document Number, B=Status, C=Date, D=Due Date, E=Created From,
+    # F=Created By, G=Customer, H=Account, I=Period, J=Department,
+    # K=Amount (Transaction Total), L=Amount Remaining, M=CSM, N=Date Closed,
+    # O=Sales Rep, P=External ID, Q=Amount (Shipping), R=Amount (Tax),
+    # S=HubSpot Pipeline, T=Corrected Customer, U=Rep Master
     # =========================================================================
     if not invoices_df.empty:
         col_names = invoices_df.columns.tolist()
         
-        # Map columns by position
         rename_dict = {}
         if len(col_names) > 0: rename_dict[col_names[0]] = 'Document Number'
         if len(col_names) > 1: rename_dict[col_names[1]] = 'Status'
@@ -166,23 +170,24 @@ def load_qbr_data():
         
         invoices_df = invoices_df.rename(columns=rename_dict)
         
-        # CRITICAL: Remove duplicate columns
+        # Remove duplicate columns
         if invoices_df.columns.duplicated().any():
             invoices_df = invoices_df.loc[:, ~invoices_df.columns.duplicated()]
         
         # Clean data
-        invoices_df['Amount'] = invoices_df['Amount'].apply(clean_numeric)
-        invoices_df['Amount Remaining'] = invoices_df['Amount Remaining'].apply(clean_numeric)
-        invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
-        invoices_df['Due Date'] = pd.to_datetime(invoices_df['Due Date'], errors='coerce')
+        if 'Amount' in invoices_df.columns:
+            invoices_df['Amount'] = invoices_df['Amount'].apply(clean_numeric)
+        if 'Amount Remaining' in invoices_df.columns:
+            invoices_df['Amount Remaining'] = invoices_df['Amount Remaining'].apply(clean_numeric)
+        if 'Date' in invoices_df.columns:
+            invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
+        if 'Due Date' in invoices_df.columns:
+            invoices_df['Due Date'] = pd.to_datetime(invoices_df['Due Date'], errors='coerce')
         
         # Clean text fields
-        if 'Corrected Customer' in invoices_df.columns:
-            invoices_df['Corrected Customer'] = invoices_df['Corrected Customer'].astype(str).str.strip()
-        if 'Rep Master' in invoices_df.columns:
-            invoices_df['Rep Master'] = invoices_df['Rep Master'].astype(str).str.strip()
-        if 'Status' in invoices_df.columns:
-            invoices_df['Status'] = invoices_df['Status'].astype(str).str.strip()
+        for col in ['Corrected Customer', 'Rep Master', 'Status']:
+            if col in invoices_df.columns:
+                invoices_df[col] = invoices_df[col].astype(str).str.strip()
         
         # Clean Created From to extract SO Number
         if 'Created From' in invoices_df.columns:
@@ -190,11 +195,17 @@ def load_qbr_data():
     
     # =========================================================================
     # PROCESS HUBSPOT DEALS
+    # Columns: A=Record ID, B=Deal Name, C=Deal Stage, D=Close Date,
+    # E=Deal Owner First Name, F=Deal Owner Last Name, G=Amount, H=Close Status,
+    # I=Pipeline, J=Create Date, K=Deal Type, L=Netsuite SO#, M=Netsuite SO Link,
+    # N=New Design SKU, O=SKU, P=Netsuite Sales Order Number,
+    # Q=Primary Associated Company, R=Average Leadtime, S=Pending Approval Date,
+    # T=Quarter, U=Deal Stage & Close Status, V=Probability, W=Probability Rev,
+    # X=Company Name
     # =========================================================================
     if not deals_df.empty:
         col_names = deals_df.columns.tolist()
         
-        # Map columns by position (updated structure with Company Name)
         rename_dict = {}
         if len(col_names) > 0: rename_dict[col_names[0]] = 'Record ID'
         if len(col_names) > 1: rename_dict[col_names[1]] = 'Deal Name'
@@ -215,7 +226,7 @@ def load_qbr_data():
         
         deals_df = deals_df.rename(columns=rename_dict)
         
-        # CRITICAL: Remove duplicate columns
+        # Remove duplicate columns
         if deals_df.columns.duplicated().any():
             deals_df = deals_df.loc[:, ~deals_df.columns.duplicated()]
         
@@ -227,25 +238,21 @@ def load_qbr_data():
             ).str.strip()
         
         # Clean data
-        deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
+        if 'Amount' in deals_df.columns:
+            deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
         if 'Probability Rev' in deals_df.columns:
             deals_df['Probability Rev'] = deals_df['Probability Rev'].apply(clean_numeric)
         else:
-            deals_df['Probability Rev'] = deals_df['Amount']
-        
-        deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
+            deals_df['Probability Rev'] = deals_df.get('Amount', 0)
+        if 'Close Date' in deals_df.columns:
+            deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
         if 'Pending Approval Date' in deals_df.columns:
             deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
         
         # Clean text fields
-        if 'Deal Owner' in deals_df.columns:
-            deals_df['Deal Owner'] = deals_df['Deal Owner'].astype(str).str.strip()
-        if 'Deal Name' in deals_df.columns:
-            deals_df['Deal Name'] = deals_df['Deal Name'].astype(str).str.strip()
-        if 'Close Status' in deals_df.columns:
-            deals_df['Close Status'] = deals_df['Close Status'].astype(str).str.strip()
-        if 'Company Name' in deals_df.columns:
-            deals_df['Company Name'] = deals_df['Company Name'].astype(str).str.strip()
+        for col in ['Deal Owner', 'Deal Name', 'Close Status', 'Company Name']:
+            if col in deals_df.columns:
+                deals_df[col] = deals_df[col].astype(str).str.strip()
     
     return sales_orders_df, invoices_df, deals_df
 
@@ -753,43 +760,128 @@ def render_yearly_planning_2026():
         st.error("❌ Unable to load data. Please check your Google Sheets connection.")
         return
     
-    # Sidebar: Rep and Customer Selection
-    with st.sidebar:
-        st.markdown("### 🔍 Select Customer")
-        
-        # Rep selector
-        rep_list = get_rep_list(sales_orders_df, invoices_df)
-        if not rep_list:
-            st.error("No sales reps found in data.")
-            return
-        
-        selected_rep = st.selectbox("Sales Rep:", rep_list, key="qbr_rep_selector")
-        
-        # Customer selector (filtered by rep)
-        customer_list = get_customers_for_rep(selected_rep, sales_orders_df, invoices_df)
+    # Debug info in expander
+    with st.expander("🔍 Debug: Data Loading Status"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.write(f"**Sales Orders:** {len(sales_orders_df)} rows")
+            if not sales_orders_df.empty:
+                st.write(f"Columns: {list(sales_orders_df.columns)}")
+                if 'Rep Master' in sales_orders_df.columns:
+                    st.write(f"Unique Reps: {sales_orders_df['Rep Master'].nunique()}")
+                if 'Corrected Customer Name' in sales_orders_df.columns:
+                    st.write(f"Unique Customers: {sales_orders_df['Corrected Customer Name'].nunique()}")
+        with col2:
+            st.write(f"**Invoices:** {len(invoices_df)} rows")
+            if not invoices_df.empty:
+                st.write(f"Columns: {list(invoices_df.columns)}")
+                if 'Rep Master' in invoices_df.columns:
+                    st.write(f"Unique Reps: {invoices_df['Rep Master'].nunique()}")
+                if 'Corrected Customer' in invoices_df.columns:
+                    st.write(f"Unique Customers: {invoices_df['Corrected Customer'].nunique()}")
+        with col3:
+            st.write(f"**HubSpot Deals:** {len(deals_df)} rows")
+            if not deals_df.empty:
+                st.write(f"Columns: {list(deals_df.columns)}")
+                if 'Deal Owner' in deals_df.columns:
+                    st.write(f"Unique Owners: {deals_df['Deal Owner'].nunique()}")
+                if 'Company Name' in deals_df.columns:
+                    st.write(f"Unique Companies: {deals_df['Company Name'].nunique()}")
+    
+    # Custom CSS for dark dropdown text
+    st.markdown("""
+        <style>
+        /* Dark text for selectbox */
+        div[data-baseweb="select"] > div {
+            color: #1a1a1a !important;
+            background-color: #ffffff !important;
+        }
+        div[data-baseweb="select"] span {
+            color: #1a1a1a !important;
+        }
+        /* Dropdown options */
+        div[data-baseweb="popover"] li {
+            color: #1a1a1a !important;
+        }
+        /* Input labels */
+        .stSelectbox label {
+            color: #e2e8f0 !important;
+            font-weight: 600;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # REP AND CUSTOMER SELECTION - ON MAIN DASHBOARD
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 🔍 Select Customer for QBR")
+    
+    # Rep selector
+    rep_list = get_rep_list(sales_orders_df, invoices_df)
+    if not rep_list:
+        st.error("No sales reps found in data.")
+        return
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        selected_rep = st.selectbox(
+            "**Sales Rep:**", 
+            rep_list, 
+            key="qbr_rep_selector"
+        )
+    
+    # Customer selector (filtered by rep)
+    customer_list = get_customers_for_rep(selected_rep, sales_orders_df, invoices_df)
+    
+    with col2:
         if not customer_list:
             st.warning(f"No customers found for {selected_rep}")
             return
         
-        selected_customer = st.selectbox("Customer:", customer_list, key="qbr_customer_selector")
-        
-        st.markdown("---")
-        st.markdown(f"**Rep:** {selected_rep}")
-        st.markdown(f"**Customer:** {selected_customer}")
+        selected_customer = st.selectbox(
+            "**Customer:**", 
+            customer_list, 
+            key="qbr_customer_selector"
+        )
+    
+    st.markdown("---")
     
     # Filter data for selected customer
     customer_orders = sales_orders_df[
         (sales_orders_df['Corrected Customer Name'] == selected_customer) &
         (sales_orders_df['Rep Master'] == selected_rep)
-    ].copy() if not sales_orders_df.empty else pd.DataFrame()
+    ].copy() if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns else pd.DataFrame()
     
     customer_invoices = invoices_df[
         (invoices_df['Corrected Customer'] == selected_customer) &
         (invoices_df['Rep Master'] == selected_rep)
-    ].copy() if not invoices_df.empty else pd.DataFrame()
+    ].copy() if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns else pd.DataFrame()
     
     # Direct match for HubSpot deals using Company Name
     customer_deals = get_customer_deals(selected_customer, selected_rep, deals_df)
+    
+    # Debug: Show filtered counts
+    with st.expander("🔍 Debug: Filtered Data for Selected Customer"):
+        st.write(f"**Selected Rep:** {selected_rep}")
+        st.write(f"**Selected Customer:** {selected_customer}")
+        st.write(f"**Matching Sales Orders:** {len(customer_orders)}")
+        st.write(f"**Matching Invoices:** {len(customer_invoices)}")
+        st.write(f"**Matching HubSpot Deals:** {len(customer_deals)}")
+        
+        if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns:
+            # Show sample of what's in the invoice data for this rep
+            rep_invoices = invoices_df[invoices_df['Rep Master'] == selected_rep]
+            st.write(f"**Total invoices for {selected_rep}:** {len(rep_invoices)}")
+            if len(rep_invoices) > 0:
+                st.write(f"**Sample customers in invoices:** {rep_invoices['Corrected Customer'].head(10).tolist()}")
+        
+        if not deals_df.empty and 'Company Name' in deals_df.columns:
+            rep_deals = deals_df[deals_df['Deal Owner'] == selected_rep]
+            st.write(f"**Total deals for {selected_rep}:** {len(rep_deals)}")
+            if len(rep_deals) > 0:
+                st.write(f"**Sample companies in deals:** {rep_deals['Company Name'].head(10).tolist()}")
     
     # Main content
     st.markdown(f"## QBR: {selected_customer}")
