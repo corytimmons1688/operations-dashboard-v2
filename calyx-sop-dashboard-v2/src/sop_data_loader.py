@@ -518,8 +518,10 @@ def get_all_data() -> Dict[str, Optional[pd.DataFrame]]:
     }
 
 
-# Alias for backwards compatibility
+# Aliases for backwards compatibility
 load_invoices = load_invoice_lines
+load_so_lines = load_sales_orders
+load_so = load_sales_orders
 
 
 def get_data_hash(df: Optional[pd.DataFrame]) -> str:
