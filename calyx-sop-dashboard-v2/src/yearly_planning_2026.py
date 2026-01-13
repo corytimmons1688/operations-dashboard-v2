@@ -105,9 +105,9 @@ def create_monthly_revenue_chart(customer_invoices):
     y_max = max_val * 1.15  # Add 15% headroom
     
     fig.update_layout(
-        title=dict(text='Monthly Revenue Trend', font=dict(size=16, color='#1e293b')),
+        title=dict(text='Monthly Purchase Trend', font=dict(size=16, color='#1e293b')),
         xaxis_title='',
-        yaxis_title='Revenue',
+        yaxis_title='Purchases',
         plot_bgcolor='white',
         paper_bgcolor='white',
         font=dict(color='#1e293b', size=11),
@@ -156,7 +156,7 @@ def create_ontime_chart(customer_orders):
     fig.add_vline(x=0, line_dash="dash", line_color="#22c55e", line_width=2)
     
     fig.update_layout(
-        title=dict(text='Ship Date Variance Distribution', font=dict(size=16, color='#1e293b')),
+        title=dict(text='Delivery Timing Distribution', font=dict(size=16, color='#1e293b')),
         xaxis_title='Days (Negative = Early, Positive = Late)',
         yaxis_title='Orders',
         barmode='stack',
@@ -203,7 +203,7 @@ def create_order_type_chart(customer_orders):
     )])
     
     fig.update_layout(
-        title=dict(text='Order Type Mix', font=dict(size=16, color='#1e293b')),
+        title=dict(text='Product Mix', font=dict(size=16, color='#1e293b')),
         plot_bgcolor='white',
         paper_bgcolor='white',
         font=dict(color='#1e293b'),
@@ -253,7 +253,7 @@ def create_pipeline_chart(customer_deals):
     y_max = max_val * 1.15  # Add 15% headroom
     
     fig.update_layout(
-        title=dict(text='Pipeline by Stage', font=dict(size=16, color='#1e293b')),
+        title=dict(text='Upcoming Orders by Status', font=dict(size=16, color='#1e293b')),
         xaxis_title='',
         yaxis_title='Value',
         plot_bgcolor='white',
@@ -467,7 +467,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         
         yearly_html = f"""
         <table class="data-table">
-            <thead><tr><th>Year</th><th>Revenue</th><th>Invoices</th></tr></thead>
+            <thead><tr><th>Year</th><th>Purchases</th><th>Orders</th></tr></thead>
             <tbody>{yearly_rows}</tbody>
         </table>
         """
@@ -525,7 +525,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             
             order_type_html = f"""
             <table class="data-table">
-                <thead><tr><th>Order Type</th><th>Value</th><th>Orders</th><th>% of Total</th></tr></thead>
+                <thead><tr><th>Product Category</th><th>Value</th><th>Orders</th><th>% of Total</th></tr></thead>
                 <tbody>{type_rows}</tbody>
             </table>
             """
@@ -547,16 +547,16 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             pipeline_html = f"""
             <div class="metric-row">
                 <div class="metric-card">
-                    <div class="metric-label">Pipeline Value</div>
+                    <div class="metric-label">Upcoming Order Value</div>
                     <div class="metric-value">${pipeline_value:,.0f}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Open Deals</div>
+                    <div class="metric-label">Planned Orders</div>
                     <div class="metric-value">{pipeline_count}</div>
                 </div>
             </div>
             <table class="data-table">
-                <thead><tr><th>Deal Name</th><th>Amount</th><th>Status</th><th>Close Date</th></tr></thead>
+                <thead><tr><th>Order Description</th><th>Amount</th><th>Status</th><th>Expected Date</th></tr></thead>
                 <tbody>{deal_rows}</tbody>
             </table>
             """
@@ -567,7 +567,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>QBR Report - {customer_name}</title>
+        <title>Account Summary - {customer_name}</title>
         <style>
             @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
             
@@ -735,19 +735,19 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     </head>
     <body>
         <div class="header">
-            <h1>📋 Quarterly Business Review</h1>
-            <div class="subtitle">{customer_name} &nbsp;|&nbsp; Sales Rep: {rep_name} &nbsp;|&nbsp; {generated_date}</div>
+            <h1>📋 Account Summary</h1>
+            <div class="subtitle">{customer_name} &nbsp;|&nbsp; Account Manager: {rep_name} &nbsp;|&nbsp; {generated_date}</div>
         </div>
         
         <div class="section">
-            <div class="section-title">📦 Current Pending Orders</div>
+            <div class="section-title">📦 Orders in Progress</div>
             <div class="metric-row">
                 <div class="metric-card">
-                    <div class="metric-label">Pending Orders</div>
+                    <div class="metric-label">Active Orders</div>
                     <div class="metric-value">{pending_count}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Pending Value</div>
+                    <div class="metric-label">Order Value</div>
                     <div class="metric-value">${pending_value:,.0f}</div>
                 </div>
             </div>
@@ -755,14 +755,14 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         
         <div class="section">
-            <div class="section-title">💳 Open Invoices</div>
+            <div class="section-title">💳 Account Balance</div>
             <div class="metric-row">
                 <div class="metric-card">
                     <div class="metric-label">Open Invoices</div>
                     <div class="metric-value">{open_invoice_count}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Outstanding Balance</div>
+                    <div class="metric-label">Balance Due</div>
                     <div class="metric-value {'warning' if open_invoice_value > 0 else ''}">${open_invoice_value:,.0f}</div>
                 </div>
             </div>
@@ -770,18 +770,18 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         
         <div class="section">
-            <div class="section-title">💰 Revenue History</div>
+            <div class="section-title">💰 Purchase History</div>
             <div class="metric-row">
                 <div class="metric-card">
-                    <div class="metric-label">Lifetime Revenue</div>
+                    <div class="metric-label">Lifetime Purchases</div>
                     <div class="metric-value success">${total_revenue:,.0f}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Total Invoices</div>
+                    <div class="metric-label">Total Orders</div>
                     <div class="metric-value">{total_invoices}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Avg Invoice Size</div>
+                    <div class="metric-label">Avg Order Value</div>
                     <div class="metric-value">${avg_invoice:,.0f}</div>
                 </div>
             </div>
@@ -790,14 +790,14 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         
         <div class="section">
-            <div class="section-title">⏱️ On-Time Performance</div>
+            <div class="section-title">⏱️ Delivery Performance</div>
             <div class="metric-row">
                 <div class="metric-card">
-                    <div class="metric-label">On-Time Rate</div>
+                    <div class="metric-label">On-Time Delivery Rate</div>
                     <div class="metric-value {'success' if ot_rate >= 90 else 'warning' if ot_rate >= 70 else ''}">{ot_rate:.1f}%</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Avg Days Variance</div>
+                    <div class="metric-label">Avg Delivery Timing</div>
                     <div class="metric-value">{avg_variance:.1f} days</div>
                 </div>
             </div>
@@ -805,34 +805,34 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         
         <div class="section">
-            <div class="section-title">📅 Order Cadence</div>
+            <div class="section-title">📅 Ordering Frequency</div>
             <div class="metric-row">
                 <div class="metric-card">
                     <div class="metric-label">Avg Days Between Orders</div>
                     <div class="metric-value">{avg_cadence:.0f} days</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Last Order Date</div>
+                    <div class="metric-label">Most Recent Order</div>
                     <div class="metric-value" style="font-size: 1.2rem;">{last_order}</div>
                 </div>
             </div>
         </div>
         
         <div class="section">
-            <div class="section-title">📊 Order Type Mix</div>
+            <div class="section-title">📊 Product Mix</div>
             {charts_html.get('ordertype', '')}
-            {order_type_html if order_type_html else '<p style="color: #64748b;">No order type data available.</p>'}
+            {order_type_html if order_type_html else '<p style="color: #64748b;">No product data available.</p>'}
         </div>
         
         <div class="section">
-            <div class="section-title">🎯 Active Pipeline</div>
+            <div class="section-title">🎯 Upcoming Orders</div>
             {charts_html.get('pipeline', '')}
-            {pipeline_html if pipeline_html else '<p style="color: #64748b;">No active pipeline deals.</p>'}
+            {pipeline_html if pipeline_html else '<p style="color: #64748b;">No upcoming orders scheduled.</p>'}
         </div>
         
         <div class="footer">
-            <p>Generated by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
-            <p style="margin-top: 5px;">Confidential - For Internal Use Only</p>
+            <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
+            <p style="margin-top: 5px;">Thank you for your partnership!</p>
         </div>
     </body>
     </html>
@@ -1882,7 +1882,7 @@ def render_yearly_planning_2026():
         st.download_button(
             label="📄 Download Report (HTML)",
             data=html_report,
-            file_name=f"QBR_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+            file_name=f"Account_Summary_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
             mime="text/html",
             use_container_width=True
         )
