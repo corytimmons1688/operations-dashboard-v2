@@ -249,10 +249,10 @@ def load_qbr_data():
         if 'Pending Approval Date' in deals_df.columns:
             deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
         
-        # Clean text fields
+        # Clean text fields - strip whitespace AND newlines
         for col in ['Deal Owner', 'Deal Name', 'Close Status', 'Company Name']:
             if col in deals_df.columns:
-                deals_df[col] = deals_df[col].astype(str).str.strip()
+                deals_df[col] = deals_df[col].astype(str).str.strip().str.replace('\n', '', regex=False).str.replace('\r', '', regex=False)
     
     return sales_orders_df, invoices_df, deals_df
 
@@ -448,52 +448,72 @@ def render_open_invoices_section(customer_invoices):
 
 
 def render_revenue_section(customer_invoices):
-    """Section 3: 2025 Revenue"""
-    st.markdown("### 💰 2025 Revenue")
+    """Section 3: Historical Revenue"""
+    st.markdown("### 💰 Historical Revenue")
     
     if customer_invoices.empty:
         st.info("No invoice data found for this customer.")
         return
     
-    # Filter to 2025 and paid invoices
-    invoices_2025 = customer_invoices[
-        (customer_invoices['Date'].dt.year == 2025) &
-        (customer_invoices['Status'].isin(['Paid in Full', 'Open']))
+    # Filter to paid/open invoices (exclude voided, etc.)
+    valid_invoices = customer_invoices[
+        customer_invoices['Status'].isin(['Paid in Full', 'Open'])
     ].copy()
     
-    if invoices_2025.empty:
-        st.info("No 2025 revenue data available.")
+    if valid_invoices.empty:
+        st.info("No revenue data available.")
         return
     
-    # Summary metrics
-    total_revenue = invoices_2025['Amount'].sum()
-    invoice_count = len(invoices_2025)
-    avg_invoice = total_revenue / invoice_count if invoice_count > 0 else 0
+    # Get current year
+    current_year = datetime.now().year
     
+    # Calculate total and by year
+    total_revenue = valid_invoices['Amount'].sum()
+    total_invoice_count = len(valid_invoices)
+    
+    # Year breakdown
+    valid_invoices['Year'] = valid_invoices['Date'].dt.year
+    yearly_revenue = valid_invoices.groupby('Year').agg({
+        'Amount': 'sum',
+        'Document Number': 'count'
+    }).reset_index()
+    yearly_revenue.columns = ['Year', 'Revenue', 'Invoice Count']
+    yearly_revenue = yearly_revenue.sort_values('Year', ascending=False)
+    
+    # Summary metrics
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Total 2025 Revenue", f"${total_revenue:,.0f}")
+        st.metric("Total Lifetime Revenue", f"${total_revenue:,.0f}")
     with col2:
-        st.metric("Invoice Count", invoice_count)
+        st.metric("Total Invoices", total_invoice_count)
     with col3:
+        avg_invoice = total_revenue / total_invoice_count if total_invoice_count > 0 else 0
         st.metric("Avg Invoice Size", f"${avg_invoice:,.0f}")
     
-    # Monthly breakdown
-    invoices_2025['Month'] = invoices_2025['Date'].dt.to_period('M')
-    monthly_revenue = invoices_2025.groupby('Month')['Amount'].sum().reset_index()
-    monthly_revenue['Month'] = monthly_revenue['Month'].astype(str)
+    # Year-by-year breakdown
+    st.markdown("**Revenue by Year:**")
+    display_yearly = yearly_revenue.copy()
+    display_yearly['Revenue'] = display_yearly['Revenue'].apply(lambda x: f"${x:,.0f}")
+    st.dataframe(display_yearly, use_container_width=True, hide_index=True)
     
-    if len(monthly_revenue) > 1:
-        fig = px.bar(monthly_revenue, x='Month', y='Amount',
-                     title='Monthly Revenue Trend (2025)',
-                     labels={'Amount': 'Revenue', 'Month': 'Month'})
-        fig.update_traces(marker_color='#3b82f6')
-        fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font_color='#e2e8f0'
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # Monthly breakdown for current year and previous year
+    recent_invoices = valid_invoices[valid_invoices['Year'] >= current_year - 1].copy()
+    if not recent_invoices.empty:
+        recent_invoices['Month'] = recent_invoices['Date'].dt.to_period('M')
+        monthly_revenue = recent_invoices.groupby('Month')['Amount'].sum().reset_index()
+        monthly_revenue['Month'] = monthly_revenue['Month'].astype(str)
+        
+        if len(monthly_revenue) > 1:
+            fig = px.bar(monthly_revenue, x='Month', y='Amount',
+                         title=f'Monthly Revenue Trend ({current_year-1}-{current_year})',
+                         labels={'Amount': 'Revenue', 'Month': 'Month'})
+            fig.update_traces(marker_color='#3b82f6')
+            fig.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                font_color='#e2e8f0'
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 
 def render_on_time_section(customer_orders):
@@ -609,26 +629,25 @@ def render_order_cadence_section(customer_orders):
 
 def render_order_type_mix_section(customer_orders):
     """Section 6: Order Type Mix"""
-    st.markdown("### 📊 Order Type Mix (2025)")
+    st.markdown("### 📊 Order Type Mix (All Time)")
     
     if customer_orders.empty:
         st.info("No order data found for this customer.")
         return
     
-    # Filter to 2025 orders
-    orders_2025 = customer_orders[
-        (customer_orders['Order Start Date'].dt.year == 2025) &
+    # Filter to valid order types
+    valid_orders = customer_orders[
         (customer_orders['Order Type'].notna()) &
         (customer_orders['Order Type'] != '') &
         (customer_orders['Order Type'] != 'nan')
     ].copy()
     
-    if orders_2025.empty:
-        st.info("No 2025 order data available.")
+    if valid_orders.empty:
+        st.info("No order type data available.")
         return
     
     # Group by Order Type
-    type_mix = orders_2025.groupby('Order Type').agg({
+    type_mix = valid_orders.groupby('Order Type').agg({
         'Amount': ['sum', 'count']
     }).round(0)
     type_mix.columns = ['Total Value', 'Order Count']
