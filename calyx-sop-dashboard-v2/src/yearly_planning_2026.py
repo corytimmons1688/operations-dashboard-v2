@@ -486,14 +486,36 @@ def render_revenue_section(customer_invoices):
             recent_invoices['Month'] = recent_invoices['Date'].dt.to_period('M').astype(str)
             monthly_revenue = recent_invoices.groupby('Month')['Amount'].sum().reset_index()
             
-            fig = px.bar(monthly_revenue, x='Month', y='Amount',
-                         title=f'Monthly Revenue Trend',
-                         labels={'Amount': 'Revenue', 'Month': 'Month'})
-            fig.update_traces(marker_color='#3b82f6')
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=monthly_revenue['Month'],
+                    y=monthly_revenue['Amount'],
+                    marker=dict(
+                        color=monthly_revenue['Amount'],
+                        colorscale=[[0, '#1e40af'], [0.5, '#3b82f6'], [1, '#60a5fa']],
+                        line=dict(width=0)
+                    ),
+                    hovertemplate='<b>%{x}</b><br>Revenue: $%{y:,.0f}<extra></extra>'
+                )
+            ])
+            
             fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)',
+                title=dict(text='Monthly Revenue Trend', font=dict(size=16, color='#f1f5f9')),
+                xaxis_title='',
+                yaxis_title='Revenue',
+                plot_bgcolor='rgba(15, 23, 42, 0.5)',
                 paper_bgcolor='rgba(0,0,0,0)',
-                font_color='#e2e8f0'
+                font=dict(color='#94a3b8', size=12),
+                xaxis=dict(
+                    gridcolor='#334155',
+                    tickangle=-45,
+                    tickfont=dict(size=10)
+                ),
+                yaxis=dict(
+                    gridcolor='#334155',
+                    tickformat='$,.0f'
+                ),
+                margin=dict(t=40, b=60)
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -555,14 +577,44 @@ def render_on_time_section(customer_orders):
     
     # Distribution chart
     if len(completed_orders) > 5:
-        fig = px.histogram(completed_orders, x='Days Variance', nbins=20,
-                           title='Ship Date Variance Distribution',
-                           labels={'Days Variance': 'Days (Negative = Early, Positive = Late)'})
-        fig.add_vline(x=0, line_dash="dash", line_color="green", annotation_text="On Time")
+        # Create a more visually appealing histogram
+        fig = go.Figure()
+        
+        # Separate early, on-time, and late
+        early_data = completed_orders[completed_orders['Days Variance'] < 0]['Days Variance']
+        on_time_data = completed_orders[completed_orders['Days Variance'] == 0]['Days Variance']
+        late_data = completed_orders[completed_orders['Days Variance'] > 0]['Days Variance']
+        
+        # Add traces with different colors
+        if len(early_data) > 0:
+            fig.add_trace(go.Histogram(x=early_data, name='Early', marker_color='#10b981', opacity=0.8))
+        if len(on_time_data) > 0:
+            fig.add_trace(go.Histogram(x=on_time_data, name='On Time', marker_color='#3b82f6', opacity=0.8))
+        if len(late_data) > 0:
+            fig.add_trace(go.Histogram(x=late_data, name='Late', marker_color='#ef4444', opacity=0.8))
+        
+        fig.add_vline(x=0, line_dash="dash", line_color="#22c55e", line_width=2,
+                      annotation_text="On Time", annotation_font_color="#22c55e")
+        
         fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
+            title=dict(text='Ship Date Variance', font=dict(size=16, color='#f1f5f9')),
+            xaxis_title='Days (Negative = Early, Positive = Late)',
+            yaxis_title='Orders',
+            barmode='stack',
+            plot_bgcolor='rgba(15, 23, 42, 0.5)',
             paper_bgcolor='rgba(0,0,0,0)',
-            font_color='#e2e8f0'
+            font=dict(color='#94a3b8', size=12),
+            xaxis=dict(gridcolor='#334155', zerolinecolor='#334155'),
+            yaxis=dict(gridcolor='#334155'),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='center',
+                x=0.5,
+                font=dict(color='#f1f5f9')
+            ),
+            margin=dict(t=60, b=40)
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -654,13 +706,35 @@ def render_order_type_mix_section(customer_orders):
     col1, col2 = st.columns(2)
     
     with col1:
-        # Pie chart
-        fig = px.pie(type_mix.reset_index(), values='Total Value', names='Order Type',
-                     title='Revenue by Order Type')
+        # Pie chart with better colors and legend
+        colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16']
+        
+        fig = go.Figure(data=[go.Pie(
+            labels=type_mix.reset_index()['Order Type'],
+            values=type_mix['Total Value'],
+            hole=0.4,  # Donut chart
+            marker=dict(colors=colors[:len(type_mix)]),
+            textposition='inside',
+            textinfo='percent',
+            textfont=dict(size=14, color='white'),
+            hovertemplate='<b>%{label}</b><br>Revenue: $%{value:,.0f}<br>%{percent}<extra></extra>'
+        )])
+        
         fig.update_layout(
+            title=dict(text='Revenue by Order Type', font=dict(size=16, color='#f1f5f9')),
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            font_color='#e2e8f0'
+            font=dict(color='#94a3b8'),
+            legend=dict(
+                orientation='h',
+                yanchor='top',
+                y=-0.1,
+                xanchor='center',
+                x=0.5,
+                font=dict(size=11, color='#f1f5f9'),
+                bgcolor='rgba(0,0,0,0)'
+            ),
+            margin=dict(t=40, b=80, l=20, r=20)
         )
         st.plotly_chart(fig, use_container_width=True)
     
@@ -806,25 +880,72 @@ def render_yearly_planning_2026():
                     st.error("❌ Company Name column NOT found in loaded data!")
                     st.write("**Tip:** Check if 'Company Name' column (X) has data in Google Sheet")
     
-    # Custom CSS for dark dropdown text
+    # Custom CSS for sleek dark theme
     st.markdown("""
         <style>
-        /* Dark text for selectbox */
+        /* ===== DROPDOWNS / SELECTBOX ===== */
         div[data-baseweb="select"] > div {
-            color: #1a1a1a !important;
-            background-color: #ffffff !important;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+            border: 1px solid #3b82f6 !important;
+            border-radius: 8px !important;
+            color: #f1f5f9 !important;
+        }
+        div[data-baseweb="select"] > div:hover {
+            border-color: #60a5fa !important;
+            box-shadow: 0 0 10px rgba(59, 130, 246, 0.3) !important;
         }
         div[data-baseweb="select"] span {
-            color: #1a1a1a !important;
+            color: #f1f5f9 !important;
+            font-weight: 500 !important;
         }
-        /* Dropdown options */
+        /* Dropdown menu */
+        div[data-baseweb="popover"] {
+            background: #1e293b !important;
+            border: 1px solid #3b82f6 !important;
+            border-radius: 8px !important;
+        }
         div[data-baseweb="popover"] li {
-            color: #1a1a1a !important;
+            color: #f1f5f9 !important;
+            background: transparent !important;
+        }
+        div[data-baseweb="popover"] li:hover {
+            background: #3b82f6 !important;
+            color: #ffffff !important;
         }
         /* Input labels */
         .stSelectbox label {
-            color: #e2e8f0 !important;
-            font-weight: 600;
+            color: #94a3b8 !important;
+            font-weight: 600 !important;
+            font-size: 0.9rem !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.5px !important;
+        }
+        
+        /* ===== METRICS ===== */
+        div[data-testid="stMetric"] {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+            border: 1px solid #334155 !important;
+            border-radius: 12px !important;
+            padding: 1rem !important;
+        }
+        div[data-testid="stMetric"] label {
+            color: #94a3b8 !important;
+        }
+        div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+            color: #f1f5f9 !important;
+        }
+        
+        /* ===== DATAFRAMES ===== */
+        .stDataFrame {
+            border-radius: 8px !important;
+            overflow: hidden !important;
+        }
+        
+        /* ===== SECTION HEADERS ===== */
+        h3 {
+            color: #f1f5f9 !important;
+            border-bottom: 2px solid #3b82f6 !important;
+            padding-bottom: 0.5rem !important;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -832,8 +953,17 @@ def render_yearly_planning_2026():
     # =========================================================================
     # REP AND CUSTOMER SELECTION - ON MAIN DASHBOARD
     # =========================================================================
-    st.markdown("---")
-    st.markdown("### 🔍 Select Customer for QBR")
+    st.markdown("""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #3b82f6;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.3rem;">🔍 Select Customer for QBR</h3>
+        </div>
+    """, unsafe_allow_html=True)
     
     # Rep selector
     rep_list = get_rep_list(sales_orders_df, invoices_df)
@@ -929,11 +1059,22 @@ def render_yearly_planning_2026():
                     first_company = rep_deals['Company Name'].iloc[0]
                     st.write(f"**First Company Name repr:** `{repr(first_company)}`")
     
-    # Main content
-    st.markdown(f"## QBR: {selected_customer}")
-    st.markdown(f"*Sales Rep: {selected_rep} | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+    # Main content - styled header
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+            padding: 1.5rem 2rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+        ">
+            <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
+            <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
     
-    st.markdown("---")
+    st.markdown("")
     
     # Render each section
     render_pending_orders_section(customer_orders)
