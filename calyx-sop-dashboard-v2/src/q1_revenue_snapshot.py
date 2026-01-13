@@ -1017,8 +1017,9 @@ def load_all_data():
             dashboard_df.columns = ['Rep Name', 'Quota']
             dashboard_df['NetSuite Orders'] = 0  # Placeholder - actual data comes from invoices
             
-            # Remove any empty rows
+            # Remove any empty rows and Team Total row (which would double the quota sum)
             dashboard_df = dashboard_df[dashboard_df['Rep Name'].notna() & (dashboard_df['Rep Name'] != '')]
+            dashboard_df = dashboard_df[~dashboard_df['Rep Name'].str.contains('Team Total', case=False, na=False)]
             
             # Clean and convert numeric columns
             def clean_numeric(value):
