@@ -95,49 +95,31 @@ def load_qbr_data():
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     
     # =========================================================================
-    # PROCESS SALES ORDERS
-    # Columns: A=Internal ID, B=SO Number, C=Status, D=Customer, E=Customer External ID,
-    # F=Sales Rep, G=PI||CSM, H=Amount, I=Order Start Date, J=Pending Fulfillment Date,
-    # K=Actual Ship Date, L=Customer Promise Last Date to Ship, M=Projected Date,
-    # N=Do Not Ship Before, O=Memo, P=Created By, Q=Terms, R=Order Type, S=Quote,
-    # T=Shipping State/Province, U=Amount (Shipping), V=Amount (Tax), W=HubSpot Pipeline,
-    # X=Sales Management Approved Date, Y=Customer's PO Number, Z=Sales Approved Date,
-    # AA=Name, AB=Calyx|External Order, AC=Pending Approval Date, AD=Corrected Customer Name,
-    # AE=Rep Master, AF=Updated Status
+    # PROCESS SALES ORDERS - use column names directly from sheet
     # =========================================================================
     if not sales_orders_df.empty:
-        col_names = sales_orders_df.columns.tolist()
-        
-        rename_dict = {}
-        if len(col_names) > 0: rename_dict[col_names[0]] = 'Internal ID'
-        if len(col_names) > 1: rename_dict[col_names[1]] = 'SO Number'
-        if len(col_names) > 2: rename_dict[col_names[2]] = 'Status'
-        if len(col_names) > 3: rename_dict[col_names[3]] = 'Customer'
-        if len(col_names) > 7: rename_dict[col_names[7]] = 'Amount'
-        if len(col_names) > 8: rename_dict[col_names[8]] = 'Order Start Date'
-        if len(col_names) > 10: rename_dict[col_names[10]] = 'Actual Ship Date'
-        if len(col_names) > 11: rename_dict[col_names[11]] = 'Customer Promise Date'
-        if len(col_names) > 12: rename_dict[col_names[12]] = 'Projected Date'
-        if len(col_names) > 17: rename_dict[col_names[17]] = 'Order Type'
-        if len(col_names) > 29: rename_dict[col_names[29]] = 'Corrected Customer Name'
-        if len(col_names) > 30: rename_dict[col_names[30]] = 'Rep Master'
-        if len(col_names) > 31: rename_dict[col_names[31]] = 'Updated Status'
-        
-        sales_orders_df = sales_orders_df.rename(columns=rename_dict)
-        
         # Remove duplicate columns
         if sales_orders_df.columns.duplicated().any():
             sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
         
-        # Clean data
+        # Handle Amount column - could be 'Amount' or 'Amount (Transaction Total)'
+        if 'Amount (Transaction Total)' in sales_orders_df.columns and 'Amount' not in sales_orders_df.columns:
+            sales_orders_df = sales_orders_df.rename(columns={'Amount (Transaction Total)': 'Amount'})
+        
+        # Clean numeric data
         if 'Amount' in sales_orders_df.columns:
             sales_orders_df['Amount'] = sales_orders_df['Amount'].apply(clean_numeric)
+        
+        # Clean date data
         if 'Order Start Date' in sales_orders_df.columns:
             sales_orders_df['Order Start Date'] = pd.to_datetime(sales_orders_df['Order Start Date'], errors='coerce')
         if 'Actual Ship Date' in sales_orders_df.columns:
             sales_orders_df['Actual Ship Date'] = pd.to_datetime(sales_orders_df['Actual Ship Date'], errors='coerce')
         if 'Customer Promise Date' in sales_orders_df.columns:
             sales_orders_df['Customer Promise Date'] = pd.to_datetime(sales_orders_df['Customer Promise Date'], errors='coerce')
+        # Also handle alternate column name
+        if 'Customer Promise Last Date to Ship' in sales_orders_df.columns:
+            sales_orders_df['Customer Promise Date'] = pd.to_datetime(sales_orders_df['Customer Promise Last Date to Ship'], errors='coerce')
         
         # Clean text fields
         for col in ['Corrected Customer Name', 'Rep Master', 'Updated Status', 'Order Type', 'Status']:
@@ -145,40 +127,24 @@ def load_qbr_data():
                 sales_orders_df[col] = sales_orders_df[col].astype(str).str.strip()
     
     # =========================================================================
-    # PROCESS INVOICES
-    # Columns: A=Document Number, B=Status, C=Date, D=Due Date, E=Created From,
-    # F=Created By, G=Customer, H=Account, I=Period, J=Department,
-    # K=Amount (Transaction Total), L=Amount Remaining, M=CSM, N=Date Closed,
-    # O=Sales Rep, P=External ID, Q=Amount (Shipping), R=Amount (Tax),
-    # S=HubSpot Pipeline, T=Corrected Customer, U=Rep Master
+    # PROCESS INVOICES - use column names directly from sheet
     # =========================================================================
     if not invoices_df.empty:
-        col_names = invoices_df.columns.tolist()
-        
-        rename_dict = {}
-        if len(col_names) > 0: rename_dict[col_names[0]] = 'Document Number'
-        if len(col_names) > 1: rename_dict[col_names[1]] = 'Status'
-        if len(col_names) > 2: rename_dict[col_names[2]] = 'Date'
-        if len(col_names) > 3: rename_dict[col_names[3]] = 'Due Date'
-        if len(col_names) > 4: rename_dict[col_names[4]] = 'Created From'
-        if len(col_names) > 6: rename_dict[col_names[6]] = 'Customer'
-        if len(col_names) > 8: rename_dict[col_names[8]] = 'Period'
-        if len(col_names) > 10: rename_dict[col_names[10]] = 'Amount'
-        if len(col_names) > 11: rename_dict[col_names[11]] = 'Amount Remaining'
-        if len(col_names) > 19: rename_dict[col_names[19]] = 'Corrected Customer'
-        if len(col_names) > 20: rename_dict[col_names[20]] = 'Rep Master'
-        
-        invoices_df = invoices_df.rename(columns=rename_dict)
-        
         # Remove duplicate columns
         if invoices_df.columns.duplicated().any():
             invoices_df = invoices_df.loc[:, ~invoices_df.columns.duplicated()]
         
-        # Clean data
+        # Handle Amount column - could be 'Amount' or 'Amount (Transaction Total)'
+        if 'Amount (Transaction Total)' in invoices_df.columns and 'Amount' not in invoices_df.columns:
+            invoices_df = invoices_df.rename(columns={'Amount (Transaction Total)': 'Amount'})
+        
+        # Clean numeric data
         if 'Amount' in invoices_df.columns:
             invoices_df['Amount'] = invoices_df['Amount'].apply(clean_numeric)
         if 'Amount Remaining' in invoices_df.columns:
             invoices_df['Amount Remaining'] = invoices_df['Amount Remaining'].apply(clean_numeric)
+        
+        # Clean date data
         if 'Date' in invoices_df.columns:
             invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
         if 'Due Date' in invoices_df.columns:
@@ -189,7 +155,7 @@ def load_qbr_data():
             if col in invoices_df.columns:
                 invoices_df[col] = invoices_df[col].astype(str).str.strip()
         
-        # Clean Created From to extract SO Number
+        # Extract SO Number from Created From
         if 'Created From' in invoices_df.columns:
             invoices_df['SO Number'] = invoices_df['Created From'].astype(str).str.replace('Sales Order #', '', regex=False).str.strip()
     
@@ -399,15 +365,12 @@ def render_open_invoices_section(customer_invoices):
         st.info("No invoice data found for this customer.")
         return
     
-    # Debug: show what statuses exist
-    with st.expander("🔍 Debug: Invoice Statuses"):
-        st.write(f"**Total invoices for customer:** {len(customer_invoices)}")
-        if 'Status' in customer_invoices.columns:
-            status_counts = customer_invoices['Status'].value_counts().to_dict()
-            st.write(f"**Status breakdown:** {status_counts}")
-    
-    # Filter to open invoices only
+    # Filter to open invoices
     open_invoices = customer_invoices[customer_invoices['Status'] == 'Open'].copy()
+    
+    if open_invoices.empty:
+        st.success("✅ No open invoices - all invoices paid in full!")
+        return
     
     if open_invoices.empty:
         st.success("✅ No open invoices - all invoices paid in full!")
@@ -485,46 +448,10 @@ def render_revenue_section(customer_invoices):
         st.info("No invoice data found for this customer.")
         return
     
-    # Debug: Show what we have
-    with st.expander("🔍 Debug: Invoice Data"):
-        st.write(f"**Total customer invoices:** {len(customer_invoices)}")
-        if 'Status' in customer_invoices.columns:
-            st.write(f"**Unique Status values:** {customer_invoices['Status'].unique().tolist()}")
-        if 'Amount' in customer_invoices.columns:
-            st.write(f"**Total Amount (all statuses):** ${customer_invoices['Amount'].sum():,.0f}")
-        if 'Date' in customer_invoices.columns:
-            st.write(f"**Date range:** {customer_invoices['Date'].min()} to {customer_invoices['Date'].max()}")
-            st.write(f"**Sample dates:** {customer_invoices['Date'].head(5).tolist()}")
-    
-    # Filter to paid/open invoices (exclude voided, etc.)
-    valid_invoices = customer_invoices[
-        customer_invoices['Status'].isin(['Paid in Full', 'Open'])
-    ].copy()
-    
-    if valid_invoices.empty:
-        # Try without status filter to see if that's the issue
-        st.warning(f"No invoices with Status 'Paid in Full' or 'Open'. Found statuses: {customer_invoices['Status'].unique().tolist()}")
-        # Fall back to all invoices
-        valid_invoices = customer_invoices.copy()
-        if valid_invoices.empty:
-            st.info("No revenue data available.")
-            return
-    
-    # Get current year
-    current_year = datetime.now().year
-    
-    # Calculate total and by year
-    total_revenue = valid_invoices['Amount'].sum()
-    total_invoice_count = len(valid_invoices)
-    
-    # Year breakdown
-    valid_invoices['Year'] = valid_invoices['Date'].dt.year
-    yearly_revenue = valid_invoices.groupby('Year').agg({
-        'Amount': 'sum',
-        'Document Number': 'count'
-    }).reset_index()
-    yearly_revenue.columns = ['Year', 'Revenue', 'Invoice Count']
-    yearly_revenue = yearly_revenue.sort_values('Year', ascending=False)
+    # Just use all invoices - simple!
+    total_revenue = customer_invoices['Amount'].sum()
+    total_invoice_count = len(customer_invoices)
+    avg_invoice = total_revenue / total_invoice_count if total_invoice_count > 0 else 0
     
     # Summary metrics
     col1, col2, col3 = st.columns(3)
@@ -533,25 +460,34 @@ def render_revenue_section(customer_invoices):
     with col2:
         st.metric("Total Invoices", total_invoice_count)
     with col3:
-        avg_invoice = total_revenue / total_invoice_count if total_invoice_count > 0 else 0
         st.metric("Avg Invoice Size", f"${avg_invoice:,.0f}")
     
-    # Year-by-year breakdown
-    st.markdown("**Revenue by Year:**")
-    display_yearly = yearly_revenue.copy()
-    display_yearly['Revenue'] = display_yearly['Revenue'].apply(lambda x: f"${x:,.0f}")
-    st.dataframe(display_yearly, use_container_width=True, hide_index=True)
-    
-    # Monthly breakdown for current year and previous year
-    recent_invoices = valid_invoices[valid_invoices['Year'] >= current_year - 1].copy()
-    if not recent_invoices.empty:
-        recent_invoices['Month'] = recent_invoices['Date'].dt.to_period('M')
-        monthly_revenue = recent_invoices.groupby('Month')['Amount'].sum().reset_index()
-        monthly_revenue['Month'] = monthly_revenue['Month'].astype(str)
+    # Year breakdown
+    if 'Date' in customer_invoices.columns and customer_invoices['Date'].notna().any():
+        customer_invoices = customer_invoices.copy()
+        customer_invoices['Year'] = customer_invoices['Date'].dt.year
         
-        if len(monthly_revenue) > 1:
+        yearly_revenue = customer_invoices.groupby('Year').agg({
+            'Amount': 'sum',
+            'Document Number': 'count'
+        }).reset_index()
+        yearly_revenue.columns = ['Year', 'Revenue', 'Invoice Count']
+        yearly_revenue = yearly_revenue.sort_values('Year', ascending=False)
+        
+        st.markdown("**Revenue by Year:**")
+        display_yearly = yearly_revenue.copy()
+        display_yearly['Revenue'] = display_yearly['Revenue'].apply(lambda x: f"${x:,.0f}")
+        st.dataframe(display_yearly, use_container_width=True, hide_index=True)
+        
+        # Monthly chart
+        current_year = datetime.now().year
+        recent_invoices = customer_invoices[customer_invoices['Year'] >= current_year - 1].copy()
+        if not recent_invoices.empty and len(recent_invoices) > 1:
+            recent_invoices['Month'] = recent_invoices['Date'].dt.to_period('M').astype(str)
+            monthly_revenue = recent_invoices.groupby('Month')['Amount'].sum().reset_index()
+            
             fig = px.bar(monthly_revenue, x='Month', y='Amount',
-                         title=f'Monthly Revenue Trend ({current_year-1}-{current_year})',
+                         title=f'Monthly Revenue Trend',
                          labels={'Amount': 'Revenue', 'Month': 'Month'})
             fig.update_traces(marker_color='#3b82f6')
             fig.update_layout(
@@ -570,11 +506,22 @@ def render_on_time_section(customer_orders):
         st.info("No order data found for this customer.")
         return
     
+    # Determine which column name is used for customer promise date
+    promise_col = None
+    if 'Customer Promise Date' in customer_orders.columns:
+        promise_col = 'Customer Promise Date'
+    elif 'Customer Promise Last Date to Ship' in customer_orders.columns:
+        promise_col = 'Customer Promise Last Date to Ship'
+    
+    if promise_col is None:
+        st.info("No customer promise date data available.")
+        return
+    
     # Filter to completed orders (Billed or Closed) with valid dates
     completed_orders = customer_orders[
         (customer_orders['Status'].isin(['Billed', 'Closed'])) &
         (customer_orders['Actual Ship Date'].notna()) &
-        (customer_orders['Customer Promise Date'].notna())
+        (customer_orders[promise_col].notna())
     ].copy()
     
     if completed_orders.empty:
@@ -582,7 +529,7 @@ def render_on_time_section(customer_orders):
         return
     
     # Calculate on-time status
-    completed_orders['Days Variance'] = (completed_orders['Actual Ship Date'] - completed_orders['Customer Promise Date']).dt.days
+    completed_orders['Days Variance'] = (completed_orders['Actual Ship Date'] - completed_orders[promise_col]).dt.days
     completed_orders['On Time'] = completed_orders['Days Variance'] <= 0
     
     # Metrics
