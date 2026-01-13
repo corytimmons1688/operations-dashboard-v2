@@ -26,16 +26,248 @@ CACHE_VERSION = "v1_qbr_generator"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
-def fig_to_base64(fig, width=800, height=400):
+
+# Note: Chart export requires kaleido package
+# Install with: pip install -U kaleido
+KALEIDO_AVAILABLE = True
+try:
+    import kaleido
+except ImportError:
+    KALEIDO_AVAILABLE = False
+
+
+def fig_to_base64(fig, width=700, height=350):
     """Convert a plotly figure to base64 PNG for embedding in HTML"""
-    img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
-    return base64.b64encode(img_bytes).decode()
+    if not KALEIDO_AVAILABLE:
+        return None
+    try:
+        img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
+        return base64.b64encode(img_bytes).decode()
+    except Exception as e:
+        return None
+
+
+def create_monthly_revenue_chart(customer_invoices):
+    """Create monthly revenue bar chart for PDF export"""
+    if customer_invoices.empty or 'Date' not in customer_invoices.columns:
+        return None
+    
+    invoices = customer_invoices.copy()
+    invoices['Year'] = invoices['Date'].dt.year
+    current_year = datetime.now().year
+    recent = invoices[invoices['Year'] >= current_year - 1].copy()
+    
+    if recent.empty or len(recent) < 2:
+        return None
+    
+    recent['Month'] = recent['Date'].dt.to_period('M').astype(str)
+    monthly = recent.groupby('Month')['Amount'].sum().reset_index()
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=monthly['Month'],
+            y=monthly['Amount'],
+            marker=dict(color='#3b82f6'),
+            text=[f'${x:,.0f}' for x in monthly['Amount']],
+            textposition='outside',
+            textfont=dict(size=10)
+        )
+    ])
+    
+    fig.update_layout(
+        title=dict(text='Monthly Revenue Trend', font=dict(size=16, color='#1e293b')),
+        xaxis_title='',
+        yaxis_title='Revenue',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(color='#1e293b', size=11),
+        xaxis=dict(tickangle=-45, gridcolor='#e2e8f0'),
+        yaxis=dict(gridcolor='#e2e8f0', tickformat='$,.0f'),
+        margin=dict(t=50, b=80, l=80, r=40),
+        showlegend=False
+    )
+    
+    return fig
+
+
+def create_ontime_chart(customer_orders):
+    """Create on-time performance chart for PDF export"""
+    if customer_orders.empty:
+        return None
+    
+    promise_col = 'Customer Promise Date' if 'Customer Promise Date' in customer_orders.columns else 'Customer Promise Last Date to Ship'
+    if promise_col not in customer_orders.columns:
+        return None
+    
+    completed = customer_orders[
+        (customer_orders['Status'].isin(['Billed', 'Closed'])) &
+        (customer_orders['Actual Ship Date'].notna()) &
+        (customer_orders[promise_col].notna())
+    ].copy()
+    
+    if completed.empty or len(completed) < 3:
+        return None
+    
+    completed['Variance'] = (completed['Actual Ship Date'] - completed[promise_col]).dt.days
+    
+    # Create colored histogram
+    early = completed[completed['Variance'] < 0]['Variance']
+    on_time = completed[completed['Variance'] == 0]['Variance']
+    late = completed[completed['Variance'] > 0]['Variance']
+    
+    fig = go.Figure()
+    if len(early) > 0:
+        fig.add_trace(go.Histogram(x=early, name='Early', marker_color='#10b981', opacity=0.8))
+    if len(on_time) > 0:
+        fig.add_trace(go.Histogram(x=on_time, name='On Time', marker_color='#3b82f6', opacity=0.8))
+    if len(late) > 0:
+        fig.add_trace(go.Histogram(x=late, name='Late', marker_color='#ef4444', opacity=0.8))
+    
+    fig.add_vline(x=0, line_dash="dash", line_color="#22c55e", line_width=2)
+    
+    fig.update_layout(
+        title=dict(text='Ship Date Variance Distribution', font=dict(size=16, color='#1e293b')),
+        xaxis_title='Days (Negative = Early, Positive = Late)',
+        yaxis_title='Orders',
+        barmode='stack',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(color='#1e293b', size=11),
+        xaxis=dict(gridcolor='#e2e8f0'),
+        yaxis=dict(gridcolor='#e2e8f0'),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+        margin=dict(t=70, b=50, l=60, r=40)
+    )
+    
+    return fig
+
+
+def create_order_type_chart(customer_orders):
+    """Create order type mix pie chart for PDF export"""
+    if customer_orders.empty or 'Order Type' not in customer_orders.columns:
+        return None
+    
+    valid = customer_orders[
+        (customer_orders['Order Type'].notna()) &
+        (customer_orders['Order Type'] != '') &
+        (customer_orders['Order Type'] != 'nan')
+    ]
+    
+    if valid.empty:
+        return None
+    
+    type_mix = valid.groupby('Order Type')['Amount'].sum().reset_index()
+    type_mix = type_mix.sort_values('Amount', ascending=False)
+    
+    colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16']
+    
+    fig = go.Figure(data=[go.Pie(
+        labels=type_mix['Order Type'],
+        values=type_mix['Amount'],
+        hole=0.4,
+        marker=dict(colors=colors[:len(type_mix)]),
+        textposition='inside',
+        textinfo='percent+label',
+        textfont=dict(size=10, color='white'),
+        hovertemplate='<b>%{label}</b><br>$%{value:,.0f}<br>%{percent}<extra></extra>'
+    )])
+    
+    fig.update_layout(
+        title=dict(text='Order Type Mix', font=dict(size=16, color='#1e293b')),
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(color='#1e293b'),
+        showlegend=True,
+        legend=dict(orientation='h', yanchor='top', y=-0.1, xanchor='center', x=0.5, font=dict(size=10)),
+        margin=dict(t=50, b=80, l=20, r=20)
+    )
+    
+    return fig
+
+
+def create_pipeline_chart(customer_deals):
+    """Create pipeline breakdown chart for PDF export"""
+    if customer_deals.empty:
+        return None
+    
+    open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+    open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)]
+    
+    if open_deals.empty:
+        return None
+    
+    status_data = open_deals.groupby('Close Status')['Amount'].sum().reset_index()
+    
+    # Order by pipeline stage
+    status_order = {'Commit': 0, 'Expect': 1, 'Best Case': 2, 'Opportunity': 3}
+    status_data['Order'] = status_data['Close Status'].map(status_order).fillna(4)
+    status_data = status_data.sort_values('Order')
+    
+    colors = {'Commit': '#10b981', 'Expect': '#3b82f6', 'Best Case': '#f59e0b', 'Opportunity': '#8b5cf6'}
+    bar_colors = [colors.get(s, '#64748b') for s in status_data['Close Status']]
+    
+    fig = go.Figure(data=[
+        go.Bar(
+            x=status_data['Close Status'],
+            y=status_data['Amount'],
+            marker=dict(color=bar_colors),
+            text=[f'${x:,.0f}' for x in status_data['Amount']],
+            textposition='outside',
+            textfont=dict(size=11)
+        )
+    ])
+    
+    fig.update_layout(
+        title=dict(text='Pipeline by Stage', font=dict(size=16, color='#1e293b')),
+        xaxis_title='',
+        yaxis_title='Value',
+        plot_bgcolor='white',
+        paper_bgcolor='white',
+        font=dict(color='#1e293b', size=11),
+        xaxis=dict(gridcolor='#e2e8f0'),
+        yaxis=dict(gridcolor='#e2e8f0', tickformat='$,.0f'),
+        margin=dict(t=50, b=50, l=80, r=40),
+        showlegend=False
+    )
+    
+    return fig
 
 
 def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals):
-    """Generate a clean HTML report for PDF export"""
+    """Generate a clean HTML report for PDF export with charts"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
+    
+    # ===== Generate Charts =====
+    charts_html = {}
+    
+    # Monthly Revenue Chart
+    revenue_fig = create_monthly_revenue_chart(customer_invoices)
+    if revenue_fig:
+        img_b64 = fig_to_base64(revenue_fig)
+        if img_b64:
+            charts_html['revenue'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    
+    # On-Time Performance Chart
+    ontime_fig = create_ontime_chart(customer_orders)
+    if ontime_fig:
+        img_b64 = fig_to_base64(ontime_fig)
+        if img_b64:
+            charts_html['ontime'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    
+    # Order Type Mix Chart
+    ordertype_fig = create_order_type_chart(customer_orders)
+    if ordertype_fig:
+        img_b64 = fig_to_base64(ordertype_fig)
+        if img_b64:
+            charts_html['ordertype'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
+    
+    # Pipeline Chart
+    pipeline_fig = create_pipeline_chart(customer_deals)
+    if pipeline_fig:
+        img_b64 = fig_to_base64(pipeline_fig)
+        if img_b64:
+            charts_html['pipeline'] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}"></div>'
     
     # ===== Calculate all metrics =====
     
@@ -307,6 +539,21 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 font-size: 0.85rem;
             }}
             
+            .chart-container {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 15px;
+                margin: 20px 0;
+                text-align: center;
+            }}
+            
+            .chart-container img {{
+                max-width: 100%;
+                height: auto;
+                border-radius: 8px;
+            }}
+            
             @media print {{
                 body {{
                     padding: 20px;
@@ -316,6 +563,9 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     print-color-adjust: exact;
                 }}
                 .section {{
+                    page-break-inside: avoid;
+                }}
+                .chart-container {{
                     page-break-inside: avoid;
                 }}
             }}
@@ -372,6 +622,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 </div>
             </div>
             {yearly_html}
+            {charts_html.get('revenue', '')}
         </div>
         
         <div class="section">
@@ -386,6 +637,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <div class="metric-value">{avg_variance:.1f} days</div>
                 </div>
             </div>
+            {charts_html.get('ontime', '')}
         </div>
         
         <div class="section">
@@ -404,11 +656,13 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         
         <div class="section">
             <div class="section-title">📊 Order Type Mix</div>
+            {charts_html.get('ordertype', '')}
             {order_type_html if order_type_html else '<p style="color: #64748b;">No order type data available.</p>'}
         </div>
         
         <div class="section">
             <div class="section-title">🎯 Active Pipeline</div>
+            {charts_html.get('pipeline', '')}
             {pipeline_html if pipeline_html else '<p style="color: #64748b;">No active pipeline deals.</p>'}
         </div>
         
@@ -564,9 +818,6 @@ def load_qbr_data():
     # Use actual column names from header row, not positional indices
     # =========================================================================
     if not deals_df.empty:
-        # Debug: show original columns
-        original_columns = deals_df.columns.tolist()
-        
         # Create a mapping of potential column name variations to standard names
         column_mapping = {
             # Standard name variations
@@ -1246,40 +1497,6 @@ def render_yearly_planning_2026():
         st.error("❌ Unable to load data. Please check your Google Sheets connection.")
         return
     
-    # Debug info in expander
-    with st.expander("🔍 Debug: Data Loading Status"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.write(f"**Sales Orders:** {len(sales_orders_df)} rows")
-            if not sales_orders_df.empty:
-                st.write(f"Columns: {list(sales_orders_df.columns)}")
-                if 'Rep Master' in sales_orders_df.columns:
-                    st.write(f"Unique Reps: {sales_orders_df['Rep Master'].nunique()}")
-                if 'Corrected Customer Name' in sales_orders_df.columns:
-                    st.write(f"Unique Customers: {sales_orders_df['Corrected Customer Name'].nunique()}")
-        with col2:
-            st.write(f"**Invoices:** {len(invoices_df)} rows")
-            if not invoices_df.empty:
-                st.write(f"Columns: {list(invoices_df.columns)}")
-                if 'Rep Master' in invoices_df.columns:
-                    st.write(f"Unique Reps: {invoices_df['Rep Master'].nunique()}")
-                if 'Corrected Customer' in invoices_df.columns:
-                    st.write(f"Unique Customers: {invoices_df['Corrected Customer'].nunique()}")
-        with col3:
-            st.write(f"**HubSpot Deals:** {len(deals_df)} rows")
-            if not deals_df.empty:
-                st.write(f"**All Columns ({len(deals_df.columns)}):** {list(deals_df.columns)}")
-                if 'Deal Owner' in deals_df.columns:
-                    st.write(f"Unique Owners: {deals_df['Deal Owner'].nunique()}")
-                    st.write(f"Sample Owners: {deals_df['Deal Owner'].head(5).tolist()}")
-                if 'Company Name' in deals_df.columns:
-                    st.write(f"✅ Company Name found!")
-                    st.write(f"Unique Companies: {deals_df['Company Name'].nunique()}")
-                    st.write(f"Sample Companies: {deals_df['Company Name'].head(5).tolist()}")
-                else:
-                    st.error("❌ Company Name column NOT found in loaded data!")
-                    st.write("**Tip:** Check if 'Company Name' column (X) has data in Google Sheet")
-    
     # Custom CSS for sleek dark theme
     st.markdown("""
         <style>
@@ -1472,77 +1689,24 @@ def render_yearly_planning_2026():
     # Direct match for HubSpot deals using Company Name
     customer_deals = get_customer_deals(selected_customer, selected_rep, deals_df)
     
-    # Debug: Show filtered counts
-    with st.expander("🔍 Debug: Filtered Data for Selected Customer"):
-        st.write(f"**Selected Rep:** {selected_rep}")
-        st.write(f"**Selected Customer:** `{selected_customer}`")
-        st.write(f"**Matching Sales Orders:** {len(customer_orders)}")
-        st.write(f"**Matching Invoices:** {len(customer_invoices)}")
-        st.write(f"**Matching HubSpot Deals:** {len(customer_deals)}")
-        
-        # Debug customer invoices specifically
-        if not customer_invoices.empty:
-            st.write("---")
-            st.write("**Customer Invoice Details:**")
-            st.write(f"Columns: {list(customer_invoices.columns)}")
-            if 'Status' in customer_invoices.columns:
-                st.write(f"Status values: {customer_invoices['Status'].unique().tolist()}")
-            if 'Amount' in customer_invoices.columns:
-                st.write(f"Total Amount: ${customer_invoices['Amount'].sum():,.0f}")
-            if 'Date' in customer_invoices.columns:
-                st.write(f"Date dtype: {customer_invoices['Date'].dtype}")
-                st.write(f"Sample dates: {customer_invoices['Date'].head(3).tolist()}")
-        
-        if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns:
-            # Show sample of what's in the invoice data for this rep
-            rep_invoices = invoices_df[invoices_df['Rep Master'] == selected_rep]
-            st.write(f"**Total invoices for {selected_rep}:** {len(rep_invoices)}")
-            if len(rep_invoices) > 0:
-                st.write(f"**Sample customers in invoices:** {rep_invoices['Corrected Customer'].head(10).tolist()}")
-        
-        if not deals_df.empty and 'Company Name' in deals_df.columns:
-            rep_deals = deals_df[deals_df['Deal Owner'] == selected_rep]
-            st.write(f"**Total deals for {selected_rep}:** {len(rep_deals)}")
-            if len(rep_deals) > 0:
-                st.write(f"**Sample Company Names in deals:** {rep_deals['Company Name'].head(10).tolist()}")
-                # Show exact match attempt
-                st.write(f"**Looking for exact match:** `{selected_customer}`")
-                exact_matches = rep_deals[rep_deals['Company Name'] == selected_customer]
-                st.write(f"**Exact matches found:** {len(exact_matches)}")
-                
-                # Try contains match for debugging
-                contains_matches = rep_deals[rep_deals['Company Name'].str.contains(selected_customer, case=False, na=False)]
-                st.write(f"**Contains matches found:** {len(contains_matches)}")
-                if len(contains_matches) > 0:
-                    st.write(f"**Contains match Company Names:** {contains_matches['Company Name'].tolist()}")
-                
-                # Show raw bytes of first Company Name to detect hidden chars
-                if len(rep_deals) > 0:
-                    first_company = rep_deals['Company Name'].iloc[0]
-                    st.write(f"**First Company Name repr:** `{repr(first_company)}`")
-    
     # Main content - styled header with Generate button
-    col_header, col_button = st.columns([3, 1])
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+            padding: 1.5rem 2rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+        ">
+            <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
+            <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
     
-    with col_header:
-        st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
-                padding: 1.5rem 2rem;
-                border-radius: 12px;
-                margin-bottom: 1rem;
-            ">
-                <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
-                <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                    Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
-                </p>
-            </div>
-        """, unsafe_allow_html=True)
-    
-    with col_button:
-        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)  # Spacer
-        
-        # Generate HTML report
+    # Generate HTML report button - centered
+    col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
+    with col_btn:
         html_report = generate_qbr_html(
             selected_customer, 
             selected_rep, 
@@ -1551,20 +1715,13 @@ def render_yearly_planning_2026():
             customer_deals
         )
         
-        # Download button for HTML report
         st.download_button(
-            label="📄 Download Report",
+            label="📄 Download Report (HTML)",
             data=html_report,
             file_name=f"QBR_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
             mime="text/html",
-            help="Download a presentation-ready HTML report. Open in browser and print to PDF."
+            use_container_width=True
         )
-        
-        st.markdown("""
-            <p style="color: #64748b; font-size: 0.75rem; margin-top: 5px;">
-                💡 Open in browser → Print → Save as PDF
-            </p>
-        """, unsafe_allow_html=True)
     
     st.markdown("")
     
