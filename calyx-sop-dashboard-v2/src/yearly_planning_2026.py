@@ -1578,11 +1578,13 @@ def render_pipeline_section(customer_deals, customer_name):
         return
     
     # Toggle for Raw vs Probability-Adjusted
+    # Use customer name to create unique key for multi-select support
+    safe_customer_key = customer_name.replace(' ', '_').replace('.', '_')[:30]
     amount_mode = st.radio(
         "Amount Display:",
         ["Raw Forecast", "Probability-Adjusted"],
         horizontal=True,
-        key="pipeline_amount_mode"
+        key=f"pipeline_amount_mode_{safe_customer_key}"
     )
     
     use_probability = amount_mode == "Probability-Adjusted"
@@ -1714,13 +1716,27 @@ def render_yearly_planning_2026():
             color: #ffffff !important;
         }
         /* Input labels */
-        .stSelectbox label {
+        .stSelectbox label, .stMultiSelect label {
             color: #94a3b8 !important;
             font-weight: 700 !important;
             font-size: 0.85rem !important;
             text-transform: uppercase !important;
             letter-spacing: 1px !important;
             margin-bottom: 8px !important;
+        }
+        
+        /* ===== MULTISELECT ===== */
+        .stMultiSelect > div > div {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+            border: 2px solid #3b82f6 !important;
+            border-radius: 10px !important;
+        }
+        .stMultiSelect span[data-baseweb="tag"] {
+            background: #3b82f6 !important;
+            border-radius: 6px !important;
+        }
+        .stMultiSelect span[data-baseweb="tag"] span {
+            color: white !important;
         }
         
         /* ===== METRICS ===== */
@@ -1804,12 +1820,25 @@ def render_yearly_planning_2026():
             border-left: 4px solid #3b82f6;
             margin: 1rem 0;
         ">
-            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.3rem;">🔍 Select Customer for QBR</h3>
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.3rem;">🔍 Select Customer(s) for QBR</h3>
         </div>
     """, unsafe_allow_html=True)
     
-    # Rep selector
+    # Allowed sales reps
+    ALLOWED_REPS = [
+        'Jake Lynch', 
+        'Brad Sherman', 
+        'Lance Mitton', 
+        'Owen Labombard', 
+        'Alex Gonzalez', 
+        'Dave Borkowski', 
+        'Kyle Bissell'
+    ]
+    
+    # Rep selector - filtered to allowed reps only
     rep_list = get_rep_list(sales_orders_df, invoices_df)
+    rep_list = [r for r in rep_list if r in ALLOWED_REPS]
+    
     if not rep_list:
         st.error("No sales reps found in data.")
         return
@@ -1823,7 +1852,7 @@ def render_yearly_planning_2026():
             key="qbr_rep_selector"
         )
     
-    # Customer selector (filtered by rep)
+    # Customer selector (filtered by rep) - MULTI-SELECT
     customer_list = get_customers_for_rep(selected_rep, sales_orders_df, invoices_df)
     
     with col2:
@@ -1831,92 +1860,106 @@ def render_yearly_planning_2026():
             st.warning(f"No customers found for {selected_rep}")
             return
         
-        selected_customer = st.selectbox(
-            f"CUSTOMER ({len(customer_list)} accounts)", 
-            customer_list, 
+        selected_customers = st.multiselect(
+            f"CUSTOMERS ({len(customer_list)} accounts)", 
+            customer_list,
+            default=[customer_list[0]] if customer_list else [],
             key="qbr_customer_selector"
         )
     
+    if not selected_customers:
+        st.info("Please select at least one customer.")
+        return
+    
     st.markdown("---")
     
-    # Filter data for selected customer
-    customer_orders = sales_orders_df[
-        (sales_orders_df['Corrected Customer Name'] == selected_customer) &
-        (sales_orders_df['Rep Master'] == selected_rep)
-    ].copy() if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns else pd.DataFrame()
-    
-    customer_invoices = invoices_df[
-        (invoices_df['Corrected Customer'] == selected_customer) &
-        (invoices_df['Rep Master'] == selected_rep)
-    ].copy() if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns else pd.DataFrame()
-    
-    # Direct match for HubSpot deals using Company Name
-    customer_deals = get_customer_deals(selected_customer, selected_rep, deals_df)
-    
-    # Main content - styled header with Generate button
-    st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
-            padding: 1.5rem 2rem;
-            border-radius: 12px;
-            margin-bottom: 1rem;
-        ">
-            <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
-            </p>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Generate HTML report button - centered
-    col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
-    with col_btn:
-        html_report = generate_qbr_html(
-            selected_customer, 
-            selected_rep, 
-            customer_orders, 
-            customer_invoices, 
-            customer_deals
-        )
+    # Loop through each selected customer
+    for idx, selected_customer in enumerate(selected_customers):
+        # Filter data for selected customer
+        customer_orders = sales_orders_df[
+            (sales_orders_df['Corrected Customer Name'] == selected_customer) &
+            (sales_orders_df['Rep Master'] == selected_rep)
+        ].copy() if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns else pd.DataFrame()
         
-        st.download_button(
-            label="📄 Download Report (HTML)",
-            data=html_report,
-            file_name=f"Account_Summary_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html",
-            use_container_width=True
-        )
+        customer_invoices = invoices_df[
+            (invoices_df['Corrected Customer'] == selected_customer) &
+            (invoices_df['Rep Master'] == selected_rep)
+        ].copy() if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns else pd.DataFrame()
         
-        # Show chart status
-        if not KALEIDO_AVAILABLE:
-            st.caption(f"📊 Charts: Interactive mode")
-            if KALEIDO_ERROR:
-                st.caption(f"({KALEIDO_ERROR[:50]}...)")
-        else:
-            st.caption("📊 Charts: Static images")
-    
-    st.markdown("")
-    
-    # Render each section
-    render_pending_orders_section(customer_orders)
-    st.markdown("---")
-    
-    render_open_invoices_section(customer_invoices)
-    st.markdown("---")
-    
-    render_revenue_section(customer_invoices)
-    st.markdown("---")
-    
-    render_on_time_section(customer_orders)
-    st.markdown("---")
-    
-    render_order_cadence_section(customer_orders)
-    st.markdown("---")
-    
-    render_order_type_mix_section(customer_orders)
-    st.markdown("---")
-    
-    render_pipeline_section(customer_deals, selected_customer)
+        # Direct match for HubSpot deals using Company Name
+        customer_deals = get_customer_deals(selected_customer, selected_rep, deals_df)
+        
+        # Main content - styled header with Generate button
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+                padding: 1.5rem 2rem;
+                border-radius: 12px;
+                margin-bottom: 1rem;
+            ">
+                <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                    Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Generate HTML report button - centered
+        col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
+        with col_btn:
+            html_report = generate_qbr_html(
+                selected_customer, 
+                selected_rep, 
+                customer_orders, 
+                customer_invoices, 
+                customer_deals
+            )
+            
+            st.download_button(
+                label="📄 Download Report (HTML)",
+                data=html_report,
+                file_name=f"Account_Summary_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+                key=f"download_btn_{idx}"
+            )
+            
+            # Show chart status (only on first customer)
+            if idx == 0:
+                if not KALEIDO_AVAILABLE:
+                    st.caption(f"📊 Charts: Interactive mode")
+                    if KALEIDO_ERROR:
+                        st.caption(f"({KALEIDO_ERROR[:50]}...)")
+                else:
+                    st.caption("📊 Charts: Static images")
+        
+        st.markdown("")
+        
+        # Render each section
+        render_pending_orders_section(customer_orders)
+        st.markdown("---")
+        
+        render_open_invoices_section(customer_invoices)
+        st.markdown("---")
+        
+        render_revenue_section(customer_invoices)
+        st.markdown("---")
+        
+        render_on_time_section(customer_orders)
+        st.markdown("---")
+        
+        render_order_cadence_section(customer_orders)
+        st.markdown("---")
+        
+        render_order_type_mix_section(customer_orders)
+        st.markdown("---")
+        
+        render_pipeline_section(customer_deals, selected_customer)
+        
+        # Add separator between customers if not the last one
+        if idx < len(selected_customers) - 1:
+            st.markdown("---")
+            st.markdown("---")
 
 
 # ========== ENTRY POINT ==========
