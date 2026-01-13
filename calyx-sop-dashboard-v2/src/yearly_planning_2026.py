@@ -357,7 +357,7 @@ def render_pending_orders_section(customer_orders):
         display_df = pending_orders[display_cols].copy()
         display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.0f}")
         if 'Order Start Date' in display_df.columns:
-            display_df['Order Start Date'] = pd.to_datetime(display_df['Order Start Date']).dt.strftime('%Y-%m-%d')
+            display_df['Order Start Date'] = pd.to_datetime(display_df['Order Start Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         st.dataframe(display_df, use_container_width=True)
 
 
@@ -434,9 +434,9 @@ def render_open_invoices_section(customer_invoices):
         display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.0f}")
         display_df['Amount Remaining'] = display_df['Amount Remaining'].apply(lambda x: f"${x:,.0f}")
         if 'Date' in display_df.columns:
-            display_df['Date'] = pd.to_datetime(display_df['Date']).dt.strftime('%Y-%m-%d')
+            display_df['Date'] = pd.to_datetime(display_df['Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         if 'Due Date' in display_df.columns:
-            display_df['Due Date'] = pd.to_datetime(display_df['Due Date']).dt.strftime('%Y-%m-%d')
+            display_df['Due Date'] = pd.to_datetime(display_df['Due Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         st.dataframe(display_df.sort_values('Days Overdue', ascending=False), use_container_width=True)
 
 
@@ -716,15 +716,22 @@ def render_pipeline_section(customer_deals, customer_name):
         display_cols = ['Deal Name', 'Close Status', 'Deal Type', 'Amount', 'Probability Rev', 'Close Date', 'Pending Approval Date']
         display_cols = [c for c in display_cols if c in open_deals.columns]
         display_df = open_deals[display_cols].copy()
-        display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.0f}")
-        display_df['Probability Rev'] = display_df['Probability Rev'].apply(lambda x: f"${x:,.0f}")
+        
+        # Remove duplicate columns if any
+        if display_df.columns.duplicated().any():
+            display_df = display_df.loc[:, ~display_df.columns.duplicated()]
+        
+        if 'Amount' in display_df.columns:
+            display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
+        if 'Probability Rev' in display_df.columns:
+            display_df['Probability Rev'] = display_df['Probability Rev'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
         
         # Rename Pending Approval Date to Projected Ship Date
         if 'Pending Approval Date' in display_df.columns:
             display_df = display_df.rename(columns={'Pending Approval Date': 'Projected Ship Date'})
-            display_df['Projected Ship Date'] = pd.to_datetime(display_df['Projected Ship Date']).dt.strftime('%Y-%m-%d')
+            display_df['Projected Ship Date'] = pd.to_datetime(display_df['Projected Ship Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         if 'Close Date' in display_df.columns:
-            display_df['Close Date'] = pd.to_datetime(display_df['Close Date']).dt.strftime('%Y-%m-%d')
+            display_df['Close Date'] = pd.to_datetime(display_df['Close Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         
         st.dataframe(display_df, use_container_width=True)
 
