@@ -88,8 +88,8 @@ def load_all_data_yearly():
     # Load deals data - extend range to include Q2 2026 Spillover column AND Probability Rev (Column U)
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:U", version=CACHE_VERSION)
     
-    # Load dashboard info (rep quotas)
-    dashboard_df = load_google_sheets_data("Dashboard Info", "A:C", version=CACHE_VERSION)
+    # Load dashboard info (rep quotas) - now 2 columns: Sales Rep Name, Q4 2025 Quota
+    dashboard_df = load_google_sheets_data("Dashboard Info", "A:B", version=CACHE_VERSION)
     
     # Load invoice data from NetSuite - includes Corrected Customer Name and Rep Master
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
@@ -108,18 +108,25 @@ def load_all_data_yearly():
             return 0
     
     # =========================================================================
-    # PROCESS DASHBOARD INFO
+    # PROCESS DASHBOARD INFO (Now 2 columns: Sales Rep Name, Q4 2025 Quota)
     # =========================================================================
     if not dashboard_df.empty:
-        if len(dashboard_df.columns) >= 3:
-            dashboard_df.columns = ['Rep Name', 'Quota', 'NetSuite Orders']
+        if len(dashboard_df.columns) >= 2:
+            # New structure: only 2 columns
+            dashboard_df.columns = ['Rep Name', 'Quota'] + list(dashboard_df.columns[2:]) if len(dashboard_df.columns) > 2 else ['Rep Name', 'Quota']
         
-        dashboard_df = dashboard_df[dashboard_df['Rep Name'].notna() & (dashboard_df['Rep Name'] != '')]
+        # Filter out empty rows and Team Total row (that's a summary, not a rep)
+        dashboard_df = dashboard_df[
+            dashboard_df['Rep Name'].notna() & 
+            (dashboard_df['Rep Name'] != '') &
+            (dashboard_df['Rep Name'].str.strip() != 'Team Total')
+        ]
         
         if 'Quota' in dashboard_df.columns:
             dashboard_df['Quota'] = dashboard_df['Quota'].apply(clean_numeric)
-        if 'NetSuite Orders' in dashboard_df.columns:
-            dashboard_df['NetSuite Orders'] = dashboard_df['NetSuite Orders'].apply(clean_numeric)
+        
+        # Initialize NetSuite Orders to 0 - will be populated from invoices
+        dashboard_df['NetSuite Orders'] = 0
         
         dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
     
@@ -250,6 +257,17 @@ def load_all_data_yearly():
                 dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
                 dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
                 dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
+                
+                # Add reps that are in invoices but not in Dashboard Info (e.g., Shopify ECommerce)
+                for rep_name in invoice_totals['Rep Name'].unique():
+                    if rep_name not in dashboard_df['Rep Name'].values:
+                        rep_total = invoice_totals[invoice_totals['Rep Name'] == rep_name]['Invoice Total'].iloc[0]
+                        new_row = pd.DataFrame([{
+                            'Rep Name': rep_name,
+                            'Quota': 0,
+                            'NetSuite Orders': rep_total
+                        }])
+                        dashboard_df = pd.concat([dashboard_df, new_row], ignore_index=True)
     
     # =========================================================================
     # PROCESS SALES ORDERS DATA
