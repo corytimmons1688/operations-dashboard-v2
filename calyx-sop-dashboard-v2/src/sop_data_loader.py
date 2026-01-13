@@ -518,6 +518,20 @@ def get_all_data() -> Dict[str, Optional[pd.DataFrame]]:
     }
 
 
+@st.cache_data(ttl=CACHE_TTL)
+def load_vendors() -> Optional[pd.DataFrame]:
+    """Load Vendors data."""
+    df = load_sheet_to_dataframe('Vendors')
+    
+    if df is None or df.empty:
+        for sheet_name in ['Vendor', 'Suppliers', 'Supplier']:
+            df = load_sheet_to_dataframe(sheet_name)
+            if df is not None and not df.empty:
+                break
+    
+    return df
+
+
 # Aliases for backwards compatibility
 load_invoices = load_invoice_lines
 load_so_lines = load_sales_orders
