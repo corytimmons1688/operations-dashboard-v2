@@ -36,3 +36,4 @@ requests>=2.31.0
 
 # AI Integration (optional - for AI Insights feature)
 anthropic
+kaleido
