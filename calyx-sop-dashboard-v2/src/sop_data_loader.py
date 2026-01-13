@@ -518,6 +518,10 @@ def get_all_data() -> Dict[str, Optional[pd.DataFrame]]:
     }
 
 
+# Alias for backwards compatibility
+load_invoices = load_invoice_lines
+
+
 def get_data_hash(df: Optional[pd.DataFrame]) -> str:
     """Generate a hash for a dataframe for caching purposes."""
     if df is None or df.empty:
