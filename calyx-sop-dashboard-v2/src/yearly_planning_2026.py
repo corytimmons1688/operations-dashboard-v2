@@ -16,11 +16,411 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+import base64
+import io
 
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 CACHE_VERSION = "v1_qbr_generator"
+
+
+# ========== PDF/HTML GENERATION HELPERS ==========
+def fig_to_base64(fig, width=800, height=400):
+    """Convert a plotly figure to base64 PNG for embedding in HTML"""
+    img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
+    return base64.b64encode(img_bytes).decode()
+
+
+def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals):
+    """Generate a clean HTML report for PDF export"""
+    
+    generated_date = datetime.now().strftime('%B %d, %Y')
+    
+    # ===== Calculate all metrics =====
+    
+    # Pending Orders
+    pending_statuses = ['Pending Approval', 'Pending Fulfillment', 'PA', 'PF']
+    pending_orders = customer_orders[
+        customer_orders['Updated Status'].isin(pending_statuses) | 
+        customer_orders['Status'].isin(['Pending Approval', 'Pending Fulfillment'])
+    ] if not customer_orders.empty else pd.DataFrame()
+    pending_count = len(pending_orders)
+    pending_value = pending_orders['Amount'].sum() if not pending_orders.empty else 0
+    
+    # Open Invoices
+    open_invoices = customer_invoices[customer_invoices['Status'] == 'Open'] if not customer_invoices.empty else pd.DataFrame()
+    open_invoice_count = len(open_invoices)
+    open_invoice_value = open_invoices['Amount Remaining'].sum() if not open_invoices.empty and 'Amount Remaining' in open_invoices.columns else 0
+    
+    # Revenue
+    total_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty else 0
+    total_invoices = len(customer_invoices)
+    avg_invoice = total_revenue / total_invoices if total_invoices > 0 else 0
+    
+    # Year breakdown
+    yearly_html = ""
+    if not customer_invoices.empty and 'Date' in customer_invoices.columns:
+        invoices_copy = customer_invoices.copy()
+        invoices_copy['Year'] = invoices_copy['Date'].dt.year
+        yearly_data = invoices_copy.groupby('Year').agg({'Amount': 'sum', 'Document Number': 'count'}).reset_index()
+        yearly_data.columns = ['Year', 'Revenue', 'Invoices']
+        yearly_data = yearly_data.sort_values('Year', ascending=False)
+        
+        yearly_rows = ""
+        for _, row in yearly_data.iterrows():
+            yearly_rows += f"<tr><td>{int(row['Year'])}</td><td>${row['Revenue']:,.0f}</td><td>{int(row['Invoices'])}</td></tr>"
+        
+        yearly_html = f"""
+        <table class="data-table">
+            <thead><tr><th>Year</th><th>Revenue</th><th>Invoices</th></tr></thead>
+            <tbody>{yearly_rows}</tbody>
+        </table>
+        """
+    
+    # On-Time Performance
+    promise_col = 'Customer Promise Date' if 'Customer Promise Date' in customer_orders.columns else 'Customer Promise Last Date to Ship'
+    if promise_col in customer_orders.columns:
+        completed = customer_orders[
+            (customer_orders['Status'].isin(['Billed', 'Closed'])) &
+            (customer_orders['Actual Ship Date'].notna()) &
+            (customer_orders[promise_col].notna())
+        ].copy()
+        if not completed.empty:
+            completed['Variance'] = (completed['Actual Ship Date'] - completed[promise_col]).dt.days
+            ot_count = (completed['Variance'] <= 0).sum()
+            ot_rate = (ot_count / len(completed) * 100) if len(completed) > 0 else 0
+            avg_variance = completed['Variance'].mean()
+        else:
+            ot_rate, avg_variance = 0, 0
+    else:
+        ot_rate, avg_variance = 0, 0
+    
+    # Order Cadence
+    if not customer_orders.empty and 'Order Start Date' in customer_orders.columns:
+        orders_dated = customer_orders[customer_orders['Order Start Date'].notna()].sort_values('Order Start Date')
+        if len(orders_dated) > 1:
+            orders_dated['Days Between'] = orders_dated['Order Start Date'].diff().dt.days
+            avg_cadence = orders_dated['Days Between'].mean()
+            last_order = orders_dated['Order Start Date'].max().strftime('%Y-%m-%d')
+        else:
+            avg_cadence = 0
+            last_order = orders_dated['Order Start Date'].max().strftime('%Y-%m-%d') if len(orders_dated) == 1 else 'N/A'
+    else:
+        avg_cadence = 0
+        last_order = 'N/A'
+    
+    # Order Type Mix
+    order_type_html = ""
+    if not customer_orders.empty and 'Order Type' in customer_orders.columns:
+        valid_orders = customer_orders[
+            (customer_orders['Order Type'].notna()) & 
+            (customer_orders['Order Type'] != '') & 
+            (customer_orders['Order Type'] != 'nan')
+        ]
+        if not valid_orders.empty:
+            type_mix = valid_orders.groupby('Order Type').agg({'Amount': ['sum', 'count']}).round(0)
+            type_mix.columns = ['Value', 'Count']
+            type_mix = type_mix.sort_values('Value', ascending=False)
+            total_val = type_mix['Value'].sum()
+            
+            type_rows = ""
+            for order_type, row in type_mix.iterrows():
+                pct = (row['Value'] / total_val * 100) if total_val > 0 else 0
+                type_rows += f"<tr><td>{order_type}</td><td>${row['Value']:,.0f}</td><td>{int(row['Count'])}</td><td>{pct:.1f}%</td></tr>"
+            
+            order_type_html = f"""
+            <table class="data-table">
+                <thead><tr><th>Order Type</th><th>Value</th><th>Orders</th><th>% of Total</th></tr></thead>
+                <tbody>{type_rows}</tbody>
+            </table>
+            """
+    
+    # Pipeline
+    pipeline_html = ""
+    if not customer_deals.empty:
+        open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+        open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)]
+        if not open_deals.empty:
+            pipeline_value = open_deals['Amount'].sum()
+            pipeline_count = len(open_deals)
+            
+            deal_rows = ""
+            for _, deal in open_deals.iterrows():
+                close_date = deal['Close Date'].strftime('%Y-%m-%d') if pd.notna(deal['Close Date']) else 'TBD'
+                deal_rows += f"<tr><td>{deal['Deal Name']}</td><td>${deal['Amount']:,.0f}</td><td>{deal['Close Status']}</td><td>{close_date}</td></tr>"
+            
+            pipeline_html = f"""
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Pipeline Value</div>
+                    <div class="metric-value">${pipeline_value:,.0f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Open Deals</div>
+                    <div class="metric-value">{pipeline_count}</div>
+                </div>
+            </div>
+            <table class="data-table">
+                <thead><tr><th>Deal Name</th><th>Amount</th><th>Status</th><th>Close Date</th></tr></thead>
+                <tbody>{deal_rows}</tbody>
+            </table>
+            """
+    
+    # ===== Generate HTML =====
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>QBR Report - {customer_name}</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #ffffff;
+                color: #1e293b;
+                line-height: 1.6;
+                padding: 40px;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #0891b2 100%);
+                color: white;
+                padding: 40px;
+                border-radius: 16px;
+                margin-bottom: 40px;
+            }}
+            
+            .header h1 {{
+                font-size: 2.5rem;
+                font-weight: 700;
+                margin-bottom: 8px;
+            }}
+            
+            .header .subtitle {{
+                font-size: 1rem;
+                opacity: 0.9;
+            }}
+            
+            .section {{
+                margin-bottom: 40px;
+                page-break-inside: avoid;
+            }}
+            
+            .section-title {{
+                font-size: 1.4rem;
+                font-weight: 600;
+                color: #1e40af;
+                border-bottom: 3px solid #3b82f6;
+                padding-bottom: 10px;
+                margin-bottom: 20px;
+            }}
+            
+            .metric-row {{
+                display: flex;
+                gap: 20px;
+                margin-bottom: 20px;
+                flex-wrap: wrap;
+            }}
+            
+            .metric-card {{
+                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 20px 30px;
+                min-width: 180px;
+                flex: 1;
+            }}
+            
+            .metric-label {{
+                font-size: 0.85rem;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 5px;
+            }}
+            
+            .metric-value {{
+                font-size: 1.8rem;
+                font-weight: 700;
+                color: #1e293b;
+            }}
+            
+            .metric-value.success {{
+                color: #059669;
+            }}
+            
+            .metric-value.warning {{
+                color: #d97706;
+            }}
+            
+            .data-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 15px;
+                font-size: 0.9rem;
+            }}
+            
+            .data-table th {{
+                background: #1e40af;
+                color: white;
+                padding: 12px 16px;
+                text-align: left;
+                font-weight: 600;
+            }}
+            
+            .data-table td {{
+                padding: 12px 16px;
+                border-bottom: 1px solid #e2e8f0;
+            }}
+            
+            .data-table tr:nth-child(even) {{
+                background: #f8fafc;
+            }}
+            
+            .data-table tr:hover {{
+                background: #eff6ff;
+            }}
+            
+            .highlight-box {{
+                background: #eff6ff;
+                border-left: 4px solid #3b82f6;
+                padding: 15px 20px;
+                border-radius: 0 8px 8px 0;
+                margin: 15px 0;
+            }}
+            
+            .footer {{
+                margin-top: 60px;
+                padding-top: 20px;
+                border-top: 1px solid #e2e8f0;
+                text-align: center;
+                color: #64748b;
+                font-size: 0.85rem;
+            }}
+            
+            @media print {{
+                body {{
+                    padding: 20px;
+                }}
+                .header {{
+                    -webkit-print-color-adjust: exact;
+                    print-color-adjust: exact;
+                }}
+                .section {{
+                    page-break-inside: avoid;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>📋 Quarterly Business Review</h1>
+            <div class="subtitle">{customer_name} &nbsp;|&nbsp; Sales Rep: {rep_name} &nbsp;|&nbsp; {generated_date}</div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">📦 Current Pending Orders</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Pending Orders</div>
+                    <div class="metric-value">{pending_count}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Pending Value</div>
+                    <div class="metric-value">${pending_value:,.0f}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">💳 Open Invoices</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Open Invoices</div>
+                    <div class="metric-value">{open_invoice_count}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Outstanding Balance</div>
+                    <div class="metric-value {'warning' if open_invoice_value > 0 else ''}">${open_invoice_value:,.0f}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">💰 Revenue History</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Lifetime Revenue</div>
+                    <div class="metric-value success">${total_revenue:,.0f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total Invoices</div>
+                    <div class="metric-value">{total_invoices}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Avg Invoice Size</div>
+                    <div class="metric-value">${avg_invoice:,.0f}</div>
+                </div>
+            </div>
+            {yearly_html}
+        </div>
+        
+        <div class="section">
+            <div class="section-title">⏱️ On-Time Performance</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">On-Time Rate</div>
+                    <div class="metric-value {'success' if ot_rate >= 90 else 'warning' if ot_rate >= 70 else ''}">{ot_rate:.1f}%</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Avg Days Variance</div>
+                    <div class="metric-value">{avg_variance:.1f} days</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">📅 Order Cadence</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Avg Days Between Orders</div>
+                    <div class="metric-value">{avg_cadence:.0f} days</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Last Order Date</div>
+                    <div class="metric-value" style="font-size: 1.2rem;">{last_order}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">📊 Order Type Mix</div>
+            {order_type_html if order_type_html else '<p style="color: #64748b;">No order type data available.</p>'}
+        </div>
+        
+        <div class="section">
+            <div class="section-title">🎯 Active Pipeline</div>
+            {pipeline_html if pipeline_html else '<p style="color: #64748b;">No active pipeline deals.</p>'}
+        </div>
+        
+        <div class="footer">
+            <p>Generated by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
+            <p style="margin-top: 5px;">Confidential - For Internal Use Only</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 
 
 # ========== DATA LOADING ==========
@@ -886,39 +1286,60 @@ def render_yearly_planning_2026():
         /* ===== DROPDOWNS / SELECTBOX ===== */
         div[data-baseweb="select"] > div {
             background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
-            border: 1px solid #3b82f6 !important;
-            border-radius: 8px !important;
+            border: 2px solid #3b82f6 !important;
+            border-radius: 10px !important;
             color: #f1f5f9 !important;
+            padding: 2px 8px !important;
+            min-height: 50px !important;
         }
         div[data-baseweb="select"] > div:hover {
             border-color: #60a5fa !important;
-            box-shadow: 0 0 10px rgba(59, 130, 246, 0.3) !important;
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.4) !important;
+            transform: translateY(-1px);
         }
         div[data-baseweb="select"] span {
             color: #f1f5f9 !important;
-            font-weight: 500 !important;
+            font-weight: 600 !important;
+            font-size: 1rem !important;
+        }
+        /* Dropdown arrow */
+        div[data-baseweb="select"] svg {
+            fill: #3b82f6 !important;
         }
         /* Dropdown menu */
         div[data-baseweb="popover"] {
             background: #1e293b !important;
-            border: 1px solid #3b82f6 !important;
-            border-radius: 8px !important;
+            border: 2px solid #3b82f6 !important;
+            border-radius: 10px !important;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5) !important;
+        }
+        div[data-baseweb="popover"] ul {
+            background: #1e293b !important;
+            max-height: 400px !important;
         }
         div[data-baseweb="popover"] li {
             color: #f1f5f9 !important;
             background: transparent !important;
+            padding: 12px 16px !important;
+            font-size: 0.95rem !important;
+            border-bottom: 1px solid #334155 !important;
         }
         div[data-baseweb="popover"] li:hover {
-            background: #3b82f6 !important;
+            background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%) !important;
+            color: #ffffff !important;
+        }
+        div[data-baseweb="popover"] li[aria-selected="true"] {
+            background: #1e40af !important;
             color: #ffffff !important;
         }
         /* Input labels */
         .stSelectbox label {
             color: #94a3b8 !important;
-            font-weight: 600 !important;
-            font-size: 0.9rem !important;
+            font-weight: 700 !important;
+            font-size: 0.85rem !important;
             text-transform: uppercase !important;
-            letter-spacing: 0.5px !important;
+            letter-spacing: 1px !important;
+            margin-bottom: 8px !important;
         }
         
         /* ===== METRICS ===== */
@@ -935,6 +1356,39 @@ def render_yearly_planning_2026():
             color: #f1f5f9 !important;
         }
         
+        /* ===== BUTTONS ===== */
+        .stButton > button {
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 10px !important;
+            padding: 12px 24px !important;
+            font-weight: 600 !important;
+            font-size: 1rem !important;
+            transition: all 0.3s ease !important;
+        }
+        .stButton > button:hover {
+            background: linear-gradient(135deg, #1d4ed8 0%, #60a5fa 100%) !important;
+            box-shadow: 0 5px 20px rgba(59, 130, 246, 0.4) !important;
+            transform: translateY(-2px) !important;
+        }
+        
+        /* ===== DOWNLOAD BUTTON ===== */
+        .stDownloadButton > button {
+            background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 10px !important;
+            padding: 12px 24px !important;
+            font-weight: 600 !important;
+            font-size: 1rem !important;
+        }
+        .stDownloadButton > button:hover {
+            background: linear-gradient(135deg, #047857 0%, #34d399 100%) !important;
+            box-shadow: 0 5px 20px rgba(16, 185, 129, 0.4) !important;
+            transform: translateY(-2px) !important;
+        }
+        
         /* ===== DATAFRAMES ===== */
         .stDataFrame {
             border-radius: 8px !important;
@@ -946,6 +1400,14 @@ def render_yearly_planning_2026():
             color: #f1f5f9 !important;
             border-bottom: 2px solid #3b82f6 !important;
             padding-bottom: 0.5rem !important;
+        }
+        
+        /* ===== RADIO BUTTONS ===== */
+        .stRadio > div {
+            background: transparent !important;
+        }
+        .stRadio label {
+            color: #f1f5f9 !important;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -975,7 +1437,7 @@ def render_yearly_planning_2026():
     
     with col1:
         selected_rep = st.selectbox(
-            "**Sales Rep:**", 
+            "SALES REP", 
             rep_list, 
             key="qbr_rep_selector"
         )
@@ -989,7 +1451,7 @@ def render_yearly_planning_2026():
             return
         
         selected_customer = st.selectbox(
-            "**Customer:**", 
+            f"CUSTOMER ({len(customer_list)} accounts)", 
             customer_list, 
             key="qbr_customer_selector"
         )
@@ -1059,20 +1521,50 @@ def render_yearly_planning_2026():
                     first_company = rep_deals['Company Name'].iloc[0]
                     st.write(f"**First Company Name repr:** `{repr(first_company)}`")
     
-    # Main content - styled header
-    st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
-            padding: 1.5rem 2rem;
-            border-radius: 12px;
-            margin-bottom: 1rem;
-        ">
-            <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+    # Main content - styled header with Generate button
+    col_header, col_button = st.columns([3, 1])
+    
+    with col_header:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+                padding: 1.5rem 2rem;
+                border-radius: 12px;
+                margin-bottom: 1rem;
+            ">
+                <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                    Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col_button:
+        st.markdown("<div style='height: 20px;'></div>", unsafe_allow_html=True)  # Spacer
+        
+        # Generate HTML report
+        html_report = generate_qbr_html(
+            selected_customer, 
+            selected_rep, 
+            customer_orders, 
+            customer_invoices, 
+            customer_deals
+        )
+        
+        # Download button for HTML report
+        st.download_button(
+            label="📄 Download Report",
+            data=html_report,
+            file_name=f"QBR_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+            mime="text/html",
+            help="Download a presentation-ready HTML report. Open in browser and print to PDF."
+        )
+        
+        st.markdown("""
+            <p style="color: #64748b; font-size: 0.75rem; margin-top: 5px;">
+                💡 Open in browser → Print → Save as PDF
             </p>
-        </div>
-    """, unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
     
     st.markdown("")
     
