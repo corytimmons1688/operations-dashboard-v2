@@ -122,6 +122,10 @@ def load_qbr_data():
         
         sales_orders_df = sales_orders_df.rename(columns=rename_dict)
         
+        # CRITICAL: Remove duplicate columns
+        if sales_orders_df.columns.duplicated().any():
+            sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
+        
         # Clean data
         sales_orders_df['Amount'] = sales_orders_df['Amount'].apply(clean_numeric)
         sales_orders_df['Order Start Date'] = pd.to_datetime(sales_orders_df['Order Start Date'], errors='coerce')
@@ -161,6 +165,10 @@ def load_qbr_data():
         if len(col_names) > 20: rename_dict[col_names[20]] = 'Rep Master'
         
         invoices_df = invoices_df.rename(columns=rename_dict)
+        
+        # CRITICAL: Remove duplicate columns
+        if invoices_df.columns.duplicated().any():
+            invoices_df = invoices_df.loc[:, ~invoices_df.columns.duplicated()]
         
         # Clean data
         invoices_df['Amount'] = invoices_df['Amount'].apply(clean_numeric)
@@ -207,6 +215,10 @@ def load_qbr_data():
         
         deals_df = deals_df.rename(columns=rename_dict)
         
+        # CRITICAL: Remove duplicate columns
+        if deals_df.columns.duplicated().any():
+            deals_df = deals_df.loc[:, ~deals_df.columns.duplicated()]
+        
         # Create Deal Owner by combining First Name + Last Name
         if 'Deal Owner First Name' in deals_df.columns and 'Deal Owner Last Name' in deals_df.columns:
             deals_df['Deal Owner'] = (
@@ -216,9 +228,14 @@ def load_qbr_data():
         
         # Clean data
         deals_df['Amount'] = deals_df['Amount'].apply(clean_numeric)
-        deals_df['Probability Rev'] = deals_df['Probability Rev'].apply(clean_numeric)
+        if 'Probability Rev' in deals_df.columns:
+            deals_df['Probability Rev'] = deals_df['Probability Rev'].apply(clean_numeric)
+        else:
+            deals_df['Probability Rev'] = deals_df['Amount']
+        
         deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
-        deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
+        if 'Pending Approval Date' in deals_df.columns:
+            deals_df['Pending Approval Date'] = pd.to_datetime(deals_df['Pending Approval Date'], errors='coerce')
         
         # Clean text fields
         if 'Deal Owner' in deals_df.columns:
