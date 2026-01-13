@@ -96,11 +96,7 @@ except:
     pass  # Page config already set by parent app
 
 # Custom CSS for styling - DRAMATIC DARK MODE UI (Cleaned up - removed problematic selectors)
-# IMPORTANT: This is wrapped in a function to prevent execution at import time
-# which would break the sidebar navigation in app.py
-def inject_q1_css():
-    """Inject custom CSS - must be called from within main() or render function"""
-    st.markdown("""
+st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
@@ -4997,9 +4993,6 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
 
 # Main app
 def main():
-    
-    # Inject CSS styling (moved here from module-level to prevent breaking app.py navigation)
-    inject_q1_css()
     
     # Initialize session state for data load timestamp
     if 'data_load_time' not in st.session_state:
