@@ -95,9 +95,14 @@ def create_monthly_revenue_chart(customer_invoices):
             marker=dict(color='#3b82f6'),
             text=[f'${x:,.0f}' for x in monthly['Amount']],
             textposition='outside',
-            textfont=dict(size=10)
+            textfont=dict(size=10),
+            cliponaxis=False
         )
     ])
+    
+    # Calculate y-axis max to give room for labels
+    max_val = monthly['Amount'].max()
+    y_max = max_val * 1.15  # Add 15% headroom
     
     fig.update_layout(
         title=dict(text='Monthly Revenue Trend', font=dict(size=16, color='#1e293b')),
@@ -107,8 +112,8 @@ def create_monthly_revenue_chart(customer_invoices):
         paper_bgcolor='white',
         font=dict(color='#1e293b', size=11),
         xaxis=dict(tickangle=-45, gridcolor='#e2e8f0'),
-        yaxis=dict(gridcolor='#e2e8f0', tickformat='$,.0f'),
-        margin=dict(t=50, b=80, l=80, r=40),
+        yaxis=dict(gridcolor='#e2e8f0', tickformat='$,.0f', range=[0, y_max]),
+        margin=dict(t=60, b=80, l=80, r=40),
         showlegend=False
     )
     
@@ -238,9 +243,14 @@ def create_pipeline_chart(customer_deals):
             marker=dict(color=bar_colors),
             text=[f'${x:,.0f}' for x in status_data['Amount']],
             textposition='outside',
-            textfont=dict(size=11)
+            textfont=dict(size=11),
+            cliponaxis=False
         )
     ])
+    
+    # Calculate y-axis max to give room for labels
+    max_val = status_data['Amount'].max()
+    y_max = max_val * 1.15  # Add 15% headroom
     
     fig.update_layout(
         title=dict(text='Pipeline by Stage', font=dict(size=16, color='#1e293b')),
@@ -250,8 +260,8 @@ def create_pipeline_chart(customer_deals):
         paper_bgcolor='white',
         font=dict(color='#1e293b', size=11),
         xaxis=dict(gridcolor='#e2e8f0'),
-        yaxis=dict(gridcolor='#e2e8f0', tickformat='$,.0f'),
-        margin=dict(t=50, b=50, l=80, r=40),
+        yaxis=dict(gridcolor='#e2e8f0', tickformat='$,.0f', range=[0, y_max]),
+        margin=dict(t=60, b=50, l=80, r=40),
         showlegend=False
     )
     
