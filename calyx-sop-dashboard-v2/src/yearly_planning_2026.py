@@ -18,6 +18,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import base64
 import io
+import re
 
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
@@ -832,6 +833,222 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         
         <div class="footer">
             <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
+            <p style="margin-top: 5px;">Thank you for your partnership!</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+
+def generate_combined_qbr_html(customers_data, rep_name):
+    """
+    Generate a combined HTML report for multiple customers.
+    customers_data is a list of tuples: (customer_name, customer_orders, customer_invoices, customer_deals)
+    """
+    generated_date = datetime.now().strftime('%B %d, %Y')
+    
+    # Start with the common HTML header and styles
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Account Summaries - {rep_name}</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #ffffff;
+                color: #1e293b;
+                line-height: 1.6;
+                padding: 40px;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #0891b2 100%);
+                color: white;
+                padding: 40px;
+                border-radius: 16px;
+                margin-bottom: 40px;
+            }}
+            
+            .header h1 {{
+                font-size: 2.5rem;
+                font-weight: 700;
+                margin-bottom: 8px;
+            }}
+            
+            .header .subtitle {{
+                font-size: 1rem;
+                opacity: 0.9;
+            }}
+            
+            .section {{
+                margin-bottom: 40px;
+                page-break-inside: avoid;
+            }}
+            
+            .section-title {{
+                font-size: 1.4rem;
+                font-weight: 600;
+                color: #1e40af;
+                border-bottom: 3px solid #3b82f6;
+                padding-bottom: 10px;
+                margin-bottom: 20px;
+            }}
+            
+            .metric-row {{
+                display: flex;
+                gap: 20px;
+                margin-bottom: 20px;
+                flex-wrap: wrap;
+            }}
+            
+            .metric-card {{
+                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 20px 30px;
+                min-width: 180px;
+                flex: 1;
+            }}
+            
+            .metric-label {{
+                font-size: 0.85rem;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 5px;
+            }}
+            
+            .metric-value {{
+                font-size: 1.8rem;
+                font-weight: 700;
+                color: #1e293b;
+            }}
+            
+            .metric-value.success {{
+                color: #059669;
+            }}
+            
+            .metric-value.warning {{
+                color: #d97706;
+            }}
+            
+            .data-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 15px;
+                font-size: 0.9rem;
+            }}
+            
+            .data-table th {{
+                background: #1e40af;
+                color: white;
+                padding: 12px 16px;
+                text-align: left;
+                font-weight: 600;
+            }}
+            
+            .data-table td {{
+                padding: 12px 16px;
+                border-bottom: 1px solid #e2e8f0;
+            }}
+            
+            .data-table tr:nth-child(even) {{
+                background: #f8fafc;
+            }}
+            
+            .data-table tr:hover {{
+                background: #eff6ff;
+            }}
+            
+            .chart-container {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 15px;
+                margin: 20px 0;
+                text-align: center;
+            }}
+            
+            .chart-container img {{
+                max-width: 100%;
+                height: auto;
+                border-radius: 8px;
+            }}
+            
+            .customer-divider {{
+                page-break-before: always;
+                margin-top: 60px;
+                padding-top: 40px;
+            }}
+            
+            .footer {{
+                margin-top: 60px;
+                padding-top: 20px;
+                border-top: 1px solid #e2e8f0;
+                text-align: center;
+                color: #64748b;
+                font-size: 0.85rem;
+            }}
+            
+            @media print {{
+                body {{
+                    padding: 20px;
+                }}
+                .header {{
+                    -webkit-print-color-adjust: exact;
+                    print-color-adjust: exact;
+                }}
+                .section {{
+                    page-break-inside: avoid;
+                }}
+                .chart-container {{
+                    page-break-inside: avoid;
+                }}
+                .customer-divider {{
+                    page-break-before: always;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+    """
+    
+    # Generate content for each customer
+    for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(customers_data):
+        # Add page break divider for customers after the first
+        if idx > 0:
+            html += '<div class="customer-divider"></div>'
+        
+        # Generate this customer's content by calling the single-customer function
+        # But we need to extract just the body content, so let's build it inline
+        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals)
+        
+        # Extract just the body content (between <body> and </body>)
+        body_match = re.search(r'<body>(.*?)</body>', single_html, re.DOTALL)
+        if body_match:
+            body_content = body_match.group(1)
+            # Remove the footer from individual reports (we'll add one at the end)
+            body_content = re.sub(r'<div class="footer">.*?</div>', '', body_content, flags=re.DOTALL)
+            html += body_content
+    
+    # Add combined footer
+    customer_names = ", ".join([c[0] for c in customers_data])
+    html += f"""
+        <div class="footer">
+            <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
+            <p style="margin-top: 5px;">Accounts: {customer_names}</p>
             <p style="margin-top: 5px;">Thank you for your partnership!</p>
         </div>
     </body>
@@ -1852,7 +2069,7 @@ def render_yearly_planning_2026():
             key="qbr_rep_selector"
         )
     
-    # Customer selector (filtered by rep) - MULTI-SELECT
+    # Customer selector (filtered by rep) - MULTI-SELECT with NO default
     customer_list = get_customers_for_rep(selected_rep, sales_orders_df, invoices_df)
     
     with col2:
@@ -1863,33 +2080,119 @@ def render_yearly_planning_2026():
         selected_customers = st.multiselect(
             f"CUSTOMERS ({len(customer_list)} accounts)", 
             customer_list,
-            default=[customer_list[0]] if customer_list else [],
+            placeholder="Select customers...",
             key="qbr_customer_selector"
         )
     
+    # Empty state - show helpful message
     if not selected_customers:
-        st.info("Please select at least one customer.")
+        st.markdown("---")
+        st.markdown("""
+            <div style="
+                text-align: center;
+                padding: 3rem;
+                color: #64748b;
+            ">
+                <h3 style="color: #94a3b8; margin-bottom: 1rem;">👆 Select one or more customers above</h3>
+                <p>Choose customers from the dropdown to view their QBR data and generate reports.</p>
+                <p style="margin-top: 0.5rem; font-size: 0.9rem;">You can select multiple customers to compare or generate a combined report.</p>
+            </div>
+        """, unsafe_allow_html=True)
         return
     
     st.markdown("---")
     
-    # Loop through each selected customer
-    for idx, selected_customer in enumerate(selected_customers):
-        # Filter data for selected customer
+    # Prepare data for all selected customers
+    all_customers_data = []
+    for customer_name in selected_customers:
         customer_orders = sales_orders_df[
-            (sales_orders_df['Corrected Customer Name'] == selected_customer) &
+            (sales_orders_df['Corrected Customer Name'] == customer_name) &
             (sales_orders_df['Rep Master'] == selected_rep)
         ].copy() if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns else pd.DataFrame()
         
         customer_invoices = invoices_df[
-            (invoices_df['Corrected Customer'] == selected_customer) &
+            (invoices_df['Corrected Customer'] == customer_name) &
             (invoices_df['Rep Master'] == selected_rep)
         ].copy() if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns else pd.DataFrame()
         
-        # Direct match for HubSpot deals using Company Name
-        customer_deals = get_customer_deals(selected_customer, selected_rep, deals_df)
+        customer_deals = get_customer_deals(customer_name, selected_rep, deals_df)
         
-        # Main content - styled header with Generate button
+        all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals))
+    
+    # Download buttons section
+    st.markdown("""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #10b981;
+            margin-bottom: 1rem;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">📥 Download Reports</h3>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Create download buttons
+    if len(selected_customers) == 1:
+        # Single customer - just one download button
+        customer_name, customer_orders, customer_invoices, customer_deals = all_customers_data[0]
+        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
+        
+        col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
+        with col_btn:
+            st.download_button(
+                label=f"📄 Download {customer_name}",
+                data=html_report,
+                file_name=f"Account_Summary_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+                key="download_single"
+            )
+    else:
+        # Multiple customers - show combined + individual buttons
+        num_customers = len(selected_customers)
+        
+        # Generate combined report
+        combined_html = generate_combined_qbr_html(all_customers_data, selected_rep)
+        
+        # Combined download button (prominent)
+        col_spacer1, col_combined, col_spacer2 = st.columns([1.5, 2, 1.5])
+        with col_combined:
+            st.download_button(
+                label=f"📦 Download Combined Report ({num_customers} customers)",
+                data=combined_html,
+                file_name=f"Account_Summaries_{selected_rep.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+                key="download_combined"
+            )
+        
+        # Individual download buttons in expandable section
+        with st.expander(f"📄 Download Individual Reports ({num_customers})"):
+            cols = st.columns(min(3, num_customers))
+            for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(all_customers_data):
+                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
+                with cols[idx % 3]:
+                    st.download_button(
+                        label=f"📄 {customer_name[:20]}{'...' if len(customer_name) > 20 else ''}",
+                        data=html_report,
+                        file_name=f"Account_Summary_{customer_name.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                        mime="text/html",
+                        use_container_width=True,
+                        key=f"download_individual_{idx}"
+                    )
+    
+    # Chart status
+    if not KALEIDO_AVAILABLE:
+        st.caption(f"📊 Charts: Interactive mode")
+    else:
+        st.caption("📊 Charts: Static images")
+    
+    st.markdown("---")
+    
+    # Display each customer's QBR sections
+    for idx, (selected_customer, customer_orders, customer_invoices, customer_deals) in enumerate(all_customers_data):
+        # Customer header
         st.markdown(f"""
             <div style="
                 background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
@@ -1903,37 +2206,6 @@ def render_yearly_planning_2026():
                 </p>
             </div>
         """, unsafe_allow_html=True)
-        
-        # Generate HTML report button - centered
-        col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
-        with col_btn:
-            html_report = generate_qbr_html(
-                selected_customer, 
-                selected_rep, 
-                customer_orders, 
-                customer_invoices, 
-                customer_deals
-            )
-            
-            st.download_button(
-                label="📄 Download Report (HTML)",
-                data=html_report,
-                file_name=f"Account_Summary_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
-                mime="text/html",
-                use_container_width=True,
-                key=f"download_btn_{idx}"
-            )
-            
-            # Show chart status (only on first customer)
-            if idx == 0:
-                if not KALEIDO_AVAILABLE:
-                    st.caption(f"📊 Charts: Interactive mode")
-                    if KALEIDO_ERROR:
-                        st.caption(f"({KALEIDO_ERROR[:50]}...)")
-                else:
-                    st.caption("📊 Charts: Static images")
-        
-        st.markdown("")
         
         # Render each section
         render_pending_orders_section(customer_orders)
@@ -1956,10 +2228,16 @@ def render_yearly_planning_2026():
         
         render_pipeline_section(customer_deals, selected_customer)
         
-        # Add separator between customers if not the last one
-        if idx < len(selected_customers) - 1:
-            st.markdown("---")
-            st.markdown("---")
+        # Add big separator between customers if not the last one
+        if idx < len(all_customers_data) - 1:
+            st.markdown("")
+            st.markdown("""
+                <div style="
+                    border-top: 4px solid #3b82f6;
+                    margin: 2rem 0;
+                    padding-top: 2rem;
+                "></div>
+            """, unsafe_allow_html=True)
 
 
 # ========== ENTRY POINT ==========
