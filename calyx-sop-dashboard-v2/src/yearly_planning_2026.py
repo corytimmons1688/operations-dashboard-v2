@@ -849,9 +849,6 @@ def generate_combined_qbr_html(customers_data, rep_name):
     """
     generated_date = datetime.now().strftime('%B %d, %Y')
     
-    # Debug: log how many customers we're processing
-    print(f"generate_combined_qbr_html called with {len(customers_data)} customers: {[c[0] for c in customers_data]}")
-    
     # Start with the common HTML header and styles
     html = f"""
     <!DOCTYPE html>
@@ -1030,28 +1027,20 @@ def generate_combined_qbr_html(customers_data, rep_name):
     
     # Generate content for each customer
     for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(customers_data):
-        print(f"Processing customer {idx+1}/{len(customers_data)}: {customer_name}")
-        
         # Add page break divider for customers after the first
         if idx > 0:
             html += '<div class="customer-divider"></div>'
         
         # Generate this customer's content by calling the single-customer function
-        # But we need to extract just the body content, so let's build it inline
         single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals)
-        
-        print(f"  Generated HTML length: {len(single_html) if single_html else 0}")
         
         # Extract just the body content (between <body> and </body>)
         body_match = re.search(r'<body>(.*?)</body>', single_html, re.DOTALL)
         if body_match:
             body_content = body_match.group(1)
-            print(f"  Extracted body length: {len(body_content)}")
             # Remove the footer from individual reports (we'll add one at the end)
             body_content = re.sub(r'<div class="footer">.*?</div>', '', body_content, flags=re.DOTALL)
             html += body_content
-        else:
-            print(f"  WARNING: No body match found for {customer_name}")
     
     # Add combined footer
     customer_names = ", ".join([c[0] for c in customers_data])
@@ -1059,6 +1048,417 @@ def generate_combined_qbr_html(customers_data, rep_name):
         <div class="footer">
             <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
             <p style="margin-top: 5px;">Accounts: {customer_names}</p>
+            <p style="margin-top: 5px;">Thank you for your partnership!</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+
+def generate_combined_summary_html(customers_data, rep_name):
+    """
+    Generate a combined summary HTML report that mirrors the Combined View tab.
+    Shows aggregated metrics across all customers.
+    """
+    generated_date = datetime.now().strftime('%B %d, %Y')
+    customer_names = [c[0] for c in customers_data]
+    num_customers = len(customers_data)
+    
+    # Aggregate all data
+    all_orders = pd.concat([data[1] for data in customers_data if not data[1].empty], ignore_index=True) if any(not data[1].empty for data in customers_data) else pd.DataFrame()
+    all_invoices = pd.concat([data[2] for data in customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in customers_data) else pd.DataFrame()
+    all_deals = pd.concat([data[3] for data in customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in customers_data) else pd.DataFrame()
+    
+    # Calculate combined metrics
+    pending_statuses = ['PA with Date', 'PA No Date', 'PA Old (>2 Weeks)', 
+                        'PF with Date (Ext)', 'PF with Date (Int)', 
+                        'PF No Date (Ext)', 'PF No Date (Int)']
+    
+    # Pending Orders
+    if not all_orders.empty and 'Updated Status' in all_orders.columns:
+        pending_orders = all_orders[all_orders['Updated Status'].isin(pending_statuses)]
+        total_pending = pending_orders['Amount'].sum() if not pending_orders.empty else 0
+        pending_count = len(pending_orders)
+    else:
+        total_pending = 0
+        pending_count = 0
+        pending_orders = pd.DataFrame()
+    
+    # Open Invoices
+    if not all_invoices.empty and 'Status' in all_invoices.columns:
+        open_invoices = all_invoices[all_invoices['Status'] == 'Open']
+        total_outstanding = open_invoices['Amount Remaining'].sum() if not open_invoices.empty and 'Amount Remaining' in open_invoices.columns else 0
+        open_count = len(open_invoices)
+    else:
+        total_outstanding = 0
+        open_count = 0
+        open_invoices = pd.DataFrame()
+    
+    # Total Revenue
+    total_revenue = all_invoices['Amount'].sum() if not all_invoices.empty and 'Amount' in all_invoices.columns else 0
+    invoice_count = len(all_invoices)
+    
+    # Pipeline
+    if not all_deals.empty and 'Close Status' in all_deals.columns:
+        open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+        open_deals = all_deals[all_deals['Close Status'].isin(open_statuses)]
+        total_pipeline = open_deals['Amount'].sum() if not open_deals.empty else 0
+        deal_count = len(open_deals)
+    else:
+        total_pipeline = 0
+        deal_count = 0
+        open_deals = pd.DataFrame()
+    
+    # Build customer breakdown rows
+    breakdown_rows = ""
+    for customer_name, customer_orders, customer_invoices, customer_deals in customers_data:
+        if not customer_orders.empty and 'Updated Status' in customer_orders.columns:
+            cust_pending = customer_orders[customer_orders['Updated Status'].isin(pending_statuses)]
+            cust_pending_val = cust_pending['Amount'].sum() if not cust_pending.empty else 0
+        else:
+            cust_pending_val = 0
+        
+        if not customer_invoices.empty and 'Status' in customer_invoices.columns:
+            cust_open = customer_invoices[customer_invoices['Status'] == 'Open']
+            cust_outstanding = cust_open['Amount Remaining'].sum() if not cust_open.empty and 'Amount Remaining' in cust_open.columns else 0
+        else:
+            cust_outstanding = 0
+        
+        cust_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty and 'Amount' in customer_invoices.columns else 0
+        
+        if not customer_deals.empty and 'Close Status' in customer_deals.columns:
+            cust_open_deals = customer_deals[customer_deals['Close Status'].isin(['Expect', 'Commit', 'Best Case', 'Opportunity'])]
+            cust_pipeline = cust_open_deals['Amount'].sum() if not cust_open_deals.empty else 0
+        else:
+            cust_pipeline = 0
+        
+        breakdown_rows += f"""
+            <tr>
+                <td>{customer_name}</td>
+                <td>${cust_pending_val:,.0f}</td>
+                <td>${cust_outstanding:,.0f}</td>
+                <td>${cust_revenue:,.0f}</td>
+                <td>${cust_pipeline:,.0f}</td>
+            </tr>
+        """
+    
+    # Build pending orders table
+    pending_orders_html = ""
+    if not pending_orders.empty:
+        status_summary = pending_orders.groupby('Updated Status').agg({'Amount': ['sum', 'count']}).round(0)
+        status_summary.columns = ['Value', 'Count']
+        status_summary = status_summary.sort_values('Value', ascending=False)
+        
+        status_rows = ""
+        for status, row in status_summary.iterrows():
+            status_rows += f"<tr><td>{status}</td><td>${row['Value']:,.0f}</td><td>{int(row['Count'])}</td></tr>"
+        
+        pending_orders_html = f"""
+        <table class="data-table">
+            <thead><tr><th>Status</th><th>Value</th><th>Count</th></tr></thead>
+            <tbody>{status_rows}</tbody>
+        </table>
+        """
+    else:
+        pending_orders_html = "<p style='color: #64748b;'>No pending orders.</p>"
+    
+    # Build open invoices table with aging
+    open_invoices_html = ""
+    if not open_invoices.empty:
+        today = pd.Timestamp.now()
+        open_invoices = open_invoices.copy()
+        open_invoices['Days Overdue'] = (today - open_invoices['Due Date']).dt.days
+        
+        def aging_bucket(days):
+            if days <= 0: return "Current"
+            elif days <= 30: return "1-30 Days"
+            elif days <= 60: return "31-60 Days"
+            elif days <= 90: return "61-90 Days"
+            else: return "90+ Days"
+        
+        open_invoices['Aging'] = open_invoices['Days Overdue'].apply(aging_bucket)
+        aging_summary = open_invoices.groupby('Aging')['Amount Remaining'].sum()
+        
+        bucket_order = ["Current", "1-30 Days", "31-60 Days", "61-90 Days", "90+ Days"]
+        aging_rows = ""
+        for bucket in bucket_order:
+            if bucket in aging_summary.index:
+                amt = aging_summary[bucket]
+                style = ' style="color: #dc2626; font-weight: 600;"' if bucket == "90+ Days" else ""
+                aging_rows += f"<tr><td{style}>{bucket}</td><td{style}>${amt:,.0f}</td></tr>"
+        
+        open_invoices_html = f"""
+        <table class="data-table">
+            <thead><tr><th>Aging Bucket</th><th>Amount</th></tr></thead>
+            <tbody>{aging_rows}</tbody>
+        </table>
+        """
+    else:
+        open_invoices_html = "<p style='color: #64748b;'>No open invoices.</p>"
+    
+    # Build pipeline table
+    pipeline_html = ""
+    if not open_deals.empty:
+        status_summary = open_deals.groupby('Close Status').agg({'Amount': ['sum', 'count']}).round(0)
+        status_summary.columns = ['Value', 'Count']
+        
+        stage_order = ['Commit', 'Expect', 'Best Case', 'Opportunity']
+        pipeline_rows = ""
+        for stage in stage_order:
+            if stage in status_summary.index:
+                row = status_summary.loc[stage]
+                pipeline_rows += f"<tr><td>{stage}</td><td>${row['Value']:,.0f}</td><td>{int(row['Count'])}</td></tr>"
+        
+        pipeline_html = f"""
+        <table class="data-table">
+            <thead><tr><th>Stage</th><th>Value</th><th>Deals</th></tr></thead>
+            <tbody>{pipeline_rows}</tbody>
+        </table>
+        """
+    else:
+        pipeline_html = "<p style='color: #64748b;'>No pipeline deals.</p>"
+    
+    # Build the full HTML
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Combined Summary - {rep_name}</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #ffffff;
+                color: #1e293b;
+                line-height: 1.6;
+                padding: 40px;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%);
+                color: white;
+                padding: 40px;
+                border-radius: 16px;
+                margin-bottom: 40px;
+            }}
+            
+            .header h1 {{ font-size: 2.5rem; font-weight: 700; margin-bottom: 8px; }}
+            .header .subtitle {{ font-size: 1rem; opacity: 0.9; }}
+            
+            .section {{
+                margin-bottom: 40px;
+                page-break-inside: avoid;
+            }}
+            
+            .section-title {{
+                font-size: 1.4rem;
+                font-weight: 600;
+                color: #059669;
+                border-bottom: 3px solid #10b981;
+                padding-bottom: 10px;
+                margin-bottom: 20px;
+            }}
+            
+            .metric-row {{
+                display: flex;
+                gap: 20px;
+                margin-bottom: 20px;
+                flex-wrap: wrap;
+            }}
+            
+            .metric-card {{
+                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 20px 30px;
+                min-width: 180px;
+                flex: 1;
+            }}
+            
+            .metric-label {{
+                font-size: 0.85rem;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 5px;
+            }}
+            
+            .metric-value {{
+                font-size: 1.8rem;
+                font-weight: 700;
+                color: #1e293b;
+            }}
+            
+            .metric-value.success {{ color: #059669; }}
+            .metric-value.warning {{ color: #d97706; }}
+            
+            .metric-subtitle {{
+                font-size: 0.85rem;
+                color: #64748b;
+                margin-top: 4px;
+            }}
+            
+            .data-table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 15px;
+                font-size: 0.9rem;
+            }}
+            
+            .data-table th {{
+                background: #059669;
+                color: white;
+                padding: 12px 16px;
+                text-align: left;
+                font-weight: 600;
+            }}
+            
+            .data-table td {{
+                padding: 12px 16px;
+                border-bottom: 1px solid #e2e8f0;
+            }}
+            
+            .data-table tr:nth-child(even) {{ background: #f8fafc; }}
+            .data-table tr:hover {{ background: #ecfdf5; }}
+            
+            .customer-list {{
+                background: #f0fdf4;
+                border: 1px solid #bbf7d0;
+                border-radius: 8px;
+                padding: 15px 20px;
+                margin-bottom: 30px;
+            }}
+            
+            .customer-list-title {{
+                font-weight: 600;
+                color: #059669;
+                margin-bottom: 8px;
+            }}
+            
+            .footer {{
+                margin-top: 60px;
+                padding-top: 20px;
+                border-top: 1px solid #e2e8f0;
+                text-align: center;
+                color: #64748b;
+                font-size: 0.85rem;
+            }}
+            
+            @media print {{
+                body {{ padding: 20px; }}
+                .header {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+                .section {{ page-break-inside: avoid; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>📊 Combined Account Summary</h1>
+            <div class="subtitle">{num_customers} Customers &nbsp;|&nbsp; Account Manager: {rep_name} &nbsp;|&nbsp; {generated_date}</div>
+        </div>
+        
+        <div class="customer-list">
+            <div class="customer-list-title">Included Accounts:</div>
+            <div>{', '.join(customer_names)}</div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">📈 Combined Metrics</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Total Pending Orders</div>
+                    <div class="metric-value">${total_pending:,.0f}</div>
+                    <div class="metric-subtitle">{pending_count} orders</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total Outstanding</div>
+                    <div class="metric-value {'warning' if total_outstanding > 0 else ''}">${total_outstanding:,.0f}</div>
+                    <div class="metric-subtitle">{open_count} invoices</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total Purchases</div>
+                    <div class="metric-value success">${total_revenue:,.0f}</div>
+                    <div class="metric-subtitle">{invoice_count} invoices</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total Pipeline</div>
+                    <div class="metric-value">${total_pipeline:,.0f}</div>
+                    <div class="metric-subtitle">{deal_count} deals</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">👥 Customer Breakdown</div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Customer</th>
+                        <th>Pending Orders</th>
+                        <th>Outstanding</th>
+                        <th>Total Purchases</th>
+                        <th>Pipeline</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {breakdown_rows}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <div class="section-title">📦 Orders in Progress</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Active Orders</div>
+                    <div class="metric-value">{pending_count}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Order Value</div>
+                    <div class="metric-value">${total_pending:,.0f}</div>
+                </div>
+            </div>
+            {pending_orders_html}
+        </div>
+        
+        <div class="section">
+            <div class="section-title">💳 Account Balance</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Open Invoices</div>
+                    <div class="metric-value">{open_count}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Balance Due</div>
+                    <div class="metric-value {'warning' if total_outstanding > 0 else ''}">${total_outstanding:,.0f}</div>
+                </div>
+            </div>
+            {open_invoices_html}
+        </div>
+        
+        <div class="section">
+            <div class="section-title">🎯 Upcoming Orders</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Planned Orders</div>
+                    <div class="metric-value">{deal_count}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Pipeline Value</div>
+                    <div class="metric-value">${total_pipeline:,.0f}</div>
+                </div>
+            </div>
+            {pipeline_html}
+        </div>
+        
+        <div class="footer">
+            <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
             <p style="margin-top: 5px;">Thank you for your partnership!</p>
         </div>
     </body>
@@ -2125,9 +2525,6 @@ def render_yearly_planning_2026():
         
         all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals))
     
-    # DEBUG: Show what we have
-    st.caption(f"📊 Loaded data for {len(all_customers_data)} customers")
-    
     # Download buttons section
     st.markdown("""
         <div style="
@@ -2158,27 +2555,40 @@ def render_yearly_planning_2026():
                 key="download_single"
             )
     else:
-        # Multiple customers - show combined + individual buttons
+        # Multiple customers - show combined summary + all reports + individual buttons
         num_customers = len(selected_customers)
         
-        # Generate combined report
-        st.caption(f"📄 Combined report will include: {', '.join([c[0] for c in all_customers_data])}")
-        combined_html = generate_combined_qbr_html(all_customers_data, selected_rep)
+        # Generate reports
+        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep)
+        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep)
         
-        # Combined download button (prominent)
-        col_spacer1, col_combined, col_spacer2 = st.columns([1.5, 2, 1.5])
-        with col_combined:
+        # Two main download buttons side by side
+        col1, col2 = st.columns(2)
+        
+        with col1:
             st.download_button(
-                label=f"📦 Download Combined Report ({num_customers} customers)",
-                data=combined_html,
-                file_name=f"Account_Summaries_{selected_rep.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                label=f"📊 Combined Summary ({num_customers} customers)",
+                data=combined_summary_html,
+                file_name=f"Combined_Summary_{selected_rep.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
                 mime="text/html",
                 use_container_width=True,
-                key="download_combined"
+                key="download_combined_summary"
             )
+            st.caption("Aggregated metrics & breakdown table")
+        
+        with col2:
+            st.download_button(
+                label=f"📑 All Individual Reports ({num_customers})",
+                data=all_reports_html,
+                file_name=f"All_Reports_{selected_rep.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+                key="download_all_reports"
+            )
+            st.caption("Each customer's full report, separated")
         
         # Individual download buttons in expandable section
-        with st.expander(f"📄 Download Individual Reports ({num_customers})"):
+        with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
             for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(all_customers_data):
                 html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
