@@ -1071,6 +1071,37 @@ def generate_combined_summary_html(customers_data, rep_name):
     all_invoices = pd.concat([data[2] for data in customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in customers_data) else pd.DataFrame()
     all_deals = pd.concat([data[3] for data in customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in customers_data) else pd.DataFrame()
     
+    # ===== Generate Charts =====
+    charts_html = {}
+    
+    def embed_chart(fig, chart_key):
+        """Try to embed chart as image, fall back to interactive HTML"""
+        if fig is None:
+            return
+        
+        # First try static image (best for PDF)
+        img_b64 = fig_to_base64(fig)
+        if img_b64:
+            charts_html[chart_key] = f'<div class="chart-container"><img src="data:image/png;base64,{img_b64}" style="max-width:100%;"></div>'
+            return
+        
+        # Fall back to interactive HTML embed
+        html_embed = fig_to_html_embed(fig)
+        if html_embed:
+            charts_html[chart_key] = f'<div class="chart-container">{html_embed}</div>'
+    
+    # Monthly Revenue Chart (from aggregated invoices)
+    revenue_fig = create_monthly_revenue_chart(all_invoices)
+    embed_chart(revenue_fig, 'revenue')
+    
+    # Order Type Mix Chart (from aggregated orders)
+    ordertype_fig = create_order_type_chart(all_orders)
+    embed_chart(ordertype_fig, 'ordertype')
+    
+    # Pipeline Chart (from aggregated deals)
+    pipeline_fig = create_pipeline_chart(all_deals)
+    embed_chart(pipeline_fig, 'pipeline')
+    
     # Calculate combined metrics
     pending_statuses = ['PA with Date', 'PA No Date', 'PA Old (>2 Weeks)', 
                         'PF with Date (Ext)', 'PF with Date (Int)', 
@@ -1327,6 +1358,21 @@ def generate_combined_summary_html(customers_data, rep_name):
             .data-table tr:nth-child(even) {{ background: #f8fafc; }}
             .data-table tr:hover {{ background: #ecfdf5; }}
             
+            .chart-container {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 15px;
+                margin: 20px 0;
+                text-align: center;
+            }}
+            
+            .chart-container img {{
+                max-width: 100%;
+                height: auto;
+                border-radius: 8px;
+            }}
+            
             .customer-list {{
                 background: #f0fdf4;
                 border: 1px solid #bbf7d0;
@@ -1354,6 +1400,7 @@ def generate_combined_summary_html(customers_data, rep_name):
                 body {{ padding: 20px; }}
                 .header {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
                 .section {{ page-break-inside: avoid; }}
+                .chart-container {{ page-break-inside: avoid; }}
             }}
         </style>
     </head>
@@ -1413,6 +1460,22 @@ def generate_combined_summary_html(customers_data, rep_name):
         </div>
         
         <div class="section">
+            <div class="section-title">💰 Purchase History</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Total Purchases</div>
+                    <div class="metric-value success">${total_revenue:,.0f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total Orders</div>
+                    <div class="metric-value">{invoice_count}</div>
+                </div>
+            </div>
+            {charts_html.get('revenue', '')}
+            {charts_html.get('ordertype', '')}
+        </div>
+        
+        <div class="section">
             <div class="section-title">📦 Orders in Progress</div>
             <div class="metric-row">
                 <div class="metric-card">
@@ -1454,6 +1517,7 @@ def generate_combined_summary_html(customers_data, rep_name):
                     <div class="metric-value">${total_pipeline:,.0f}</div>
                 </div>
             </div>
+            {charts_html.get('pipeline', '')}
             {pipeline_html}
         </div>
         
