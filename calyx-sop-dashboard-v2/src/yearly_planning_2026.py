@@ -19,6 +19,7 @@ from googleapiclient.discovery import build
 import base64
 import io
 import re
+import uuid
 
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
@@ -1653,7 +1654,7 @@ def render_revenue_section(customer_invoices):
                 ),
                 margin=dict(t=40, b=60)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"revenue_chart_{uuid.uuid4().hex[:8]}")
 
 
 def render_on_time_section(customer_orders):
@@ -1752,7 +1753,7 @@ def render_on_time_section(customer_orders):
             ),
             margin=dict(t=60, b=40)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"ontime_chart_{uuid.uuid4().hex[:8]}")
 
 
 def render_order_cadence_section(customer_orders):
@@ -1872,7 +1873,7 @@ def render_order_type_mix_section(customer_orders):
             ),
             margin=dict(t=40, b=80, l=20, r=20)
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True, key=f"ordertype_chart_{uuid.uuid4().hex[:8]}")
     
     with col2:
         # Table
@@ -2487,6 +2488,9 @@ def render_line_item_analysis_section(line_items_df, customer_name):
     st.markdown("### 📦 Product & SKU Analysis")
     st.caption("Drill-down analysis of invoice line items — explains what revenue consists of")
     
+    # Create unique key prefix from customer name for chart keys
+    key_prefix = f"line_items_{customer_name.replace(' ', '_').replace('.', '').replace(',', '')[:30]}"
+    
     if line_items_df is None or line_items_df.empty:
         st.info(f"No invoice line item data available for {customer_name}.")
         return
@@ -2592,7 +2596,7 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                     height=450,
                     margin=dict(t=60, b=60, l=60, r=60)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_category_pie")
             
             with summary_col:
                 # Category cards
@@ -2691,7 +2695,9 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                             margin=dict(t=60, b=100, l=60, r=40),
                             xaxis_tickangle=-35
                         )
-                        st.plotly_chart(fig, use_container_width=True)
+                        # Create unique key using category name
+                        cat_key = category.replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_')[:20]
+                        st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_cat_{cat_key}")
                     
                     with col2:
                         # Summary table
@@ -2789,7 +2795,7 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 margin=dict(t=60, b=120, l=60, r=40),
                 xaxis_tickangle=-45
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_orders_per_cat")
         
         with col2:
             st.markdown("**Revenue by Purchase Pattern**")
@@ -2819,7 +2825,7 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 height=380,
                 margin=dict(t=60, b=80, l=60, r=40)
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_rev_by_pattern")
         
         # Detailed breakdown
         st.markdown("---")
@@ -2863,6 +2869,9 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     """
     st.markdown("### ⚠️ Quality & Non-Conformance")
     st.caption("Non-conformance reports (NCRs) associated with this customer's orders")
+    
+    # Create unique key prefix from customer name for chart keys
+    key_prefix = f"ncr_{customer_name.replace(' ', '_').replace('.', '').replace(',', '')[:30]}"
     
     # Calculate total orders for this customer
     total_orders = len(customer_orders) if not customer_orders.empty else 0
@@ -2983,7 +2992,7 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
                     height=350,
                     margin=dict(t=60, b=40, l=40, r=40)
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_issue_pie")
         
         with col_table:
             display_summary = issue_summary.copy()
