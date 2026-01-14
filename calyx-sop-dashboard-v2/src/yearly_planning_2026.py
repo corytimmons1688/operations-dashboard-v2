@@ -1974,148 +1974,137 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         st.metric("Unique SKUs", f"{unique_items:,}")
     
     # Create tabs for different analysis views
-    analysis_tabs = st.tabs(["📊 Product Types", "🏷️ Item Types", "🔝 Top Items", "📈 SKU Patterns"])
+    analysis_tabs = st.tabs(["📊 Top Product Types", "🔝 Top Items", "📈 Product Type Patterns"])
     
     # =========================================================================
-    # TAB 1: Product Type Analysis (Calyx || Product Type - Strategic Grouping)
+    # TAB 1: Top Product Types (Calyx || Product Type - Strategic Grouping)
     # =========================================================================
     with analysis_tabs[0]:
-        st.markdown("#### Strategic Product Grouping")
-        st.caption("Groups products by strategic category (Calyx || Product Type)")
+        st.markdown("#### Top Product Types by Revenue")
+        st.caption("Strategic product grouping (Calyx || Product Type)")
         
         if 'Calyx || Product Type' in line_items_df.columns:
             product_type_summary = line_items_df.groupby('Calyx || Product Type').agg({
                 'Amount': 'sum',
                 'Quantity': 'sum',
-                'Item': 'nunique'
+                'Item': 'nunique',
+                'Document Number': 'nunique'
             }).reset_index()
-            product_type_summary.columns = ['Product Type', 'Revenue', 'Units', 'SKU Count']
+            product_type_summary.columns = ['Product Type', 'Revenue', 'Units', 'SKU Count', 'Invoice Count']
             product_type_summary = product_type_summary.sort_values('Revenue', ascending=False)
+            
+            # Filter out empty/nan
+            product_type_summary = product_type_summary[product_type_summary['Product Type'].str.strip() != '']
             
             # Calculate percentage of total
             product_type_summary['% of Revenue'] = (product_type_summary['Revenue'] / total_line_revenue * 100).round(1)
+            product_type_summary['Avg per Invoice'] = (product_type_summary['Revenue'] / product_type_summary['Invoice Count'].replace(0, 1)).round(0)
             
-            # Create visualization
             if len(product_type_summary) > 0:
-                # Use columns for chart and table
+                # Slider for top N
+                max_types = min(20, len(product_type_summary))
+                num_types = st.slider("Show top N product types", min_value=3, max_value=max_types, value=min(10, max_types), key=f"top_product_types_{customer_name[:20]}")
+                
+                top_types = product_type_summary.head(num_types)
+                
+                # Two columns: chart and breakdown
                 chart_col, table_col = st.columns([1, 1])
                 
                 with chart_col:
-                    # Create pie/bar chart
+                    # Horizontal bar chart
+                    fig = go.Figure(data=[go.Bar(
+                        y=top_types['Product Type'],
+                        x=top_types['Revenue'],
+                        orientation='h',
+                        marker_color='#3b82f6',
+                        text=top_types['Revenue'].apply(lambda x: f"${x/1000:.1f}K" if x >= 1000 else f"${x:.0f}"),
+                        textposition='outside'
+                    )])
+                    fig.update_layout(
+                        title=f"Top {num_types} Product Types",
+                        xaxis_title="Revenue ($)",
+                        yaxis_title="",
+                        height=max(350, num_types * 30),
+                        margin=dict(l=200, r=80, t=50, b=50),
+                        yaxis=dict(autorange="reversed")
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with table_col:
+                    # Pie chart for revenue share
                     fig = go.Figure(data=[go.Pie(
-                        labels=product_type_summary['Product Type'].head(8),
-                        values=product_type_summary['Revenue'].head(8),
+                        labels=top_types['Product Type'].head(8),
+                        values=top_types['Revenue'].head(8),
                         hole=0.4,
                         textinfo='label+percent',
                         textposition='outside',
                         marker=dict(colors=['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'])
                     )])
                     fig.update_layout(
-                        title="Revenue by Product Type",
+                        title="Revenue Share by Product Type",
                         showlegend=False,
                         height=350,
                         margin=dict(t=50, b=20, l=20, r=20)
                     )
                     st.plotly_chart(fig, use_container_width=True)
                 
-                with table_col:
-                    display_df = product_type_summary.copy()
-                    display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
-                    display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
-                    display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
-                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+                # Detailed table
+                st.markdown("**Product Type Details**")
+                display_df = top_types.copy()
+                display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+                display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
+                display_df['Avg per Invoice'] = display_df['Avg per Invoice'].apply(lambda x: f"${x:,.0f}")
+                display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
         else:
             st.warning("Product Type column not available in line item data.")
     
     # =========================================================================
-    # TAB 2: Item Type Breakdown (Calyx | Item Type - Operational Grouping)
+    # TAB 2: Top Items by Revenue (using Item Description)
     # =========================================================================
     with analysis_tabs[1]:
-        st.markdown("#### Operational Item Grouping")
-        st.caption("Groups products by operational category (Calyx | Item Type)")
-        
-        if 'Calyx | Item Type' in line_items_df.columns:
-            item_type_summary = line_items_df.groupby('Calyx | Item Type').agg({
-                'Amount': 'sum',
-                'Quantity': 'sum',
-                'Item': 'nunique'
-            }).reset_index()
-            item_type_summary.columns = ['Item Type', 'Revenue', 'Units', 'SKU Count']
-            item_type_summary = item_type_summary.sort_values('Revenue', ascending=False)
-            
-            # Filter out empty/nan
-            item_type_summary = item_type_summary[item_type_summary['Item Type'].str.strip() != '']
-            
-            # Calculate percentage
-            item_type_summary['% of Revenue'] = (item_type_summary['Revenue'] / total_line_revenue * 100).round(1)
-            
-            if len(item_type_summary) > 0:
-                # Bar chart
-                fig = go.Figure(data=[go.Bar(
-                    x=item_type_summary['Item Type'].head(10),
-                    y=item_type_summary['Revenue'].head(10),
-                    marker_color='#3b82f6',
-                    text=item_type_summary['Revenue'].head(10).apply(lambda x: f"${x/1000:.1f}K" if x >= 1000 else f"${x:.0f}"),
-                    textposition='outside'
-                )])
-                fig.update_layout(
-                    title="Revenue by Item Type",
-                    xaxis_title="Item Type",
-                    yaxis_title="Revenue ($)",
-                    height=400,
-                    margin=dict(t=50, b=100),
-                    xaxis_tickangle=-45
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Table
-                display_df = item_type_summary.copy()
-                display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
-                display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
-                display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-        else:
-            st.warning("Item Type column not available in line item data.")
-    
-    # =========================================================================
-    # TAB 3: Top Items by Revenue
-    # =========================================================================
-    with analysis_tabs[2]:
         st.markdown("#### Top Revenue-Generating Items")
-        st.caption("Individual SKUs ranked by revenue contribution")
+        st.caption("Individual products ranked by revenue contribution")
         
-        if 'Item' in line_items_df.columns and 'Amount' in line_items_df.columns:
-            # Group by Item (and optionally Item Description)
-            group_cols = ['Item']
-            if 'Item Description' in line_items_df.columns:
-                group_cols.append('Item Description')
+        if 'Amount' in line_items_df.columns:
+            # Use Item Description as primary, fall back to Item
+            item_col = 'Item Description' if 'Item Description' in line_items_df.columns else 'Item'
+            
+            # Group by Item Description and Product Type for context
+            group_cols = [item_col]
+            if 'Calyx || Product Type' in line_items_df.columns:
+                group_cols.append('Calyx || Product Type')
             
             item_summary = line_items_df.groupby(group_cols).agg({
                 'Amount': 'sum',
                 'Quantity': 'sum',
-                'Document Number': 'nunique'  # Number of invoices containing this item
+                'Document Number': 'nunique'
             }).reset_index()
             
-            # Rename columns
-            if 'Item Description' in item_summary.columns:
-                item_summary.columns = ['Item', 'Description', 'Revenue', 'Units', 'Invoice Count']
+            # Rename columns based on what we grouped
+            if 'Calyx || Product Type' in group_cols:
+                item_summary.columns = ['Item', 'Product Type', 'Revenue', 'Units', 'Invoice Count']
             else:
                 item_summary.columns = ['Item', 'Revenue', 'Units', 'Invoice Count']
             
             item_summary = item_summary.sort_values('Revenue', ascending=False)
+            
+            # Filter out empty items
+            item_summary = item_summary[item_summary['Item'].str.strip() != '']
             
             # Calculate metrics
             item_summary['Avg Unit Price'] = (item_summary['Revenue'] / item_summary['Units'].replace(0, 1)).round(2)
             item_summary['% of Revenue'] = (item_summary['Revenue'] / total_line_revenue * 100).round(1)
             
             # Show top items selector
-            num_items = st.slider("Show top N items", min_value=5, max_value=min(50, len(item_summary)), value=15, key=f"top_items_{customer_name[:20]}")
+            max_items = min(50, len(item_summary))
+            num_items = st.slider("Show top N items", min_value=5, max_value=max_items, value=min(15, max_items), key=f"top_items_{customer_name[:20]}")
             
             top_items = item_summary.head(num_items)
             
             # Create bar chart
             fig = go.Figure(data=[go.Bar(
-                y=top_items['Item'],
+                y=top_items['Item'].apply(lambda x: x[:40] + '...' if len(str(x)) > 40 else x),
                 x=top_items['Revenue'],
                 orientation='h',
                 marker_color='#10b981',
@@ -2126,14 +2115,14 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 title=f"Top {num_items} Items by Revenue",
                 xaxis_title="Revenue ($)",
                 yaxis_title="",
-                height=max(400, num_items * 25),
-                margin=dict(l=150, r=50, t=50, b=50),
+                height=max(400, num_items * 28),
+                margin=dict(l=300, r=80, t=50, b=50),
                 yaxis=dict(autorange="reversed")
             )
             st.plotly_chart(fig, use_container_width=True)
             
             # Display table
-            with st.expander("📋 View Detailed Item Data"):
+            with st.expander("📋 View Detailed Item Data", expanded=True):
                 display_df = top_items.copy()
                 display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
                 display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
@@ -2144,63 +2133,67 @@ def render_line_item_analysis_section(line_items_df, customer_name):
             st.warning("Required columns not available for item analysis.")
     
     # =========================================================================
-    # TAB 4: SKU Purchase Patterns
+    # TAB 3: Product Type Purchase Patterns
     # =========================================================================
-    with analysis_tabs[3]:
-        st.markdown("#### SKU Purchase Patterns & Repeat Behavior")
-        st.caption("Analyzes purchasing frequency and co-occurrence patterns")
+    with analysis_tabs[2]:
+        st.markdown("#### Product Type Purchase Patterns")
+        st.caption("Which product types are core vs. one-time purchases")
         
-        if 'Item' in line_items_df.columns and 'Document Number' in line_items_df.columns:
-            # Repeat purchase analysis
-            item_frequency = line_items_df.groupby('Item').agg({
+        if 'Calyx || Product Type' in line_items_df.columns and 'Document Number' in line_items_df.columns:
+            # Analyze purchase frequency BY PRODUCT TYPE
+            product_frequency = line_items_df.groupby('Calyx || Product Type').agg({
                 'Document Number': 'nunique',
                 'Amount': 'sum',
-                'Quantity': 'sum'
+                'Quantity': 'sum',
+                'Item': 'nunique'
             }).reset_index()
-            item_frequency.columns = ['Item', 'Purchase Occasions', 'Total Revenue', 'Total Units']
-            item_frequency = item_frequency.sort_values('Purchase Occasions', ascending=False)
+            product_frequency.columns = ['Product Type', 'Purchase Occasions', 'Total Revenue', 'Total Units', 'SKU Count']
+            product_frequency = product_frequency.sort_values('Purchase Occasions', ascending=False)
             
-            # Categorize items
+            # Filter out empty
+            product_frequency = product_frequency[product_frequency['Product Type'].str.strip() != '']
+            
+            # Categorize products
             def categorize_frequency(occasions):
                 if occasions >= 10:
-                    return "Core Item (10+ purchases)"
+                    return "Core Product (10+ purchases)"
                 elif occasions >= 5:
-                    return "Regular Item (5-9 purchases)"
+                    return "Regular Product (5-9 purchases)"
                 elif occasions >= 2:
-                    return "Repeat Item (2-4 purchases)"
+                    return "Repeat Product (2-4 purchases)"
                 else:
-                    return "One-Time Item"
+                    return "One-Time Product"
             
-            item_frequency['Category'] = item_frequency['Purchase Occasions'].apply(categorize_frequency)
+            product_frequency['Category'] = product_frequency['Purchase Occasions'].apply(categorize_frequency)
             
             # Summary by category
-            category_summary = item_frequency.groupby('Category').agg({
-                'Item': 'count',
+            category_summary = product_frequency.groupby('Category').agg({
+                'Product Type': 'count',
                 'Total Revenue': 'sum',
                 'Purchase Occasions': 'sum'
             }).reset_index()
-            category_summary.columns = ['Category', 'SKU Count', 'Revenue', 'Total Purchases']
+            category_summary.columns = ['Category', 'Product Type Count', 'Revenue', 'Total Purchases']
             
             # Order categories
-            category_order = ["Core Item (10+ purchases)", "Regular Item (5-9 purchases)", 
-                            "Repeat Item (2-4 purchases)", "One-Time Item"]
+            category_order = ["Core Product (10+ purchases)", "Regular Product (5-9 purchases)", 
+                            "Repeat Product (2-4 purchases)", "One-Time Product"]
             category_summary['Sort'] = category_summary['Category'].apply(lambda x: category_order.index(x) if x in category_order else 99)
             category_summary = category_summary.sort_values('Sort').drop('Sort', axis=1)
             
             col1, col2 = st.columns(2)
             
             with col1:
-                st.markdown("**SKU Purchase Frequency Distribution**")
+                st.markdown("**Product Types by Purchase Frequency**")
                 
                 fig = go.Figure(data=[go.Pie(
                     labels=category_summary['Category'],
-                    values=category_summary['SKU Count'],
+                    values=category_summary['Product Type Count'],
                     hole=0.4,
                     textinfo='value+percent',
                     marker=dict(colors=['#10b981', '#3b82f6', '#f59e0b', '#94a3b8'])
                 )])
                 fig.update_layout(
-                    title="SKUs by Purchase Frequency",
+                    title="Product Types by Frequency Category",
                     height=300,
                     showlegend=True,
                     legend=dict(orientation="h", yanchor="bottom", y=-0.3)
@@ -2211,38 +2204,59 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 st.markdown("**Revenue by Purchase Pattern**")
                 
                 fig = go.Figure(data=[go.Bar(
-                    x=category_summary['Category'],
+                    x=category_summary['Category'].apply(lambda x: x.replace(' Product', '').replace(' purchases', '')),
                     y=category_summary['Revenue'],
                     marker_color=['#10b981', '#3b82f6', '#f59e0b', '#94a3b8'],
                     text=category_summary['Revenue'].apply(lambda x: f"${x/1000:.1f}K" if x >= 1000 else f"${x:.0f}"),
                     textposition='outside'
                 )])
                 fig.update_layout(
-                    title="Revenue by SKU Category",
+                    title="Revenue by Category",
                     height=300,
                     xaxis_tickangle=-30,
                     margin=dict(b=80)
                 )
                 st.plotly_chart(fig, use_container_width=True)
             
-            # Summary table
-            display_df = category_summary.copy()
-            display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
-            
-            # Most frequently purchased items
+            # Show which product types are in each category
             st.markdown("---")
-            st.markdown("**Most Frequently Purchased Items**")
+            st.markdown("**Product Types by Category**")
             
-            top_repeat = item_frequency[item_frequency['Purchase Occasions'] > 1].head(10)
-            if not top_repeat.empty:
-                display_repeat = top_repeat.copy()
-                display_repeat['Total Revenue'] = display_repeat['Total Revenue'].apply(lambda x: f"${x:,.0f}")
-                display_repeat['Total Units'] = display_repeat['Total Units'].apply(lambda x: f"{x:,.0f}")
-                st.dataframe(display_repeat[['Item', 'Purchase Occasions', 'Total Revenue', 'Total Units', 'Category']], 
-                           use_container_width=True, hide_index=True)
-            else:
-                st.info("No repeat purchases identified in this period.")
+            # Core Products
+            core_products = product_frequency[product_frequency['Category'] == "Core Product (10+ purchases)"]
+            if not core_products.empty:
+                st.markdown("🟢 **Core Products** (purchased 10+ times)")
+                core_display = core_products[['Product Type', 'Purchase Occasions', 'Total Revenue', 'Total Units']].copy()
+                core_display['Total Revenue'] = core_display['Total Revenue'].apply(lambda x: f"${x:,.0f}")
+                core_display['Total Units'] = core_display['Total Units'].apply(lambda x: f"{x:,.0f}")
+                st.dataframe(core_display, use_container_width=True, hide_index=True)
+            
+            # Regular Products
+            regular_products = product_frequency[product_frequency['Category'] == "Regular Product (5-9 purchases)"]
+            if not regular_products.empty:
+                st.markdown("🔵 **Regular Products** (purchased 5-9 times)")
+                regular_display = regular_products[['Product Type', 'Purchase Occasions', 'Total Revenue', 'Total Units']].copy()
+                regular_display['Total Revenue'] = regular_display['Total Revenue'].apply(lambda x: f"${x:,.0f}")
+                regular_display['Total Units'] = regular_display['Total Units'].apply(lambda x: f"{x:,.0f}")
+                st.dataframe(regular_display, use_container_width=True, hide_index=True)
+            
+            # Repeat Products
+            repeat_products = product_frequency[product_frequency['Category'] == "Repeat Product (2-4 purchases)"]
+            if not repeat_products.empty:
+                with st.expander("🟠 **Repeat Products** (purchased 2-4 times)"):
+                    repeat_display = repeat_products[['Product Type', 'Purchase Occasions', 'Total Revenue', 'Total Units']].copy()
+                    repeat_display['Total Revenue'] = repeat_display['Total Revenue'].apply(lambda x: f"${x:,.0f}")
+                    repeat_display['Total Units'] = repeat_display['Total Units'].apply(lambda x: f"{x:,.0f}")
+                    st.dataframe(repeat_display, use_container_width=True, hide_index=True)
+            
+            # One-Time Products
+            onetime_products = product_frequency[product_frequency['Category'] == "One-Time Product"]
+            if not onetime_products.empty:
+                with st.expander("⚪ **One-Time Products** (purchased once)"):
+                    onetime_display = onetime_products[['Product Type', 'Purchase Occasions', 'Total Revenue', 'Total Units']].copy()
+                    onetime_display['Total Revenue'] = onetime_display['Total Revenue'].apply(lambda x: f"${x:,.0f}")
+                    onetime_display['Total Units'] = onetime_display['Total Units'].apply(lambda x: f"{x:,.0f}")
+                    st.dataframe(onetime_display, use_container_width=True, hide_index=True)
             
             # Container behavior note
             st.markdown("---")
