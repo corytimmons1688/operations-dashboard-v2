@@ -1936,191 +1936,483 @@ def render_pipeline_section(customer_deals, customer_name):
 # Based on Calyx Containers Product Master Categorization Rules
 # =============================================================================
 
-def categorize_product(item_name, item_description=""):
+# Flexpack-specific 4-digit codes
+FLEXPACK_CODES = {
+    '1148', '1164', '1169', '1179', '1180', '1182', '1183', '1188', 
+    '1190', '1192', '1247', '1259', '1283', '1304', '1325', '1340', 
+    '1345', '1354', '1367', '1373', '1375', '1393', '1492', '1519', 
+    '1608', '1635', '1666', '1670', '1673', '1678', '1696', '1703', 
+    '1711', '1758', '1768', '1771', '1776', '1780', '1787', '1808', 
+    '1849', '1867', '1875', '1883', '1890', '1896', '1901', '1904', 
+    '1906', '1909', '1915'
+}
+
+def extract_die_tool(item_name):
     """
-    Categorize a product based on Item name and description.
-    Returns (category, sub_category) tuple.
+    Extract the die tool code from a SKU.
+    Format: CUST-ST-DIETOOL-PRODUCT or CUST-ST-X-DIETOOL-PRODUCT
+    Returns (die_tool, is_alphanumeric)
     
-    Categories: Drams, Concentrates, Tubes, Boxes, Flexpack, Calyx Jar, 
-                Calyx Cure, Labels, Shipping/Fees
+    Examples:
+    - APOC-MI-H-25L-BB1-1 → die_tool='25L', is_alphanumeric=True (Dram lid label)
+    - APOC-MI-1188-APGQ → die_tool='1188', is_alphanumeric=False (Flexpack/Label)
+    - 989E-MI-H-4C-EX1-2 → die_tool='4C', is_alphanumeric=True (Concentrate label)
+    """
+    if pd.isna(item_name):
+        return None, False
+    
+    name = str(item_name).upper().strip()
+    
+    # Pattern 1: XXXX-ST-X-DIETOOL-... (with single letter indicator like H, M, R)
+    # The die tool is the component after the single letter: 25L, 45B, 4C, 7L, 116P, etc.
+    match = re.search(r'^[A-Z]{3,4}-[A-Z]{2}-[A-Z]-(\d{1,3}[LBPCH])-', name)
+    if match:
+        return match.group(1), True
+    
+    # Pattern 2: XXXX-ST-X-DIETOOL (concentrate patterns like 4C, 7L, 7C)
+    match = re.search(r'^[A-Z]{3,4}-[A-Z]{2}-[A-Z]-([47][CLH])-', name)
+    if match:
+        return match.group(1), True
+    
+    # Pattern 3: XXXX-ST-NUMERIC-... (purely numeric die tool for Flexpack/Labels)
+    match = re.search(r'^[A-Z]{3,4}-[A-Z]{2}-(\d{4})-', name)
+    if match:
+        return match.group(1), False
+    
+    # Pattern 4: Direct patterns like -25L-, -45B-, -116P- anywhere in name
+    match = re.search(r'-(\d{1,3}[LBPCH])-', name)
+    if match:
+        return match.group(1), True
+    
+    # Pattern 5: Concentrate patterns -4C-, -7L-, -7C- etc.
+    match = re.search(r'-([47][CLH])-', name)
+    if match:
+        return match.group(1), True
+    
+    return None, False
+
+
+def categorize_product(item_name, item_description="", calyx_product_type=""):
+    """
+    Categorize a product based on Item name, description, and Calyx || Product Type.
+    Returns (category, sub_category, component_type) tuple.
+    
+    component_type: 'base', 'lid', 'label', 'band', 'accessory', 'complete', or None
     """
     if pd.isna(item_name):
         item_name = ""
     if pd.isna(item_description):
         item_description = ""
+    if pd.isna(calyx_product_type):
+        calyx_product_type = ""
     
-    name = str(item_name).upper()
-    desc = str(item_description).upper()
-    combined = name + " " + desc
+    name = str(item_name).upper().strip()
+    desc = str(item_description).upper().strip()
+    product_type = str(calyx_product_type).upper().strip()
+    all_text = f"{name} {desc}"
+    
+    # Extract die tool info
+    die_tool, is_alphanumeric = extract_die_tool(item_name)
     
     # =========================================================================
-    # 1. SHIPPING/TAXES/FEES (exclude from product analysis)
+    # 1. SHIPPING/TAXES/FEES
     # =========================================================================
-    if any(x in combined for x in ['DISCOUNT', 'PROMO', '%OFF', 'TAX', 'GST', 'HST', 
-                                    'SHIPPING', 'EXPEDITE FEE', 'CONVENIENCE FEE',
-                                    'APPL FEE', 'APPLICATION FEE', 'ACCOUNTING']):
-        if '$' in name and 'OFF' in name:
-            return ('Shipping/Fees', 'Discount')
-        if 'TAX' in combined or 'GST' in combined or 'HST' in combined:
-            return ('Shipping/Fees', 'Tax')
-        if 'SHIPPING' in combined or 'EXPEDITE' in combined:
-            return ('Shipping/Fees', 'Shipping')
-        if 'APPL' in combined and 'FEE' in combined:
-            return ('Shipping/Fees', 'Application Fee')
-        return ('Shipping/Fees', 'Other Fee')
+    shipping_patterns = [
+        r'^\$\d+OFF',
+        r'DISCOUNT|PROMO|%\s*OFF',
+        r'^ACCOUNTING',
+        r'^SHIPPING$|SHIPPING\s+FEE|EXPEDITE\s*FEE|CONVENIENCE\s*FEE',
+        r'\bTAX\b|GST|HST',
+        r'CANADIAN\s*(BUSINESS|GOODS)',
+        r'REPLACEMENT\s*ORDER',
+        r'CREATIVE$',
+        r'TESTIMONIAL',
+        r'MODULAR.*SERIAL',
+        r'OVERPAYMENT',
+        r'DIE\s*CUT\s*SAMPLE\s*CHARGE',
+    ]
+    
+    for pattern in shipping_patterns:
+        if re.search(pattern, all_text):
+            return ('Shipping/Fees', 'Fee/Adjustment', None)
     
     # =========================================================================
     # 2. CALYX CURE
     # =========================================================================
-    if name.startswith('CC-') or 'CALYX CURE' in combined:
-        return ('Calyx Cure', 'Calyx Cure')
+    if name.startswith('CC-') or 'CALYX CURE' in all_text:
+        return ('Calyx Cure', 'Calyx Cure', 'complete')
     
     # =========================================================================
-    # 3. CALYX JAR
+    # 3. CALYX JAR (8TH Glass)
     # =========================================================================
-    if '-JB-' in name or '-JL-' in name or name.startswith('GB-8TH-') or 'CALYX JAR' in combined:
-        if '-JB-' in name or 'BASE' in combined:
-            return ('Calyx Jar', 'Jar Base')
-        if '-JL-' in name or 'LID' in combined:
-            return ('Calyx Jar', 'Jar Lid')
-        return ('Calyx Jar', 'Calyx Jar')
+    if 'GB-8TH' in name or name.startswith('CJ-') or 'CALYX JAR' in all_text:
+        return ('Calyx Jar', 'Glass Base', 'base')
+    if re.search(r'-JB-', name):
+        return ('Calyx Jar', 'Jar Base', 'base')
+    if re.search(r'-JL-', name):
+        return ('Calyx Jar', 'Jar Lid', 'lid')
+    if 'SB-8TH' in name:
+        return ('Calyx Jar', 'Shrink Band', 'band')
     
     # =========================================================================
-    # 4. DRAMS (15D, 25D, 45D, 145D) - Check BEFORE concentrates
+    # 4. CONCENTRATES (4mL/7mL Glass Bases and specific lids)
     # =========================================================================
-    dram_patterns = {
-        '15D': ['-15L-', '-15B-', '-15P-', '-15H-', '-15LTE-', '15D'],
-        '25D': ['-25L-', '-25B-', '-25P-', '-25H-', '-25LTE-', '25D'],
-        '45D': ['-45L-', '-45B-', '-45P-', '-45H-', '-45LTE-', '45D'],
-        '145D': ['-145L-', '-145B-', '-145P-', '-145H-', '-145LTE-', '145D']
-    }
+    # Glass bases
+    if re.search(r'GB-4ML|4ML.*GLASS|4\s*ML.*BASE', name):
+        return ('Concentrates', '4mL Glass Base', 'base')
+    if re.search(r'GB-7ML|7ML.*GLASS|7\s*ML.*BASE', name):
+        return ('Concentrates', '7mL Glass Base', 'base')
     
-    for dram_size, patterns in dram_patterns.items():
-        for pattern in patterns:
-            if pattern in name:
-                # Determine if it's a lid, base, or printed
-                if any(x in name for x in ['-15L-', '-25L-', '-45L-', '-145L-', 'LID']):
-                    return ('Drams', f'{dram_size} Lid')
-                elif any(x in name for x in ['-15B-', '-25B-', '-45B-', '-145B-', 'BASE']):
-                    return ('Drams', f'{dram_size} Base')
-                elif any(x in name for x in ['-15P-', '-25P-', '-45P-', '-145P-']):
-                    return ('Drams', f'{dram_size} Printed')
+    # Concentrate-specific lids (4C, 7C, 4L, 7L, 4H, 7H patterns)
+    if re.search(r'-4[CLH]-|-4[CLH]$', name) and not re.search(r'BOX|TUCK|AUTO|DISPLAY', all_text):
+        return ('Concentrates', '4mL Lid', 'lid')
+    if re.search(r'-7[CLH]-|-7[CLH]$', name) and not re.search(r'BOX|TUCK|AUTO|DISPLAY', all_text):
+        return ('Concentrates', '7mL Lid', 'lid')
+    
+    # Concentrate labels (alphanumeric die tool with 4C, 7C, 7L patterns)
+    if die_tool and is_alphanumeric:
+        if re.match(r'^[47][CLH]', die_tool):
+            component = 'Lid Label' if 'L' in die_tool else 'Jar Label'
+            size = '4mL' if die_tool.startswith('4') else '7mL'
+            return ('Concentrates', f'{size} {component}', 'label')
+    
+    # =========================================================================
+    # 5. DRAMS (15D, 25D, 45D, 145D) - Bases, Lids, Labels
+    # =========================================================================
+    dram_sizes = ['145', '45', '25', '15']  # Check larger first to avoid partial matches
+    
+    # FIRST: Check for customer label SKUs with alphanumeric die tools
+    # These are LABELS, not physical products
+    if die_tool and is_alphanumeric:
+        for size in dram_sizes:
+            size_d = f'{size}D'
+            if re.match(rf'^{size}[LBPH]', die_tool):
+                if 'L' in die_tool:
+                    return ('Drams', f'{size_d} Lid Label', 'label')
+                elif 'B' in die_tool or 'P' in die_tool:
+                    return ('Drams', f'{size_d} Base Label', 'label')
                 else:
-                    return ('Drams', dram_size)
+                    return ('Drams', f'{size_d} Label', 'label')
+    
+    # THEN: Check for physical dram products (bases, lids)
+    for size in dram_sizes:
+        size_d = f'{size}D'
+        
+        # Polypropylene Bases: PB-XXD or -XXB- patterns
+        if re.search(rf'PB-{size}D|{size}D.*BASE|-{size}B-', name):
+            return ('Drams', f'{size_d} Base', 'base')
+        
+        # Polypropylene Lids: PL-XXD patterns (but NOT customer labels like XXXX-MI-H-25L-)
+        # Only match if it starts with PL- or CL- (standard product codes)
+        if size != '15':  # Skip 15 here, handle DML separately
+            if re.search(rf'^PL-{size}D|^CL-{size}D', name):
+                return ('Drams', f'{size_d} Lid', 'lid')
+        
+        # Direct size mentions in description (for standard products only)
+        if f'{size}D LID' in all_text and not re.search(r'^[A-Z]{3,4}-[A-Z]{2}-', name):
+            return ('Drams', f'{size_d} Lid', 'lid')
+        if f'{size}D BASE' in all_text and not re.search(r'^[A-Z]{3,4}-[A-Z]{2}-', name):
+            return ('Drams', f'{size_d} Base', 'base')
     
     # =========================================================================
-    # 5. CONCENTRATES (4mL/7mL)
+    # 6. DML LIDS (Universal 4mL/7mL/15D - needs pairing to categorize)
     # =========================================================================
-    concentrate_patterns = {
-        '4mL': ['-4C-', '-4L-', '-4H-'],
-        '7mL': ['-7C-', '-7L-', '-7H-']
-    }
+    if 'DML' in name or re.search(r'PL-DML|CL-DML', name):
+        return ('DML (Universal)', 'Universal Lid', 'lid')
     
-    for size, patterns in concentrate_patterns.items():
-        for pattern in patterns:
-            if pattern in name:
-                if 'BOX' not in name and 'TUCK' not in name and 'AUTO' not in name:
-                    if 'L-' in pattern or 'LID' in combined:
-                        return ('Concentrates', f'{size} Lid')
-                    elif 'C-' in pattern or 'BASE' in combined or 'JAR' in combined:
-                        return ('Concentrates', f'{size} Jar')
-                    else:
-                        return ('Concentrates', size)
-    
-    if 'CONCENTRATE' in combined and 'BOX' not in name:
-        return ('Concentrates', 'Concentrate')
+    # 15L patterns that aren't clearly dram-specific
+    if re.search(r'-15L-|^15L-', name) and 'DML' not in name:
+        # Check if it's clearly a dram label
+        if die_tool and is_alphanumeric and die_tool.startswith('15'):
+            return ('Drams', '15D Lid Label', 'label')
+        # Otherwise it's likely a DML universal lid
+        return ('DML (Universal)', 'Universal Lid', 'lid')
     
     # =========================================================================
-    # 6. TUBES (116mm, 90mm, 84mm)
+    # 7. DRAM ACCESSORIES (Tray Frames, Tray Inserts, Shrink Bands)
     # =========================================================================
-    if 'BOX' not in name:
-        if any(x in name for x in ['116MM', '116T', '-116-', '116P']):
-            return ('Tubes', '116mm')
-        if any(x in name for x in ['90MM', '90T', '-90-', '90M']):
-            return ('Tubes', '90mm')
-        if any(x in name for x in ['84MM', '84T', '-84-']):
-            return ('Tubes', '84mm')
+    if name.startswith('TF-') or 'TRAY FRAME' in all_text:
+        return ('Dram Accessories', 'Tray Frame', 'accessory')
+    
+    if re.search(r'^TI-\d+D|TRAY INSERT', name):
+        # Extract size from TI-XXD
+        size_match = re.search(r'TI-(\d+)D', name)
+        if size_match:
+            return ('Dram Accessories', f'{size_match.group(1)}D Tray Insert', 'accessory')
+        return ('Dram Accessories', 'Tray Insert', 'accessory')
+    
+    # Shrink bands for drams
+    if re.search(r'SB-15D|SB-25D|SB-45D|SB-145D', name):
+        size_match = re.search(r'SB-(\d+)D', name)
+        if size_match:
+            return ('Dram Accessories', f'{size_match.group(1)}D Shrink Band', 'band')
+        return ('Dram Accessories', 'Shrink Band', 'band')
+    
+    # FEP Liners
+    if 'FEP' in name and 'LINER' in all_text:
+        return ('Dram Accessories', 'FEP Liner', 'accessory')
+    
+    # Stick & Grip
+    if re.search(r'SG-|STICK.*GRIP', all_text):
+        return ('Dram Accessories', 'Stick & Grip', 'accessory')
     
     # =========================================================================
-    # 7. BOXES
+    # 8. TUBES (116mm, 90mm, 84mm)
     # =========================================================================
-    if any(x in combined for x in ['CORE AUTO', 'AUTOBOTTOM', 'AUTO BOTTOM', '-CNCA-', '-CNC-']):
-        return ('Boxes', 'Core Auto')
-    if any(x in combined for x in ['CORE TUCK', 'REVERSE TUCK']):
-        return ('Boxes', 'Core Tuck')
-    if any(x in combined for x in ['ELEVATED TUCK', 'ELEVATED AUTO', 'ELEVATED DISPLAY']):
-        return ('Boxes', 'Elevated')
-    if 'SHIPPER BOX' in combined:
-        return ('Boxes', 'Shipper Box')
-    if 'BOX' in combined and 'SBS' in combined and 'BAG' not in combined:
-        return ('Boxes', 'Box')
-    if 'TEARAWAY' in combined:
-        return ('Boxes', 'Tearaway Display')
+    if re.search(r'JT-116|116\s*MM|116T|-116-|116P', name) and 'BOX' not in all_text:
+        if 'LABEL' in all_text or (die_tool and '116' in die_tool):
+            return ('Tubes', '116mm Label', 'label')
+        return ('Tubes', '116mm Tube', 'complete')
+    
+    if re.search(r'JT-90|90\s*MM|90T|-90-|90M', name) and 'BOX' not in all_text and 'WAVEPACK' not in all_text:
+        if 'LABEL' in all_text or (die_tool and '90' in die_tool):
+            return ('Tubes', '90mm Label', 'label')
+        return ('Tubes', '90mm Tube', 'complete')
+    
+    if re.search(r'JT-84|84\s*MM|84T|-84-', name) and 'TUBE' in all_text:
+        if 'LABEL' in all_text:
+            return ('Tubes', '84mm Label', 'label')
+        return ('Tubes', '84mm Tube', 'complete')
     
     # =========================================================================
-    # 8. FLEXPACK / WAVEPACK
+    # 9. BOXES
     # =========================================================================
-    flexpack_codes = ['1148', '1164', '1169', '1179', '1180', '1182', '1183', '1188', 
-                      '1190', '1192', '1247', '1259', '1283', '1304', '1325', '1340', 
-                      '1345', '1354', '1367', '1373', '1375', '1393', '1492', '1519', 
-                      '1608', '1635', '1666', '1670', '1673', '1678', '1696', '1703', 
-                      '1711', '1758', '1768', '1771', '1776', '1780', '1787', '1808', 
-                      '1849', '1867', '1875', '1883', '1890', '1896', '1901', '1904', 
-                      '1906', '1909', '1915']
+    box_keywords = ['CORE AUTO', 'AUTOBOTTOM', 'AUTO BOTTOM', 'CORE TUCK', 
+                    'REVERSE TUCK', 'ELEVATED TUCK', 'ELEVATED AUTO']
+    if any(kw in all_text for kw in box_keywords) and 'BAG' not in all_text:
+        if 'AUTO' in all_text:
+            return ('Boxes', 'Core Auto', 'complete')
+        if 'TUCK' in all_text:
+            return ('Boxes', 'Core Tuck', 'complete')
+        return ('Boxes', 'Box', 'complete')
     
-    if name.startswith('BAM-'):
-        return ('Flexpack', 'B&M Flexpack')
-    if 'WAVEPACK' in combined:
-        return ('Flexpack', 'Wavepack')
-    if 'FLEXPACK' in combined:
-        return ('Flexpack', 'Flexpack')
-    if any(x in combined for x in ['BAG', 'BAGS', 'POUCH']):
-        return ('Flexpack', 'Bag/Pouch')
-    
-    # Check for flexpack codes
-    code_match = re.search(r'-(\d{4})-', name)
-    if code_match and code_match.group(1) in flexpack_codes:
-        return ('Flexpack', 'Flexpack')
+    if re.search(r'-CNCA-|-CNC-', all_text) or 'SHIPPER BOX' in all_text:
+        return ('Boxes', 'Shipper Box', 'complete')
+    if 'BOX' in all_text and 'SBS' in all_text and 'BAG' not in all_text:
+        return ('Boxes', 'Box', 'complete')
+    if 'DISPLAY' in all_text and ('TEARAWAY' in all_text or 'ELEVATED' in all_text) and 'BAG' not in all_text:
+        return ('Boxes', 'Display Box', 'complete')
     
     # =========================================================================
-    # 9. LABELS (catch-all for remaining label products)
+    # 10. FLEXPACK / WAVEPACK (check Calyx || Product Type first!)
     # =========================================================================
-    if any(x in combined for x in ['LABEL', 'LBL', 'BOPP']):
-        return ('Labels', 'Label')
+    # Use Calyx || Product Type if available
+    if 'FLEXPACK' in product_type or 'WAVEPACK' in product_type or 'FLEX' in product_type:
+        return ('Flexpack', 'Wavepack', 'complete')
+    
+    if name.startswith('BAM-') and 'LABEL' not in all_text:
+        return ('Flexpack', 'Wavepack', 'complete')
+    if re.search(r'WAVEPACK|FLEXPACK', all_text):
+        return ('Flexpack', 'Wavepack', 'complete')
+    if re.search(r'\bBAGS?\b|\bPOUCH\b', desc):
+        return ('Flexpack', 'Bag/Pouch', 'complete')
+    
+    # Numeric die tool - could be Flexpack or Non-Core Label
+    if die_tool and not is_alphanumeric and die_tool in FLEXPACK_CODES:
+        return ('Flexpack', 'Wavepack', 'complete')
     
     # =========================================================================
-    # 10. UNCATEGORIZED
+    # 11. NON-CORE LABELS (customer-specific labels)
     # =========================================================================
-    return ('Other', 'Other')
+    # Use Calyx || Product Type if available
+    if 'LABEL' in product_type:
+        return ('Non-Core Labels', 'Custom Label', 'label')
+    
+    if re.search(r'\bLABEL\b|\bLBL\b|\bBOPP\b', all_text):
+        return ('Non-Core Labels', 'Custom Label', 'label')
+    
+    # Numeric die tool that's not a known Flexpack code
+    if die_tool and not is_alphanumeric:
+        return ('Non-Core Labels', 'Custom Label', 'label')
+    
+    # Customer SKU pattern without clear product identification
+    if re.search(r'^[A-Z]{3,4}-[A-Z]{2}-', name):
+        return ('Non-Core Labels', 'Custom Label', 'label')
+    
+    # =========================================================================
+    # 12. APPLICATION FEES (categorize by what they're for)
+    # =========================================================================
+    if re.search(r'APPL\s*FEE|APPLICATION\s*FEE', all_text):
+        # Try to determine what product the fee is for
+        if re.search(r'15D|25D|45D|145D', all_text):
+            return ('Drams', 'Application Fee', 'fee')
+        if re.search(r'116|90', all_text) and 'TUBE' in all_text:
+            return ('Tubes', 'Application Fee', 'fee')
+        return ('Shipping/Fees', 'Application Fee', 'fee')
+    
+    # =========================================================================
+    # 13. UNCATEGORIZED
+    # =========================================================================
+    return ('Other', 'Uncategorized', None)
 
 
 def apply_product_categories(df):
     """
     Apply categorization to a dataframe with Item and Item Description columns.
-    Adds 'Product Category' and 'Product Sub-Category' columns.
+    Adds 'Product Category', 'Product Sub-Category', and 'Component Type' columns.
     """
     if df.empty:
         return df
     
     df = df.copy()
     
-    # Determine which column to use
+    # Determine which columns to use
     item_col = 'Item' if 'Item' in df.columns else None
     desc_col = 'Item Description' if 'Item Description' in df.columns else None
+    product_type_col = 'Calyx || Product Type' if 'Calyx || Product Type' in df.columns else None
     
     if item_col is None and desc_col is None:
+        df['Product Category'] = 'Other'
+        df['Product Sub-Category'] = 'Uncategorized'
+        df['Component Type'] = None
         return df
     
     # Apply categorization
     categories = df.apply(
         lambda row: categorize_product(
             row.get(item_col, '') if item_col else '',
-            row.get(desc_col, '') if desc_col else ''
+            row.get(desc_col, '') if desc_col else '',
+            row.get(product_type_col, '') if product_type_col else ''
         ), axis=1
     )
     
     df['Product Category'] = categories.apply(lambda x: x[0])
     df['Product Sub-Category'] = categories.apply(lambda x: x[1])
+    df['Component Type'] = categories.apply(lambda x: x[2])
+    
+    return df
+
+
+def rollup_dml_lids(df):
+    """
+    Roll up DML (Universal) lids into their parent category based on 
+    what other components are on the same invoice.
+    
+    Logic:
+    - If invoice has GB-4ML or GB-7ML → DML lid becomes Concentrates
+    - If invoice has PB-15D (15D base) → DML lid becomes Drams (15D)
+    - Otherwise → stays as DML (Universal) or defaults to Concentrates
+    """
+    if df.empty or 'Product Category' not in df.columns:
+        return df
+    
+    df = df.copy()
+    
+    # Find invoices with DML lids
+    dml_mask = df['Product Category'] == 'DML (Universal)'
+    if not dml_mask.any():
+        return df
+    
+    # Get document numbers with DML lids
+    doc_col = 'Document Number' if 'Document Number' in df.columns else None
+    if doc_col is None:
+        # Can't pair without document number - default DML to Concentrates
+        df.loc[dml_mask, 'Product Category'] = 'Concentrates'
+        df.loc[dml_mask, 'Product Sub-Category'] = 'Universal Lid (4mL/7mL/15D)'
+        return df
+    
+    # Process each invoice with DML lids
+    dml_docs = df.loc[dml_mask, doc_col].unique()
+    
+    for doc in dml_docs:
+        doc_mask = df[doc_col] == doc
+        doc_items = df.loc[doc_mask]
+        
+        # Check what else is on this invoice
+        has_concentrate_base = doc_items['Product Sub-Category'].str.contains(
+            r'4mL Glass Base|7mL Glass Base', case=False, na=False
+        ).any()
+        
+        has_15d_base = doc_items['Product Sub-Category'].str.contains(
+            r'15D Base', case=False, na=False
+        ).any()
+        
+        # Also check Item column for patterns
+        if 'Item' in doc_items.columns:
+            items_str = ' '.join(doc_items['Item'].fillna('').astype(str))
+            if re.search(r'GB-4ML|GB-7ML|4ML.*GLASS|7ML.*GLASS', items_str.upper()):
+                has_concentrate_base = True
+            if re.search(r'PB-15D|15D.*BASE|-15B-', items_str.upper()):
+                has_15d_base = True
+        
+        # Assign DML lids based on pairing
+        dml_in_doc = doc_mask & dml_mask
+        
+        if has_concentrate_base:
+            df.loc[dml_in_doc, 'Product Category'] = 'Concentrates'
+            df.loc[dml_in_doc, 'Product Sub-Category'] = 'Universal Lid'
+        elif has_15d_base:
+            df.loc[dml_in_doc, 'Product Category'] = 'Drams'
+            df.loc[dml_in_doc, 'Product Sub-Category'] = '15D Lid'
+        else:
+            # Default to Concentrates if no clear pairing
+            df.loc[dml_in_doc, 'Product Category'] = 'Concentrates'
+            df.loc[dml_in_doc, 'Product Sub-Category'] = 'Universal Lid'
+    
+    return df
+
+
+def create_unified_product_view(df):
+    """
+    Create a unified product view that rolls up components into complete products.
+    
+    For example, instead of showing:
+    - 4mL Glass Base: $300
+    - Universal Lid: $200
+    
+    Show:
+    - 4mL Concentrate Jar (complete): $500
+    
+    This is for customer-facing summaries.
+    """
+    if df.empty:
+        return df
+    
+    df = df.copy()
+    
+    # First apply DML rollup
+    df = rollup_dml_lids(df)
+    
+    # Create unified category for display
+    def get_unified_category(row):
+        cat = row.get('Product Category', 'Other')
+        subcat = row.get('Product Sub-Category', '')
+        component = row.get('Component Type', '')
+        
+        # For categories that are already complete products
+        if cat in ['Tubes', 'Boxes', 'Flexpack', 'Calyx Cure', 'Shipping/Fees', 'Other']:
+            return cat
+        
+        # For Drams - unify base + lid + labels
+        if cat == 'Drams':
+            # Extract size (15D, 25D, 45D, 145D)
+            size_match = re.search(r'(\d+D)', str(subcat))
+            if size_match:
+                return f"Drams ({size_match.group(1)})"
+            return 'Drams'
+        
+        # For Concentrates - unify jar + lid
+        if cat == 'Concentrates':
+            size_match = re.search(r'(4mL|7mL)', str(subcat))
+            if size_match:
+                return f"Concentrates ({size_match.group(1)})"
+            return 'Concentrates'
+        
+        # For Calyx Jar
+        if cat == 'Calyx Jar':
+            return 'Calyx Jar'
+        
+        # For accessories
+        if cat == 'Dram Accessories':
+            return 'Dram Accessories'
+        
+        # For labels
+        if cat == 'Non-Core Labels':
+            return 'Non-Core Labels'
+        
+        return cat
+    
+    df['Unified Category'] = df.apply(get_unified_category, axis=1)
     
     return df
 
@@ -2150,45 +2442,56 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         st.info(f"No invoice line item data available for {customer_name}.")
         return
     
-    # Apply product categorization
+    # Apply product categorization and create unified view
     line_items_df = apply_product_categories(line_items_df)
+    line_items_df = create_unified_product_view(line_items_df)
     
-    # Exclude Shipping/Fees from product analysis
+    # Calculate totals for ALL line items (must match invoice main line)
+    total_line_revenue = line_items_df['Amount'].sum() if 'Amount' in line_items_df.columns else 0
+    total_quantity = line_items_df['Quantity'].sum() if 'Quantity' in line_items_df.columns else 0
+    line_count = len(line_items_df)
+    
+    # Separate product items from fees for display purposes
     product_df = line_items_df[line_items_df['Product Category'] != 'Shipping/Fees'].copy()
+    fees_df = line_items_df[line_items_df['Product Category'] == 'Shipping/Fees'].copy()
     
-    if product_df.empty:
-        st.info("No product line items found (only fees/shipping).")
-        return
+    product_revenue = product_df['Amount'].sum() if not product_df.empty else 0
+    fees_revenue = fees_df['Amount'].sum() if not fees_df.empty else 0
+    unique_categories = product_df['Unified Category'].nunique() if not product_df.empty and 'Unified Category' in product_df.columns else 0
     
-    # Calculate totals for context (not recomputing - just line item sum)
-    total_line_revenue = product_df['Amount'].sum() if 'Amount' in product_df.columns else 0
-    total_quantity = product_df['Quantity'].sum() if 'Quantity' in product_df.columns else 0
-    line_count = len(product_df)
-    unique_categories = product_df['Product Category'].nunique() if 'Product Category' in product_df.columns else 0
-    
-    # Summary metrics
+    # Summary metrics - show TOTAL first (to match invoice main line)
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Product Revenue", f"${total_line_revenue:,.0f}")
+        st.metric("Total Revenue", f"${total_line_revenue:,.0f}")
     with col2:
-        st.metric("Total Units", f"{total_quantity:,.0f}")
+        st.metric("Product Revenue", f"${product_revenue:,.0f}")
     with col3:
         st.metric("Line Items", f"{line_count:,}")
     with col4:
         st.metric("Product Categories", f"{unique_categories}")
     
+    # Show fees separately if they exist
+    if fees_revenue != 0:
+        st.caption(f"💡 Includes ${fees_revenue:,.0f} in fees/adjustments ({len(fees_df)} items)")
+    
+    if product_df.empty:
+        st.info("No product line items found (only fees/adjustments).")
+        return
+    
     # Create tabs for different analysis views
     analysis_tabs = st.tabs(["📊 Product Categories", "🔍 Category Breakdown", "📈 Purchase Patterns"])
     
     # =========================================================================
-    # TAB 1: Product Categories Overview (Customer-Friendly)
+    # TAB 1: Product Categories Overview (Customer-Friendly Unified View)
     # =========================================================================
     with analysis_tabs[0]:
         st.markdown("#### Product Categories")
-        st.caption("Your purchases organized by product type")
+        st.caption("Your purchases organized by product type (components rolled up)")
         
-        # Group by Product Category
-        category_summary = product_df.groupby('Product Category').agg({
+        # Group by Unified Category for customer-friendly view
+        category_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
+        
+        category_summary = product_df.groupby(category_col).agg({
             'Amount': 'sum',
             'Quantity': 'sum',
             'Document Number': 'nunique'
@@ -2196,8 +2499,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         category_summary.columns = ['Category', 'Revenue', 'Units', 'Orders']
         category_summary = category_summary.sort_values('Revenue', ascending=False)
         
-        # Calculate percentages
-        category_summary['% of Revenue'] = (category_summary['Revenue'] / total_line_revenue * 100).round(1)
+        # Calculate percentages (of product revenue, not including fees)
+        category_summary['% of Revenue'] = (category_summary['Revenue'] / product_revenue * 100).round(1) if product_revenue > 0 else 0
         
         if len(category_summary) > 0:
             # Two columns: chart and summary
@@ -2260,28 +2563,44 @@ def render_line_item_analysis_section(line_items_df, customer_name):
     # =========================================================================
     with analysis_tabs[1]:
         st.markdown("#### Category Breakdown")
-        st.caption("Drill down into each product category to see specific sizes/types")
+        st.caption("Drill down into each product category to see components and sizes")
         
-        # Get categories ordered by revenue
+        # Get categories ordered by revenue (using Unified Category)
+        category_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
         categories_ordered = category_summary['Category'].tolist()
         
         for category in categories_ordered:
-            cat_df = product_df[product_df['Product Category'] == category]
+            cat_df = product_df[product_df[category_col] == category]
             cat_revenue = cat_df['Amount'].sum()
             cat_units = cat_df['Quantity'].sum()
             
-            # Get sub-category breakdown
+            # Get sub-category breakdown (shows components: Base, Lid, Label, etc.)
             subcat_summary = cat_df.groupby('Product Sub-Category').agg({
                 'Amount': 'sum',
                 'Quantity': 'sum',
                 'Document Number': 'nunique'
             }).reset_index()
-            subcat_summary.columns = ['Type', 'Revenue', 'Units', 'Orders']
+            subcat_summary.columns = ['Component', 'Revenue', 'Units', 'Orders']
             subcat_summary = subcat_summary.sort_values('Revenue', ascending=False)
-            subcat_summary['% of Category'] = (subcat_summary['Revenue'] / cat_revenue * 100).round(1)
+            subcat_summary['% of Category'] = (subcat_summary['Revenue'] / cat_revenue * 100).round(1) if cat_revenue > 0 else 0
+            
+            # Also get component type breakdown
+            if 'Component Type' in cat_df.columns:
+                component_summary = cat_df.groupby('Component Type').agg({
+                    'Amount': 'sum'
+                }).reset_index()
+                component_summary.columns = ['Type', 'Revenue']
+                component_summary = component_summary.sort_values('Revenue', ascending=False)
             
             # Category header with summary
             with st.expander(f"**{category}** — ${cat_revenue:,.0f} ({cat_units:,.0f} units)", expanded=(category == categories_ordered[0])):
+                
+                # Show component type summary if available
+                if 'Component Type' in cat_df.columns:
+                    comp_types = cat_df['Component Type'].dropna().unique()
+                    if len(comp_types) > 1:
+                        comp_str = ", ".join([f"{t}s" for t in comp_types if t])
+                        st.caption(f"Includes: {comp_str}")
                 
                 if len(subcat_summary) > 1:
                     # Show breakdown chart
@@ -2289,18 +2608,18 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                     
                     with col1:
                         fig = go.Figure(data=[go.Bar(
-                            x=subcat_summary['Type'],
+                            x=subcat_summary['Component'],
                             y=subcat_summary['Revenue'],
                             marker_color='#3b82f6',
                             text=subcat_summary['Revenue'].apply(lambda x: f"${x/1000:.1f}K" if x >= 1000 else f"${x:.0f}"),
                             textposition='outside'
                         )])
                         fig.update_layout(
-                            title=f"{category} Breakdown",
+                            title=f"{category} Components",
                             xaxis_title="",
                             yaxis_title="Revenue ($)",
                             height=300,
-                            margin=dict(t=50, b=50),
+                            margin=dict(t=50, b=80),
                             xaxis_tickangle=-30
                         )
                         st.plotly_chart(fig, use_container_width=True)
@@ -2314,7 +2633,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                         st.dataframe(display_subcat, use_container_width=True, hide_index=True)
                 else:
                     # Single sub-category, just show the value
-                    st.markdown(f"**{subcat_summary.iloc[0]['Type']}**: ${subcat_summary.iloc[0]['Revenue']:,.0f} ({subcat_summary.iloc[0]['Units']:,.0f} units)")
+                    if not subcat_summary.empty:
+                        st.markdown(f"**{subcat_summary.iloc[0]['Component']}**: ${subcat_summary.iloc[0]['Revenue']:,.0f} ({subcat_summary.iloc[0]['Units']:,.0f} units)")
                 
                 # Show top items in this category
                 st.markdown("---")
@@ -2339,8 +2659,10 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         st.markdown("#### Purchase Patterns by Category")
         st.caption("Which product categories are consistently purchased vs. one-time")
         
-        # Analyze purchase frequency by category
-        category_frequency = product_df.groupby('Product Category').agg({
+        # Analyze purchase frequency by Unified Category
+        category_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
+        
+        category_frequency = product_df.groupby(category_col).agg({
             'Document Number': 'nunique',
             'Amount': 'sum',
             'Quantity': 'sum'
