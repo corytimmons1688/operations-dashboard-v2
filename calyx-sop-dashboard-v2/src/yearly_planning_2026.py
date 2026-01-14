@@ -1334,7 +1334,7 @@ def get_customer_deals(customer_name, rep_name, deals_df):
 
 # ========== QBR SECTION FUNCTIONS ==========
 
-def render_pending_orders_section(customer_orders):
+def render_pending_orders_section(customer_orders, key_prefix=""):
     """Section 1: Current Pending Orders"""
     st.markdown("### 📦 Current Pending Orders")
     
@@ -1379,7 +1379,8 @@ def render_pending_orders_section(customer_orders):
     st.dataframe(status_summary, use_container_width=True)
     
     # Order details table
-    with st.expander("📋 View Order Details"):
+    expander_key = f"pending_orders_{key_prefix}" if key_prefix else None
+    with st.expander("📋 View Order Details", expanded=False, key=expander_key):
         display_cols = ['SO Number', 'Order Type', 'Amount', 'Order Start Date', 'Updated Status']
         display_cols = [c for c in display_cols if c in pending_orders.columns]
         display_df = pending_orders[display_cols].copy()
@@ -1389,7 +1390,7 @@ def render_pending_orders_section(customer_orders):
         st.dataframe(display_df, use_container_width=True)
 
 
-def render_open_invoices_section(customer_invoices):
+def render_open_invoices_section(customer_invoices, key_prefix=""):
     """Section 2: Open Invoices"""
     st.markdown("### 💳 Open Invoices")
     
@@ -1399,10 +1400,6 @@ def render_open_invoices_section(customer_invoices):
     
     # Filter to open invoices
     open_invoices = customer_invoices[customer_invoices['Status'] == 'Open'].copy()
-    
-    if open_invoices.empty:
-        st.success("✅ No open invoices - all invoices paid in full!")
-        return
     
     if open_invoices.empty:
         st.success("✅ No open invoices - all invoices paid in full!")
@@ -1459,7 +1456,8 @@ def render_open_invoices_section(customer_invoices):
         st.dataframe(aging_df, use_container_width=True, hide_index=True)
     
     # Invoice details
-    with st.expander("📋 View Invoice Details"):
+    expander_key = f"open_invoices_{key_prefix}" if key_prefix else None
+    with st.expander("📋 View Invoice Details", key=expander_key):
         display_cols = ['Document Number', 'Date', 'Due Date', 'Amount', 'Amount Remaining', 'Days Overdue']
         display_cols = [c for c in display_cols if c in open_invoices.columns]
         display_df = open_invoices[display_cols].copy()
@@ -1839,7 +1837,8 @@ def render_pipeline_section(customer_deals, customer_name):
     st.dataframe(status_summary, use_container_width=True)
     
     # Deal details
-    with st.expander("📋 View Deal Details"):
+    expander_key = f"deals_{safe_customer_key}"
+    with st.expander("📋 View Deal Details", key=expander_key):
         display_cols = ['Deal Name', 'Close Status', 'Deal Type', 'Amount', 'Probability Rev', 'Close Date', 'Pending Approval Date']
         display_cols = [c for c in display_cols if c in open_deals.columns]
         display_df = open_deals[display_cols].copy()
@@ -2102,6 +2101,20 @@ def render_yearly_planning_2026():
     
     st.markdown("---")
     
+    # Display count of selected customers
+    st.markdown(f"""
+        <div style="
+            background: #1e293b;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            color: #94a3b8;
+        ">
+            <strong style="color: #f1f5f9;">📊 {len(selected_customers)} customer(s) selected:</strong> 
+            {', '.join(selected_customers)}
+        </div>
+    """, unsafe_allow_html=True)
+    
     # Prepare data for all selected customers
     all_customers_data = []
     for customer_name in selected_customers:
@@ -2118,6 +2131,9 @@ def render_yearly_planning_2026():
         customer_deals = get_customer_deals(customer_name, selected_rep, deals_df)
         
         all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals))
+    
+    # DEBUG: Show what we have
+    st.info(f"DEBUG: Prepared data for {len(all_customers_data)} customers: {[c[0] for c in all_customers_data]}")
     
     # Download buttons section
     st.markdown("""
@@ -2190,9 +2206,11 @@ def render_yearly_planning_2026():
     
     st.markdown("---")
     
-    # Display each customer's QBR sections
-    for idx, (selected_customer, customer_orders, customer_invoices, customer_deals) in enumerate(all_customers_data):
-        # Customer header
+    # Display customer QBR sections
+    if len(all_customers_data) == 1:
+        # Single customer - display directly
+        selected_customer, customer_orders, customer_invoices, customer_deals = all_customers_data[0]
+        
         st.markdown(f"""
             <div style="
                 background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
@@ -2207,37 +2225,57 @@ def render_yearly_planning_2026():
             </div>
         """, unsafe_allow_html=True)
         
-        # Render each section
         render_pending_orders_section(customer_orders)
         st.markdown("---")
-        
         render_open_invoices_section(customer_invoices)
         st.markdown("---")
-        
         render_revenue_section(customer_invoices)
         st.markdown("---")
-        
         render_on_time_section(customer_orders)
         st.markdown("---")
-        
         render_order_cadence_section(customer_orders)
         st.markdown("---")
-        
         render_order_type_mix_section(customer_orders)
         st.markdown("---")
-        
         render_pipeline_section(customer_deals, selected_customer)
+    else:
+        # Multiple customers - use tabs
+        st.info(f"DEBUG: Creating tabs for {len(all_customers_data)} customers")
+        tab_names = [name[:25] + "..." if len(name) > 25 else name for name, _, _, _ in all_customers_data]
+        st.info(f"DEBUG: Tab names: {tab_names}")
+        tabs = st.tabs(tab_names)
         
-        # Add big separator between customers if not the last one
-        if idx < len(all_customers_data) - 1:
-            st.markdown("")
-            st.markdown("""
-                <div style="
-                    border-top: 4px solid #3b82f6;
-                    margin: 2rem 0;
-                    padding-top: 2rem;
-                "></div>
-            """, unsafe_allow_html=True)
+        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals)) in enumerate(zip(tabs, all_customers_data)):
+            with tab:
+                st.caption(f"DEBUG: Rendering tab {idx+1} for {selected_customer}")
+                key_prefix = f"tab{idx}_{selected_customer.replace(' ', '_')[:20]}"
+                st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+                        padding: 1.5rem 2rem;
+                        border-radius: 12px;
+                        margin-bottom: 1rem;
+                    ">
+                        <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
+                        <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                            Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                        </p>
+                    </div>
+                """, unsafe_allow_html=True)
+                
+                render_pending_orders_section(customer_orders, key_prefix)
+                st.markdown("---")
+                render_open_invoices_section(customer_invoices, key_prefix)
+                st.markdown("---")
+                render_revenue_section(customer_invoices)
+                st.markdown("---")
+                render_on_time_section(customer_orders)
+                st.markdown("---")
+                render_order_cadence_section(customer_orders)
+                st.markdown("---")
+                render_order_type_mix_section(customer_orders)
+                st.markdown("---")
+                render_pipeline_section(customer_deals, selected_customer)
 
 
 # ========== ENTRY POINT ==========
