@@ -2135,27 +2135,180 @@ def render_yearly_planning_2026():
         """, unsafe_allow_html=True)
         return
     
+    # =========================================================================
+    # DATE FILTER SECTION
+    # =========================================================================
+    st.markdown("""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #f59e0b;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">📅 Date Range Filter</h3>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Date filter controls
+    col_period, col_range = st.columns([1, 2])
+    
+    with col_period:
+        period_type = st.selectbox(
+            "TIME PERIOD",
+            ["All Time", "This Month", "This Quarter", "This Year", "Last Month", "Last Quarter", "Last Year", "Custom Range"],
+            key="qbr_period_type"
+        )
+    
+    # Calculate date range based on selection
+    today = datetime.now()
+    
+    if period_type == "All Time":
+        start_date = None
+        end_date = None
+        date_label = "All Time"
+    elif period_type == "This Month":
+        start_date = today.replace(day=1)
+        end_date = today
+        date_label = today.strftime("%B %Y")
+    elif period_type == "Last Month":
+        first_of_month = today.replace(day=1)
+        last_month_end = first_of_month - timedelta(days=1)
+        start_date = last_month_end.replace(day=1)
+        end_date = last_month_end
+        date_label = start_date.strftime("%B %Y")
+    elif period_type == "This Quarter":
+        quarter = (today.month - 1) // 3
+        start_date = datetime(today.year, quarter * 3 + 1, 1)
+        end_date = today
+        date_label = f"Q{quarter + 1} {today.year}"
+    elif period_type == "Last Quarter":
+        quarter = (today.month - 1) // 3
+        if quarter == 0:
+            start_date = datetime(today.year - 1, 10, 1)
+            end_date = datetime(today.year - 1, 12, 31)
+            date_label = f"Q4 {today.year - 1}"
+        else:
+            start_date = datetime(today.year, (quarter - 1) * 3 + 1, 1)
+            end_month = quarter * 3
+            if end_month == 3:
+                end_date = datetime(today.year, 3, 31)
+            elif end_month == 6:
+                end_date = datetime(today.year, 6, 30)
+            else:
+                end_date = datetime(today.year, 9, 30)
+            date_label = f"Q{quarter} {today.year}"
+    elif period_type == "This Year":
+        start_date = datetime(today.year, 1, 1)
+        end_date = today
+        date_label = str(today.year)
+    elif period_type == "Last Year":
+        start_date = datetime(today.year - 1, 1, 1)
+        end_date = datetime(today.year - 1, 12, 31)
+        date_label = str(today.year - 1)
+    else:  # Custom Range
+        start_date = None
+        end_date = None
+        date_label = "Custom"
+    
+    with col_range:
+        if period_type == "Custom Range":
+            # Show date range picker for custom
+            date_col1, date_col2 = st.columns(2)
+            with date_col1:
+                custom_start = st.date_input(
+                    "START DATE",
+                    value=today - timedelta(days=365),
+                    key="qbr_custom_start"
+                )
+            with date_col2:
+                custom_end = st.date_input(
+                    "END DATE",
+                    value=today,
+                    key="qbr_custom_end"
+                )
+            start_date = datetime.combine(custom_start, datetime.min.time())
+            end_date = datetime.combine(custom_end, datetime.max.time())
+            date_label = f"{custom_start.strftime('%b %d, %Y')} - {custom_end.strftime('%b %d, %Y')}"
+        else:
+            # Show the calculated date range
+            if start_date and end_date:
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 0.75rem 1rem;
+                        border-radius: 8px;
+                        margin-top: 1.5rem;
+                        color: #94a3b8;
+                    ">
+                        <span style="color: #f59e0b; font-weight: 600;">📆 {date_label}</span><br>
+                        <span style="font-size: 0.85rem;">{start_date.strftime('%b %d, %Y')} → {end_date.strftime('%b %d, %Y')}</span>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 0.75rem 1rem;
+                        border-radius: 8px;
+                        margin-top: 1.5rem;
+                        color: #94a3b8;
+                    ">
+                        <span style="color: #f59e0b; font-weight: 600;">📆 All Time</span><br>
+                        <span style="font-size: 0.85rem;">No date filter applied</span>
+                    </div>
+                """, unsafe_allow_html=True)
+    
+    # Apply date filter to dataframes
+    def filter_by_date(df, date_col, start, end):
+        """Filter dataframe by date column"""
+        if df.empty or date_col not in df.columns:
+            return df
+        if start is None and end is None:
+            return df
+        
+        df_filtered = df.copy()
+        df_filtered[date_col] = pd.to_datetime(df_filtered[date_col], errors='coerce')
+        
+        if start is not None:
+            df_filtered = df_filtered[df_filtered[date_col] >= pd.Timestamp(start)]
+        if end is not None:
+            df_filtered = df_filtered[df_filtered[date_col] <= pd.Timestamp(end)]
+        
+        return df_filtered
+    
+    # Filter each dataframe
+    # Sales Orders - filter by Order Start Date
+    filtered_orders_df = filter_by_date(sales_orders_df, 'Order Start Date', start_date, end_date)
+    
+    # Invoices - filter by Date
+    filtered_invoices_df = filter_by_date(invoices_df, 'Date', start_date, end_date)
+    
+    # Deals - filter by Close Date
+    filtered_deals_df = filter_by_date(deals_df, 'Close Date', start_date, end_date)
+    
     st.markdown("---")
     
-    # Prepare data for all selected customers
+    # Prepare data for all selected customers (using filtered dataframes)
     all_customers_data = []
     for customer_name in selected_customers:
-        customer_orders = sales_orders_df[
-            (sales_orders_df['Corrected Customer Name'] == customer_name) &
-            (sales_orders_df['Rep Master'] == selected_rep)
-        ].copy() if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns else pd.DataFrame()
+        customer_orders = filtered_orders_df[
+            (filtered_orders_df['Corrected Customer Name'] == customer_name) &
+            (filtered_orders_df['Rep Master'] == selected_rep)
+        ].copy() if not filtered_orders_df.empty and 'Corrected Customer Name' in filtered_orders_df.columns else pd.DataFrame()
         
-        customer_invoices = invoices_df[
-            (invoices_df['Corrected Customer'] == customer_name) &
-            (invoices_df['Rep Master'] == selected_rep)
-        ].copy() if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns else pd.DataFrame()
+        customer_invoices = filtered_invoices_df[
+            (filtered_invoices_df['Corrected Customer'] == customer_name) &
+            (filtered_invoices_df['Rep Master'] == selected_rep)
+        ].copy() if not filtered_invoices_df.empty and 'Corrected Customer' in filtered_invoices_df.columns else pd.DataFrame()
         
-        customer_deals = get_customer_deals(customer_name, selected_rep, deals_df)
+        customer_deals = get_customer_deals(customer_name, selected_rep, filtered_deals_df)
         
         all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals))
     
     # Download buttons section
-    st.markdown("""
+    date_info = f" | 📅 {date_label}" if date_label != "All Time" else ""
+    st.markdown(f"""
         <div style="
             background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
             padding: 1rem 1.5rem;
@@ -2163,7 +2316,7 @@ def render_yearly_planning_2026():
             border-left: 4px solid #10b981;
             margin-bottom: 1rem;
         ">
-            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">📥 Download Reports</h3>
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">📥 Download Reports{date_info}</h3>
         </div>
     """, unsafe_allow_html=True)
     
@@ -2239,6 +2392,9 @@ def render_yearly_planning_2026():
     
     st.markdown("---")
     
+    # Date filter label for headers
+    date_filter_text = f" &nbsp;|&nbsp; 📅 {date_label}" if date_label != "All Time" else ""
+    
     # Display customer QBR sections
     if len(all_customers_data) == 1:
         # Single customer - display directly
@@ -2253,7 +2409,7 @@ def render_yearly_planning_2026():
             ">
                 <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
                 <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                    Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                    Sales Rep: {selected_rep}{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
                 </p>
             </div>
         """, unsafe_allow_html=True)
@@ -2287,7 +2443,7 @@ def render_yearly_planning_2026():
                 ">
                     <h1 style="color: white; margin: 0; font-size: 2rem;">📊 Combined View - {len(all_customers_data)} Customers</h1>
                     <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                        Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                        Sales Rep: {selected_rep}{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
                     </p>
                 </div>
             """, unsafe_allow_html=True)
@@ -2418,7 +2574,7 @@ def render_yearly_planning_2026():
                     ">
                         <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
                         <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                            Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                            Sales Rep: {selected_rep}{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
                         </p>
                     </div>
                 """, unsafe_allow_html=True)
