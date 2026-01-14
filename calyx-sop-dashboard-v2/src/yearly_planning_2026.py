@@ -1334,7 +1334,7 @@ def get_customer_deals(customer_name, rep_name, deals_df):
 
 # ========== QBR SECTION FUNCTIONS ==========
 
-def render_pending_orders_section(customer_orders, key_prefix=""):
+def render_pending_orders_section(customer_orders):
     """Section 1: Current Pending Orders"""
     st.markdown("### 📦 Current Pending Orders")
     
@@ -1379,8 +1379,7 @@ def render_pending_orders_section(customer_orders, key_prefix=""):
     st.dataframe(status_summary, use_container_width=True)
     
     # Order details table
-    expander_key = f"pending_orders_{key_prefix}" if key_prefix else None
-    with st.expander("📋 View Order Details", expanded=False, key=expander_key):
+    with st.expander("📋 View Order Details", expanded=False):
         display_cols = ['SO Number', 'Order Type', 'Amount', 'Order Start Date', 'Updated Status']
         display_cols = [c for c in display_cols if c in pending_orders.columns]
         display_df = pending_orders[display_cols].copy()
@@ -1390,7 +1389,7 @@ def render_pending_orders_section(customer_orders, key_prefix=""):
         st.dataframe(display_df, use_container_width=True)
 
 
-def render_open_invoices_section(customer_invoices, key_prefix=""):
+def render_open_invoices_section(customer_invoices):
     """Section 2: Open Invoices"""
     st.markdown("### 💳 Open Invoices")
     
@@ -1456,8 +1455,7 @@ def render_open_invoices_section(customer_invoices, key_prefix=""):
         st.dataframe(aging_df, use_container_width=True, hide_index=True)
     
     # Invoice details
-    expander_key = f"open_invoices_{key_prefix}" if key_prefix else None
-    with st.expander("📋 View Invoice Details", key=expander_key):
+    with st.expander("📋 View Invoice Details"):
         display_cols = ['Document Number', 'Date', 'Due Date', 'Amount', 'Amount Remaining', 'Days Overdue']
         display_cols = [c for c in display_cols if c in open_invoices.columns]
         display_df = open_invoices[display_cols].copy()
@@ -1837,8 +1835,7 @@ def render_pipeline_section(customer_deals, customer_name):
     st.dataframe(status_summary, use_container_width=True)
     
     # Deal details
-    expander_key = f"deals_{safe_customer_key}"
-    with st.expander("📋 View Deal Details", key=expander_key):
+    with st.expander("📋 View Deal Details"):
         display_cols = ['Deal Name', 'Close Status', 'Deal Type', 'Amount', 'Probability Rev', 'Close Date', 'Pending Approval Date']
         display_cols = [c for c in display_cols if c in open_deals.columns]
         display_df = open_deals[display_cols].copy()
@@ -2248,7 +2245,6 @@ def render_yearly_planning_2026():
         for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals)) in enumerate(zip(tabs, all_customers_data)):
             with tab:
                 st.caption(f"DEBUG: Rendering tab {idx+1} for {selected_customer}")
-                key_prefix = f"tab{idx}_{selected_customer.replace(' ', '_')[:20]}"
                 st.markdown(f"""
                     <div style="
                         background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
@@ -2263,9 +2259,9 @@ def render_yearly_planning_2026():
                     </div>
                 """, unsafe_allow_html=True)
                 
-                render_pending_orders_section(customer_orders, key_prefix)
+                render_pending_orders_section(customer_orders)
                 st.markdown("---")
-                render_open_invoices_section(customer_invoices, key_prefix)
+                render_open_invoices_section(customer_invoices)
                 st.markdown("---")
                 render_revenue_section(customer_invoices)
                 st.markdown("---")
