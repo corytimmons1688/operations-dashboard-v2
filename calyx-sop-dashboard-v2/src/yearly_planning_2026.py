@@ -849,6 +849,9 @@ def generate_combined_qbr_html(customers_data, rep_name):
     """
     generated_date = datetime.now().strftime('%B %d, %Y')
     
+    # Debug: log how many customers we're processing
+    print(f"generate_combined_qbr_html called with {len(customers_data)} customers: {[c[0] for c in customers_data]}")
+    
     # Start with the common HTML header and styles
     html = f"""
     <!DOCTYPE html>
@@ -1027,6 +1030,8 @@ def generate_combined_qbr_html(customers_data, rep_name):
     
     # Generate content for each customer
     for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(customers_data):
+        print(f"Processing customer {idx+1}/{len(customers_data)}: {customer_name}")
+        
         # Add page break divider for customers after the first
         if idx > 0:
             html += '<div class="customer-divider"></div>'
@@ -1035,13 +1040,18 @@ def generate_combined_qbr_html(customers_data, rep_name):
         # But we need to extract just the body content, so let's build it inline
         single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals)
         
+        print(f"  Generated HTML length: {len(single_html) if single_html else 0}")
+        
         # Extract just the body content (between <body> and </body>)
         body_match = re.search(r'<body>(.*?)</body>', single_html, re.DOTALL)
         if body_match:
             body_content = body_match.group(1)
+            print(f"  Extracted body length: {len(body_content)}")
             # Remove the footer from individual reports (we'll add one at the end)
             body_content = re.sub(r'<div class="footer">.*?</div>', '', body_content, flags=re.DOTALL)
             html += body_content
+        else:
+            print(f"  WARNING: No body match found for {customer_name}")
     
     # Add combined footer
     customer_names = ", ".join([c[0] for c in customers_data])
@@ -2098,20 +2108,6 @@ def render_yearly_planning_2026():
     
     st.markdown("---")
     
-    # Display count of selected customers
-    st.markdown(f"""
-        <div style="
-            background: #1e293b;
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
-            margin-bottom: 1rem;
-            color: #94a3b8;
-        ">
-            <strong style="color: #f1f5f9;">📊 {len(selected_customers)} customer(s) selected:</strong> 
-            {', '.join(selected_customers)}
-        </div>
-    """, unsafe_allow_html=True)
-    
     # Prepare data for all selected customers
     all_customers_data = []
     for customer_name in selected_customers:
@@ -2130,7 +2126,7 @@ def render_yearly_planning_2026():
         all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals))
     
     # DEBUG: Show what we have
-    st.info(f"DEBUG: Prepared data for {len(all_customers_data)} customers: {[c[0] for c in all_customers_data]}")
+    st.caption(f"📊 Loaded data for {len(all_customers_data)} customers")
     
     # Download buttons section
     st.markdown("""
@@ -2166,6 +2162,7 @@ def render_yearly_planning_2026():
         num_customers = len(selected_customers)
         
         # Generate combined report
+        st.caption(f"📄 Combined report will include: {', '.join([c[0] for c in all_customers_data])}")
         combined_html = generate_combined_qbr_html(all_customers_data, selected_rep)
         
         # Combined download button (prominent)
@@ -2236,15 +2233,143 @@ def render_yearly_planning_2026():
         st.markdown("---")
         render_pipeline_section(customer_deals, selected_customer)
     else:
-        # Multiple customers - use tabs
-        st.info(f"DEBUG: Creating tabs for {len(all_customers_data)} customers")
-        tab_names = [name[:25] + "..." if len(name) > 25 else name for name, _, _, _ in all_customers_data]
-        st.info(f"DEBUG: Tab names: {tab_names}")
+        # Multiple customers - use tabs with Combined view first
+        tab_names = ["📊 Combined View"] + [name[:25] + "..." if len(name) > 25 else name for name, _, _, _ in all_customers_data]
         tabs = st.tabs(tab_names)
         
-        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals)) in enumerate(zip(tabs, all_customers_data)):
+        # Combined View Tab
+        with tabs[0]:
+            st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #059669 0%, #10b981 50%, #34d399 100%);
+                    padding: 1.5rem 2rem;
+                    border-radius: 12px;
+                    margin-bottom: 1rem;
+                ">
+                    <h1 style="color: white; margin: 0; font-size: 2rem;">📊 Combined View - {len(all_customers_data)} Customers</h1>
+                    <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                        Sales Rep: {selected_rep} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                    </p>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Aggregate all data
+            all_orders = pd.concat([data[1] for data in all_customers_data if not data[1].empty], ignore_index=True) if any(not data[1].empty for data in all_customers_data) else pd.DataFrame()
+            all_invoices = pd.concat([data[2] for data in all_customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in all_customers_data) else pd.DataFrame()
+            all_deals = pd.concat([data[3] for data in all_customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in all_customers_data) else pd.DataFrame()
+            
+            # Combined Summary Metrics
+            st.markdown("### 📈 Combined Summary")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            # Pending Orders
+            pending_statuses = ['PA with Date', 'PA No Date', 'PA Old (>2 Weeks)', 
+                                'PF with Date (Ext)', 'PF with Date (Int)', 
+                                'PF No Date (Ext)', 'PF No Date (Int)']
+            if not all_orders.empty and 'Updated Status' in all_orders.columns:
+                pending_orders = all_orders[all_orders['Updated Status'].isin(pending_statuses)]
+                total_pending = pending_orders['Amount'].sum() if not pending_orders.empty else 0
+                pending_count = len(pending_orders)
+            else:
+                total_pending = 0
+                pending_count = 0
+            
+            with col1:
+                st.metric("Total Pending Orders", f"${total_pending:,.0f}", f"{pending_count} orders")
+            
+            # Open Invoices
+            if not all_invoices.empty and 'Status' in all_invoices.columns:
+                open_inv = all_invoices[all_invoices['Status'] == 'Open']
+                total_outstanding = open_inv['Amount Remaining'].sum() if not open_inv.empty and 'Amount Remaining' in open_inv.columns else 0
+                open_count = len(open_inv)
+            else:
+                total_outstanding = 0
+                open_count = 0
+            
+            with col2:
+                st.metric("Total Outstanding", f"${total_outstanding:,.0f}", f"{open_count} invoices")
+            
+            # Total Revenue
+            total_revenue = all_invoices['Amount'].sum() if not all_invoices.empty and 'Amount' in all_invoices.columns else 0
+            invoice_count = len(all_invoices)
+            
+            with col3:
+                st.metric("Total Revenue", f"${total_revenue:,.0f}", f"{invoice_count} invoices")
+            
+            # Pipeline
+            if not all_deals.empty and 'Close Status' in all_deals.columns:
+                open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+                open_deals = all_deals[all_deals['Close Status'].isin(open_statuses)]
+                total_pipeline = open_deals['Amount'].sum() if not open_deals.empty else 0
+                deal_count = len(open_deals)
+            else:
+                total_pipeline = 0
+                deal_count = 0
+            
+            with col4:
+                st.metric("Total Pipeline", f"${total_pipeline:,.0f}", f"{deal_count} deals")
+            
+            st.markdown("---")
+            
+            # Customer Breakdown Table
+            st.markdown("### 👥 Customer Breakdown")
+            
+            breakdown_data = []
+            for customer_name, customer_orders, customer_invoices, customer_deals in all_customers_data:
+                # Calculate metrics for each customer
+                if not customer_orders.empty and 'Updated Status' in customer_orders.columns:
+                    cust_pending = customer_orders[customer_orders['Updated Status'].isin(pending_statuses)]
+                    cust_pending_val = cust_pending['Amount'].sum() if not cust_pending.empty else 0
+                else:
+                    cust_pending_val = 0
+                
+                if not customer_invoices.empty and 'Status' in customer_invoices.columns:
+                    cust_open = customer_invoices[customer_invoices['Status'] == 'Open']
+                    cust_outstanding = cust_open['Amount Remaining'].sum() if not cust_open.empty and 'Amount Remaining' in cust_open.columns else 0
+                else:
+                    cust_outstanding = 0
+                
+                cust_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty and 'Amount' in customer_invoices.columns else 0
+                
+                if not customer_deals.empty and 'Close Status' in customer_deals.columns:
+                    cust_open_deals = customer_deals[customer_deals['Close Status'].isin(['Expect', 'Commit', 'Best Case', 'Opportunity'])]
+                    cust_pipeline = cust_open_deals['Amount'].sum() if not cust_open_deals.empty else 0
+                else:
+                    cust_pipeline = 0
+                
+                breakdown_data.append({
+                    'Customer': customer_name,
+                    'Pending Orders': f"${cust_pending_val:,.0f}",
+                    'Outstanding': f"${cust_outstanding:,.0f}",
+                    'Total Revenue': f"${cust_revenue:,.0f}",
+                    'Pipeline': f"${cust_pipeline:,.0f}"
+                })
+            
+            breakdown_df = pd.DataFrame(breakdown_data)
+            st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+            
+            st.markdown("---")
+            
+            # Combined sections with aggregated data
+            st.markdown("### 📦 Combined Pending Orders")
+            render_pending_orders_section(all_orders)
+            
+            st.markdown("---")
+            st.markdown("### 💳 Combined Open Invoices")
+            render_open_invoices_section(all_invoices)
+            
+            st.markdown("---")
+            st.markdown("### 💰 Combined Revenue")
+            render_revenue_section(all_invoices)
+            
+            st.markdown("---")
+            st.markdown("### 🎯 Combined Pipeline")
+            render_pipeline_section(all_deals, "All Selected Customers")
+        
+        # Individual customer tabs
+        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals)) in enumerate(zip(tabs[1:], all_customers_data)):
             with tab:
-                st.caption(f"DEBUG: Rendering tab {idx+1} for {selected_customer}")
                 st.markdown(f"""
                     <div style="
                         background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
