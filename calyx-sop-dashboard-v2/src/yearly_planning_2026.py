@@ -3692,7 +3692,7 @@ def render_yearly_planning_2026():
             st.markdown("### 👥 Customer Breakdown")
             
             breakdown_data = []
-            for customer_name, customer_orders, customer_invoices, customer_deals, _ in all_customers_data:
+            for customer_name, customer_orders, customer_invoices, customer_deals, _, _ in all_customers_data:
                 # Calculate metrics for each customer
                 if not customer_orders.empty and 'Updated Status' in customer_orders.columns:
                     cust_pending = customer_orders[customer_orders['Updated Status'].isin(pending_statuses)]
