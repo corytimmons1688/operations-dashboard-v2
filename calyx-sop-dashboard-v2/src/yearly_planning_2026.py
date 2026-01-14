@@ -270,7 +270,7 @@ def create_pipeline_chart(customer_deals):
     return fig
 
 
-def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals):
+def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items=None, customer_ncrs=None):
     """Generate a clean HTML report for PDF export with charts"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
@@ -313,6 +313,162 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     # Pipeline Chart
     pipeline_fig = create_pipeline_chart(customer_deals)
     embed_chart(pipeline_fig, 'pipeline')
+    
+    # ===== Generate Line Item Analysis HTML =====
+    line_item_html = ""
+    if customer_line_items is not None and not customer_line_items.empty:
+        # Apply categorization
+        li_df = apply_product_categories(customer_line_items.copy())
+        li_df = create_unified_product_view(li_df)
+        
+        # Separate products from fees
+        product_df = li_df[li_df['Product Category'] != 'Fees & Adjustments'].copy()
+        fees_df = li_df[li_df['Product Category'] == 'Fees & Adjustments'].copy()
+        
+        total_line_revenue = li_df['Amount'].sum() if 'Amount' in li_df.columns else 0
+        product_revenue = product_df['Amount'].sum() if not product_df.empty else 0
+        fees_revenue = fees_df['Amount'].sum() if not fees_df.empty else 0
+        line_count = len(li_df)
+        
+        # Build category breakdown table
+        category_rows = ""
+        if not product_df.empty and 'Unified Category' in product_df.columns:
+            category_summary = product_df.groupby('Unified Category').agg({
+                'Amount': 'sum',
+                'Quantity': 'sum'
+            }).reset_index()
+            category_summary.columns = ['Category', 'Revenue', 'Units']
+            category_summary = category_summary.sort_values('Revenue', ascending=False)
+            category_summary['% of Revenue'] = (category_summary['Revenue'] / product_revenue * 100).round(1) if product_revenue > 0 else 0
+            
+            for _, row in category_summary.iterrows():
+                category_rows += f"<tr><td>{row['Category']}</td><td>${row['Revenue']:,.0f}</td><td>{row['Units']:,.0f}</td><td>{row['% of Revenue']:.1f}%</td></tr>"
+        
+        # Fees breakdown
+        fees_html = ""
+        if fees_revenue != 0:
+            fees_color = "#059669" if fees_revenue < 0 else "#d97706"
+            fees_html = f'<p style="color: {fees_color}; margin-top: 10px;">Fees & Adjustments: ${fees_revenue:,.0f}</p>'
+        
+        line_item_html = f"""
+        <div class="section">
+            <div class="section-title">📦 Product & SKU Analysis</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">Total Revenue</div>
+                    <div class="metric-value">${total_line_revenue:,.0f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Product Revenue</div>
+                    <div class="metric-value">${product_revenue:,.0f}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Line Items</div>
+                    <div class="metric-value">{line_count:,}</div>
+                </div>
+            </div>
+            {f'''
+            <h4 style="color: #475569; margin: 20px 0 10px 0;">Product Category Breakdown</h4>
+            <table class="data-table">
+                <thead><tr><th>Category</th><th>Revenue</th><th>Units</th><th>% of Total</th></tr></thead>
+                <tbody>{category_rows}</tbody>
+            </table>
+            ''' if category_rows else '<p style="color: #64748b;">No product category data available.</p>'}
+            {fees_html}
+        </div>
+        """
+    
+    # ===== Generate NCR Analysis HTML =====
+    ncr_html = ""
+    total_orders = len(customer_orders) if not customer_orders.empty else 0
+    
+    if customer_ncrs is not None and not customer_ncrs.empty:
+        ncr_count = len(customer_ncrs)
+        
+        # Get unique Sales Orders with NCRs
+        ncr_so_numbers = set()
+        if 'Sales Order' in customer_ncrs.columns:
+            ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
+            ncr_so_numbers = {str(so).strip() for so in ncr_so_numbers if str(so).strip()}
+        
+        orders_with_ncrs = len(ncr_so_numbers)
+        ncr_rate = (orders_with_ncrs / total_orders * 100) if total_orders > 0 else 0
+        
+        # Total Quantity Affected
+        total_qty_affected = 0
+        if 'Total Quantity Affected' in customer_ncrs.columns:
+            total_qty_affected = customer_ncrs['Total Quantity Affected'].sum()
+        
+        # Issue Type breakdown
+        issue_rows = ""
+        if 'Issue Type' in customer_ncrs.columns:
+            issue_summary = customer_ncrs.groupby('Issue Type').agg({
+                'NC Number': 'count' if 'NC Number' in customer_ncrs.columns else 'size',
+                'Total Quantity Affected': 'sum' if 'Total Quantity Affected' in customer_ncrs.columns else lambda x: 0
+            }).reset_index()
+            
+            if 'NC Number' in issue_summary.columns:
+                issue_summary = issue_summary.rename(columns={'NC Number': 'NCR Count'})
+            else:
+                issue_summary['NCR Count'] = issue_summary.iloc[:, 1]
+            
+            if 'Total Quantity Affected' in issue_summary.columns:
+                issue_summary = issue_summary.rename(columns={'Total Quantity Affected': 'Qty Affected'})
+            else:
+                issue_summary['Qty Affected'] = 0
+            
+            issue_summary = issue_summary.sort_values('NCR Count', ascending=False)
+            issue_summary['% of NCRs'] = (issue_summary['NCR Count'] / ncr_count * 100).round(1) if ncr_count > 0 else 0
+            
+            for _, row in issue_summary.iterrows():
+                issue_rows += f"<tr><td>{row['Issue Type']}</td><td>{row['NCR Count']}</td><td>{row['Qty Affected']:,.0f}</td><td>{row['% of NCRs']:.1f}%</td></tr>"
+        
+        # NCR rate color
+        rate_class = "success" if ncr_rate < 5 else "warning" if ncr_rate < 10 else ""
+        
+        ncr_html = f"""
+        <div class="section">
+            <div class="section-title">⚠️ Quality & Non-Conformance</div>
+            <div class="metric-row">
+                <div class="metric-card">
+                    <div class="metric-label">NCR Rate</div>
+                    <div class="metric-value {rate_class}">{ncr_rate:.1f}%</div>
+                    <div style="color: #64748b; font-size: 0.8rem;">{orders_with_ncrs} of {total_orders} orders</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Total NCRs</div>
+                    <div class="metric-value">{ncr_count}</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Qty Affected</div>
+                    <div class="metric-value">{total_qty_affected:,.0f}</div>
+                </div>
+            </div>
+            {f'''
+            <h4 style="color: #475569; margin: 20px 0 10px 0;">Issue Type Breakdown</h4>
+            <table class="data-table">
+                <thead><tr><th>Issue Type</th><th>NCR Count</th><th>Qty Affected</th><th>% of NCRs</th></tr></thead>
+                <tbody>{issue_rows}</tbody>
+            </table>
+            ''' if issue_rows else ''}
+        </div>
+        """
+    else:
+        # No NCRs - show positive message
+        ncr_html = f"""
+        <div class="section">
+            <div class="section-title">⚠️ Quality & Non-Conformance</div>
+            <div style="background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); padding: 20px; border-radius: 8px; border-left: 4px solid #10b981;">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 1.5rem;">✅</span>
+                    <div>
+                        <div style="color: #065f46; font-weight: 700;">No Quality Issues Recorded</div>
+                        <div style="color: #047857; font-size: 0.9rem;">{f'{total_orders} orders' if total_orders > 0 else 'Orders'} with zero NCRs on file</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """
     
     # ===== Calculate all metrics =====
     
@@ -832,6 +988,10 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             {pipeline_html if pipeline_html else '<p style="color: #64748b;">No upcoming orders scheduled.</p>'}
         </div>
         
+        {line_item_html}
+        
+        {ncr_html}
+        
         <div class="footer">
             <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
             <p style="margin-top: 5px;">Thank you for your partnership!</p>
@@ -1027,13 +1187,21 @@ def generate_combined_qbr_html(customers_data, rep_name):
     """
     
     # Generate content for each customer
-    for idx, (customer_name, customer_orders, customer_invoices, customer_deals, *_) in enumerate(customers_data):
+    for idx, customer_data in enumerate(customers_data):
+        # Unpack with support for extended tuple (name, orders, invoices, deals, line_items, ncrs)
+        customer_name = customer_data[0]
+        customer_orders = customer_data[1]
+        customer_invoices = customer_data[2]
+        customer_deals = customer_data[3]
+        customer_line_items = customer_data[4] if len(customer_data) > 4 else None
+        customer_ncrs = customer_data[5] if len(customer_data) > 5 else None
+        
         # Add page break divider for customers after the first
         if idx > 0:
             html += '<div class="customer-divider"></div>'
         
         # Generate this customer's content by calling the single-customer function
-        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals)
+        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
         
         # Extract just the body content (between <body> and </body>)
         body_match = re.search(r'<body>(.*?)</body>', single_html, re.DOTALL)
@@ -1071,11 +1239,19 @@ def generate_combined_summary_html(customers_data, rep_name):
     all_invoices = pd.concat([data[2] for data in customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in customers_data) else pd.DataFrame()
     all_deals = pd.concat([data[3] for data in customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in customers_data) else pd.DataFrame()
     
+    # Aggregate line items and NCRs if available
+    all_line_items = pd.DataFrame()
+    all_ncrs = pd.DataFrame()
+    if len(customers_data) > 0 and len(customers_data[0]) > 4:
+        all_line_items = pd.concat([data[4] for data in customers_data if len(data) > 4 and not data[4].empty], ignore_index=True) if any(len(data) > 4 and not data[4].empty for data in customers_data) else pd.DataFrame()
+    if len(customers_data) > 0 and len(customers_data[0]) > 5:
+        all_ncrs = pd.concat([data[5] for data in customers_data if len(data) > 5 and not data[5].empty], ignore_index=True) if any(len(data) > 5 and not data[5].empty for data in customers_data) else pd.DataFrame()
+    
     # Use the same report generator with a combined customer name
     combined_name = f"Combined Summary ({num_customers} Customers)"
     
     # Generate report using same format as individual reports
-    html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals)
+    html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals, all_line_items, all_ncrs)
     
     # Add a customer list section after the header
     customer_list_html = f"""
@@ -1407,18 +1583,31 @@ def get_rep_list(sales_orders_df, invoices_df):
 
 
 def get_customers_for_rep(rep_name, sales_orders_df, invoices_df):
-    """Get unique customers for a specific rep"""
+    """Get unique customers for a specific rep (or all reps if 'All Reps' selected)"""
     customers = set()
     
-    if not sales_orders_df.empty and 'Rep Master' in sales_orders_df.columns and 'Corrected Customer Name' in sales_orders_df.columns:
-        rep_orders = sales_orders_df[sales_orders_df['Rep Master'] == rep_name]
-        valid_customers = rep_orders['Corrected Customer Name'].dropna()
+    # Handle "All Reps" case - return all customers
+    all_reps = (rep_name == "All Reps")
+    
+    if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns:
+        if all_reps:
+            valid_customers = sales_orders_df['Corrected Customer Name'].dropna()
+        elif 'Rep Master' in sales_orders_df.columns:
+            rep_orders = sales_orders_df[sales_orders_df['Rep Master'] == rep_name]
+            valid_customers = rep_orders['Corrected Customer Name'].dropna()
+        else:
+            valid_customers = pd.Series(dtype=str)
         valid_customers = valid_customers[~valid_customers.isin(['', 'nan', 'None', '#N/A'])]
         customers.update(valid_customers.unique())
     
-    if not invoices_df.empty and 'Rep Master' in invoices_df.columns and 'Corrected Customer' in invoices_df.columns:
-        rep_invoices = invoices_df[invoices_df['Rep Master'] == rep_name]
-        valid_customers = rep_invoices['Corrected Customer'].dropna()
+    if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns:
+        if all_reps:
+            valid_customers = invoices_df['Corrected Customer'].dropna()
+        elif 'Rep Master' in invoices_df.columns:
+            rep_invoices = invoices_df[invoices_df['Rep Master'] == rep_name]
+            valid_customers = rep_invoices['Corrected Customer'].dropna()
+        else:
+            valid_customers = pd.Series(dtype=str)
         valid_customers = valid_customers[~valid_customers.isin(['', 'nan', 'None', '#N/A'])]
         customers.update(valid_customers.unique())
     
@@ -1432,11 +1621,17 @@ def get_customer_deals(customer_name, rep_name, deals_df):
     if deals_df.empty or 'Company Name' not in deals_df.columns:
         return pd.DataFrame()
     
-    # Direct match on Company Name and Deal Owner
-    matches = deals_df[
-        (deals_df['Company Name'] == customer_name) &
-        (deals_df['Deal Owner'] == rep_name)
-    ].copy()
+    # Handle "All Reps" case - don't filter by Deal Owner
+    if rep_name == "All Reps":
+        matches = deals_df[
+            deals_df['Company Name'] == customer_name
+        ].copy()
+    else:
+        # Direct match on Company Name and Deal Owner
+        matches = deals_df[
+            (deals_df['Company Name'] == customer_name) &
+            (deals_df['Deal Owner'] == rep_name)
+        ].copy()
     
     return matches
 
@@ -3229,11 +3424,12 @@ def render_yearly_planning_2026():
         'Kyle Bissell'
     ]
     
-    # Rep selector - filtered to allowed reps only
+    # Rep selector - filtered to allowed reps only, with "All Reps" option at top
     rep_list = get_rep_list(sales_orders_df, invoices_df)
     rep_list = [r for r in rep_list if r in ALLOWED_REPS]
+    rep_list = ["All Reps"] + sorted(rep_list)  # Add "All Reps" at top
     
-    if not rep_list:
+    if len(rep_list) <= 1:  # Only "All Reps" means no actual reps found
         st.error("No sales reps found in data.")
         return
     
@@ -3439,24 +3635,52 @@ def render_yearly_planning_2026():
     
     # Prepare data for all selected customers (using filtered dataframes)
     all_customers_data = []
+    all_reps_selected = (selected_rep == "All Reps")
+    
     for customer_name in selected_customers:
-        customer_orders = filtered_orders_df[
-            (filtered_orders_df['Corrected Customer Name'] == customer_name) &
-            (filtered_orders_df['Rep Master'] == selected_rep)
-        ].copy() if not filtered_orders_df.empty and 'Corrected Customer Name' in filtered_orders_df.columns else pd.DataFrame()
+        # Filter orders - don't filter by rep if "All Reps" selected
+        if not filtered_orders_df.empty and 'Corrected Customer Name' in filtered_orders_df.columns:
+            if all_reps_selected:
+                customer_orders = filtered_orders_df[
+                    filtered_orders_df['Corrected Customer Name'] == customer_name
+                ].copy()
+            else:
+                customer_orders = filtered_orders_df[
+                    (filtered_orders_df['Corrected Customer Name'] == customer_name) &
+                    (filtered_orders_df['Rep Master'] == selected_rep)
+                ].copy()
+        else:
+            customer_orders = pd.DataFrame()
         
-        customer_invoices = filtered_invoices_df[
-            (filtered_invoices_df['Corrected Customer'] == customer_name) &
-            (filtered_invoices_df['Rep Master'] == selected_rep)
-        ].copy() if not filtered_invoices_df.empty and 'Corrected Customer' in filtered_invoices_df.columns else pd.DataFrame()
+        # Filter invoices - don't filter by rep if "All Reps" selected
+        if not filtered_invoices_df.empty and 'Corrected Customer' in filtered_invoices_df.columns:
+            if all_reps_selected:
+                customer_invoices = filtered_invoices_df[
+                    filtered_invoices_df['Corrected Customer'] == customer_name
+                ].copy()
+            else:
+                customer_invoices = filtered_invoices_df[
+                    (filtered_invoices_df['Corrected Customer'] == customer_name) &
+                    (filtered_invoices_df['Rep Master'] == selected_rep)
+                ].copy()
+        else:
+            customer_invoices = pd.DataFrame()
         
         customer_deals = get_customer_deals(customer_name, selected_rep, filtered_deals_df)
         
-        # Invoice Line Items - group by Correct Customer and Rep Master (authoritative attribution)
-        customer_line_items = filtered_line_items_df[
-            (filtered_line_items_df['Correct Customer'] == customer_name) &
-            (filtered_line_items_df['Rep Master'] == selected_rep)
-        ].copy() if not filtered_line_items_df.empty and 'Correct Customer' in filtered_line_items_df.columns else pd.DataFrame()
+        # Invoice Line Items - don't filter by rep if "All Reps" selected
+        if not filtered_line_items_df.empty and 'Correct Customer' in filtered_line_items_df.columns:
+            if all_reps_selected:
+                customer_line_items = filtered_line_items_df[
+                    filtered_line_items_df['Correct Customer'] == customer_name
+                ].copy()
+            else:
+                customer_line_items = filtered_line_items_df[
+                    (filtered_line_items_df['Correct Customer'] == customer_name) &
+                    (filtered_line_items_df['Rep Master'] == selected_rep)
+                ].copy()
+        else:
+            customer_line_items = pd.DataFrame()
         
         # NCR Data - match by Corrected Customer Name or by Sales Order
         # Primary: Match by Corrected Customer Name
@@ -3499,7 +3723,7 @@ def render_yearly_planning_2026():
     if len(selected_customers) == 1:
         # Single customer - just one download button
         customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
-        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
+        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
         with col_btn:
@@ -3547,8 +3771,8 @@ def render_yearly_planning_2026():
         # Individual download buttons in expandable section
         with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
-            for idx, (customer_name, customer_orders, customer_invoices, customer_deals, _, _) in enumerate(all_customers_data):
-                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
+            for idx, (customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs) in enumerate(all_customers_data):
+                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
                 with cols[idx % 3]:
                     st.download_button(
                         label=f"📄 {customer_name[:20]}{'...' if len(customer_name) > 20 else ''}",
