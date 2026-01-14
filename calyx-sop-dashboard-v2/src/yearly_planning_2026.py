@@ -1347,7 +1347,43 @@ def load_qbr_data():
                 # Replace 'nan' strings with empty
                 invoice_line_items_df[col] = invoice_line_items_df[col].replace('nan', '')
     
-    return sales_orders_df, invoices_df, deals_df, invoice_line_items_df
+    # =========================================================================
+    # LOAD AND PROCESS NCR (NON-CONFORMANCE) DATA
+    # Used to track quality issues by customer
+    # =========================================================================
+    ncr_df = load_google_sheets_data("Non-Conformance Details", "A:W", version=CACHE_VERSION, silent=True)
+    
+    if not ncr_df.empty:
+        # Remove duplicate columns
+        if ncr_df.columns.duplicated().any():
+            ncr_df = ncr_df.loc[:, ~ncr_df.columns.duplicated()]
+        
+        # Clean text fields
+        # Column mappings based on user spec:
+        # F = Sales Order, I = Issue Type, P = Total Quantity Affected, V = Corrected Customer Name
+        for col in ['Sales Order', 'Issue Type', 'Corrected Customer Name', 'Status', 
+                    'Defect Summary', 'Priority', 'External Or Internal', 'NC Number']:
+            if col in ncr_df.columns:
+                ncr_df[col] = ncr_df[col].astype(str).str.strip()
+                ncr_df[col] = ncr_df[col].replace('nan', '')
+        
+        # Clean numeric data - Total Quantity Affected
+        if 'Total Quantity Affected' in ncr_df.columns:
+            ncr_df['Total Quantity Affected'] = ncr_df['Total Quantity Affected'].apply(clean_numeric)
+        
+        # Clean Cost fields if present
+        if 'Cost of Rework' in ncr_df.columns:
+            ncr_df['Cost of Rework'] = ncr_df['Cost of Rework'].apply(clean_numeric)
+        if 'Cost Avoided' in ncr_df.columns:
+            ncr_df['Cost Avoided'] = ncr_df['Cost Avoided'].apply(clean_numeric)
+        
+        # Clean date data
+        if 'Date Submitted' in ncr_df.columns:
+            ncr_df['Date Submitted'] = pd.to_datetime(ncr_df['Date Submitted'], errors='coerce')
+        if 'On Time Ship Date' in ncr_df.columns:
+            ncr_df['On Time Ship Date'] = pd.to_datetime(ncr_df['On Time Ship Date'], errors='coerce')
+    
+    return sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df
 
 
 # ========== HELPER FUNCTIONS ==========
@@ -2820,6 +2856,181 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         """, unsafe_allow_html=True)
 
 
+def render_ncr_section(customer_ncrs, customer_orders, customer_name):
+    """
+    Section: Non-Conformance Report (NCR) Analysis
+    Shows quality issues for the customer - how many orders had NCRs, issue types, etc.
+    """
+    st.markdown("### ⚠️ Quality & Non-Conformance")
+    st.caption("Non-conformance reports (NCRs) associated with this customer's orders")
+    
+    # Calculate total orders for this customer
+    total_orders = len(customer_orders) if not customer_orders.empty else 0
+    
+    # If no NCR data available at all
+    if customer_ncrs is None or customer_ncrs.empty:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #064e3b 0%, #065f46 100%);
+                padding: 1.5rem;
+                border-radius: 12px;
+                border-left: 4px solid #10b981;
+            ">
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <span style="font-size: 2rem;">✅</span>
+                    <div>
+                        <div style="color: #f1f5f9; font-weight: 700; font-size: 1.2rem;">No Quality Issues Recorded</div>
+                        <div style="color: #a7f3d0; font-size: 0.9rem;">
+                            {f'{total_orders} orders' if total_orders > 0 else 'Orders'} with zero NCRs on file
+                        </div>
+                    </div>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Calculate NCR metrics
+    ncr_count = len(customer_ncrs)
+    
+    # Get unique Sales Orders with NCRs
+    ncr_so_numbers = set()
+    if 'Sales Order' in customer_ncrs.columns:
+        ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
+        ncr_so_numbers = {str(so).strip() for so in ncr_so_numbers if str(so).strip()}
+    
+    # Calculate orders affected
+    orders_with_ncrs = len(ncr_so_numbers)
+    ncr_rate = (orders_with_ncrs / total_orders * 100) if total_orders > 0 else 0
+    
+    # Total Quantity Affected
+    total_qty_affected = 0
+    if 'Total Quantity Affected' in customer_ncrs.columns:
+        total_qty_affected = customer_ncrs['Total Quantity Affected'].sum()
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        # Color based on NCR rate
+        rate_color = "normal" if ncr_rate < 5 else "inverse"
+        st.metric(
+            "NCR Rate", 
+            f"{ncr_rate:.1f}%",
+            delta=f"{orders_with_ncrs} of {total_orders} orders",
+            delta_color=rate_color
+        )
+    
+    with col2:
+        st.metric("Total NCRs", ncr_count)
+    
+    with col3:
+        st.metric("Qty Affected", f"{total_qty_affected:,.0f}")
+    
+    with col4:
+        # Get most common issue type
+        if 'Issue Type' in customer_ncrs.columns:
+            issue_counts = customer_ncrs['Issue Type'].value_counts()
+            top_issue = issue_counts.index[0] if len(issue_counts) > 0 else "N/A"
+            top_count = issue_counts.iloc[0] if len(issue_counts) > 0 else 0
+            st.metric("Top Issue Type", top_issue, f"{top_count} occurrences")
+        else:
+            st.metric("Issue Types", "N/A")
+    
+    # Issue Type Breakdown
+    if 'Issue Type' in customer_ncrs.columns:
+        st.markdown("**Issue Type Breakdown:**")
+        
+        issue_summary = customer_ncrs.groupby('Issue Type').agg({
+            'NC Number': 'count' if 'NC Number' in customer_ncrs.columns else 'size',
+            'Total Quantity Affected': 'sum' if 'Total Quantity Affected' in customer_ncrs.columns else lambda x: 0
+        }).reset_index()
+        
+        # Rename columns safely
+        if 'NC Number' in issue_summary.columns:
+            issue_summary = issue_summary.rename(columns={'NC Number': 'NCR Count'})
+        else:
+            issue_summary['NCR Count'] = issue_summary.iloc[:, 1]
+        
+        if 'Total Quantity Affected' in issue_summary.columns:
+            issue_summary = issue_summary.rename(columns={'Total Quantity Affected': 'Qty Affected'})
+        else:
+            issue_summary['Qty Affected'] = 0
+        
+        issue_summary = issue_summary.sort_values('NCR Count', ascending=False)
+        
+        # Calculate percentage of total NCRs
+        issue_summary['% of NCRs'] = (issue_summary['NCR Count'] / ncr_count * 100).round(1)
+        
+        # Two columns: chart and table
+        col_chart, col_table = st.columns([1, 1])
+        
+        with col_chart:
+            if len(issue_summary) > 0:
+                # Color scale - red shades for quality issues
+                colors = ['#ef4444', '#f59e0b', '#f97316', '#fb923c', '#fbbf24', '#fcd34d', '#fde68a', '#fef3c7']
+                
+                fig = go.Figure(data=[go.Pie(
+                    labels=issue_summary['Issue Type'],
+                    values=issue_summary['NCR Count'],
+                    hole=0.45,
+                    textinfo='label+percent',
+                    textposition='outside',
+                    marker=dict(colors=colors[:len(issue_summary)])
+                )])
+                fig.update_layout(
+                    title="NCRs by Issue Type",
+                    showlegend=False,
+                    height=350,
+                    margin=dict(t=60, b=40, l=40, r=40)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col_table:
+            display_summary = issue_summary.copy()
+            display_summary['Qty Affected'] = display_summary['Qty Affected'].apply(lambda x: f"{x:,.0f}")
+            display_summary['% of NCRs'] = display_summary['% of NCRs'].apply(lambda x: f"{x:.1f}%")
+            
+            st.dataframe(
+                display_summary[['Issue Type', 'NCR Count', 'Qty Affected', '% of NCRs']],
+                use_container_width=True,
+                hide_index=True
+            )
+    
+    # NCR Details Expander
+    with st.expander("📋 View NCR Details"):
+        # Select columns to display
+        display_cols = []
+        for col in ['NC Number', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
+                    'Defect Summary', 'Total Quantity Affected', 'Date Submitted']:
+            if col in customer_ncrs.columns:
+                display_cols.append(col)
+        
+        if display_cols:
+            display_df = customer_ncrs[display_cols].copy()
+            
+            # Format quantity
+            if 'Total Quantity Affected' in display_df.columns:
+                display_df['Total Quantity Affected'] = display_df['Total Quantity Affected'].apply(
+                    lambda x: f"{x:,.0f}" if pd.notna(x) else "0"
+                )
+            
+            # Format date
+            if 'Date Submitted' in display_df.columns:
+                display_df['Date Submitted'] = pd.to_datetime(
+                    display_df['Date Submitted'], errors='coerce'
+                ).dt.strftime('%Y-%m-%d').fillna('')
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No detailed NCR information available.")
+    
+    # Visual indicator based on NCR rate
+    if ncr_rate > 10:
+        st.warning(f"⚠️ NCR rate of {ncr_rate:.1f}% is above the 10% threshold. Consider scheduling a quality review meeting.")
+    elif ncr_rate > 5:
+        st.info(f"📊 NCR rate of {ncr_rate:.1f}% - moderate. Monitor for patterns in issue types.")
+
+
 # ========== MAIN RENDER FUNCTION ==========
 
 def render_yearly_planning_2026():
@@ -2830,7 +3041,7 @@ def render_yearly_planning_2026():
     
     # Load data
     with st.spinner("Loading data..."):
-        sales_orders_df, invoices_df, deals_df, invoice_line_items_df = load_qbr_data()
+        sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df = load_qbr_data()
     
     # Check if data loaded
     if sales_orders_df.empty and invoices_df.empty:
@@ -3212,6 +3423,9 @@ def render_yearly_planning_2026():
     # Invoice Line Items - filter by Date
     filtered_line_items_df = filter_by_date(invoice_line_items_df, 'Date', start_date, end_date)
     
+    # NCR Data - filter by Date Submitted
+    filtered_ncr_df = filter_by_date(ncr_df, 'Date Submitted', start_date, end_date)
+    
     st.markdown("---")
     
     # Prepare data for all selected customers (using filtered dataframes)
@@ -3235,7 +3449,28 @@ def render_yearly_planning_2026():
             (filtered_line_items_df['Rep Master'] == selected_rep)
         ].copy() if not filtered_line_items_df.empty and 'Correct Customer' in filtered_line_items_df.columns else pd.DataFrame()
         
-        all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items))
+        # NCR Data - match by Corrected Customer Name or by Sales Order
+        # Primary: Match by Corrected Customer Name
+        # Secondary: Match by Sales Order numbers that belong to this customer
+        customer_ncrs = pd.DataFrame()
+        if not filtered_ncr_df.empty:
+            # Direct match on Corrected Customer Name
+            if 'Corrected Customer Name' in filtered_ncr_df.columns:
+                customer_ncrs = filtered_ncr_df[
+                    filtered_ncr_df['Corrected Customer Name'] == customer_name
+                ].copy()
+            
+            # If no direct match, try matching via Sales Order
+            if customer_ncrs.empty and 'Sales Order' in filtered_ncr_df.columns and not customer_orders.empty and 'SO Number' in customer_orders.columns:
+                customer_so_numbers = customer_orders['SO Number'].dropna().unique()
+                # Clean SO numbers for matching
+                customer_so_numbers = [str(so).strip() for so in customer_so_numbers if str(so).strip()]
+                if customer_so_numbers:
+                    customer_ncrs = filtered_ncr_df[
+                        filtered_ncr_df['Sales Order'].isin(customer_so_numbers)
+                    ].copy()
+        
+        all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs))
     
     # Download buttons section
     date_info = f" | 📅 {date_label}" if date_label != "All Time" else ""
@@ -3254,7 +3489,7 @@ def render_yearly_planning_2026():
     # Create download buttons
     if len(selected_customers) == 1:
         # Single customer - just one download button
-        customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items = all_customers_data[0]
+        customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
         html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
@@ -3303,7 +3538,7 @@ def render_yearly_planning_2026():
         # Individual download buttons in expandable section
         with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
-            for idx, (customer_name, customer_orders, customer_invoices, customer_deals, _) in enumerate(all_customers_data):
+            for idx, (customer_name, customer_orders, customer_invoices, customer_deals, _, _) in enumerate(all_customers_data):
                 html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
                 with cols[idx % 3]:
                     st.download_button(
@@ -3329,7 +3564,7 @@ def render_yearly_planning_2026():
     # Display customer QBR sections
     if len(all_customers_data) == 1:
         # Single customer - display directly
-        selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items = all_customers_data[0]
+        selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
         
         st.markdown(f"""
             <div style="
@@ -3365,6 +3600,12 @@ def render_yearly_planning_2026():
         st.markdown("---")
         render_line_item_analysis_section(customer_line_items, selected_customer)
         
+        # =========================================================================
+        # NCR (NON-CONFORMANCE) ANALYSIS - Quality issues tracking
+        # =========================================================================
+        st.markdown("---")
+        render_ncr_section(customer_ncrs, customer_orders, selected_customer)
+        
     else:
         # Multiple customers - use tabs with Combined view first
         tab_names = ["📊 Combined View"] + [name[:25] + "..." if len(name) > 25 else name for name, *_ in all_customers_data]
@@ -3391,6 +3632,7 @@ def render_yearly_planning_2026():
             all_invoices = pd.concat([data[2] for data in all_customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in all_customers_data) else pd.DataFrame()
             all_deals = pd.concat([data[3] for data in all_customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in all_customers_data) else pd.DataFrame()
             all_line_items = pd.concat([data[4] for data in all_customers_data if not data[4].empty], ignore_index=True) if any(not data[4].empty for data in all_customers_data) else pd.DataFrame()
+            all_ncrs = pd.concat([data[5] for data in all_customers_data if not data[5].empty], ignore_index=True) if any(not data[5].empty for data in all_customers_data) else pd.DataFrame()
             
             # Combined Summary Metrics
             st.markdown("### 📈 Combined Summary")
@@ -3505,9 +3747,14 @@ def render_yearly_planning_2026():
             st.markdown("---")
             st.markdown("### 📦 Combined Product Analysis")
             render_line_item_analysis_section(all_line_items, "All Selected Customers")
+            
+            # Combined NCR Analysis
+            st.markdown("---")
+            st.markdown("### ⚠️ Combined Quality & Non-Conformance")
+            render_ncr_section(all_ncrs, all_orders, "All Selected Customers")
         
         # Individual customer tabs
-        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items)) in enumerate(zip(tabs[1:], all_customers_data)):
+        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)) in enumerate(zip(tabs[1:], all_customers_data)):
             with tab:
                 st.markdown(f"""
                     <div style="
@@ -3540,6 +3787,10 @@ def render_yearly_planning_2026():
                 # Line Item Analysis
                 st.markdown("---")
                 render_line_item_analysis_section(customer_line_items, selected_customer)
+                
+                # NCR Analysis
+                st.markdown("---")
+                render_ncr_section(customer_ncrs, customer_orders, selected_customer)
 
 
 # ========== ENTRY POINT ==========
