@@ -1026,7 +1026,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
     """
     
     # Generate content for each customer
-    for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(customers_data):
+    for idx, (customer_name, customer_orders, customer_invoices, customer_deals, *_) in enumerate(customers_data):
         # Add page break divider for customers after the first
         if idx > 0:
             html += '<div class="customer-divider"></div>'
@@ -1314,7 +1314,40 @@ def load_qbr_data():
         if 'Company Name' not in deals_df.columns and 'Primary Associated Company' in deals_df.columns:
             deals_df['Company Name'] = deals_df['Primary Associated Company']
     
-    return sales_orders_df, invoices_df, deals_df
+    # =========================================================================
+    # LOAD AND PROCESS INVOICE LINE ITEMS
+    # This is the drill-down layer explaining realized revenue composition
+    # =========================================================================
+    invoice_line_items_df = load_google_sheets_data("_NS_InvoicesLineItems_Data", "A:Z", version=CACHE_VERSION, silent=True)
+    
+    if not invoice_line_items_df.empty:
+        # Remove duplicate columns
+        if invoice_line_items_df.columns.duplicated().any():
+            invoice_line_items_df = invoice_line_items_df.loc[:, ~invoice_line_items_df.columns.duplicated()]
+        
+        # Clean numeric data - Amount is line-level revenue
+        if 'Amount' in invoice_line_items_df.columns:
+            invoice_line_items_df['Amount'] = invoice_line_items_df['Amount'].apply(clean_numeric)
+        
+        # Quantity is unit-level volume
+        if 'Quantity' in invoice_line_items_df.columns:
+            invoice_line_items_df['Quantity'] = invoice_line_items_df['Quantity'].apply(clean_numeric)
+        
+        # Clean date data
+        if 'Date' in invoice_line_items_df.columns:
+            invoice_line_items_df['Date'] = pd.to_datetime(invoice_line_items_df['Date'], errors='coerce')
+        if 'Due Date' in invoice_line_items_df.columns:
+            invoice_line_items_df['Due Date'] = pd.to_datetime(invoice_line_items_df['Due Date'], errors='coerce')
+        
+        # Clean text fields - use Correct Customer and Rep Master as authoritative
+        for col in ['Correct Customer', 'Rep Master', 'Status', 'Item', 'Item Description', 
+                    'Calyx | Item Type', 'Calyx || Product Type']:
+            if col in invoice_line_items_df.columns:
+                invoice_line_items_df[col] = invoice_line_items_df[col].astype(str).str.strip()
+                # Replace 'nan' strings with empty
+                invoice_line_items_df[col] = invoice_line_items_df[col].replace('nan', '')
+    
+    return sales_orders_df, invoices_df, deals_df, invoice_line_items_df
 
 
 # ========== HELPER FUNCTIONS ==========
@@ -1898,6 +1931,330 @@ def render_pipeline_section(customer_deals, customer_name):
         st.dataframe(display_df, use_container_width=True)
 
 
+# =============================================================================
+# INVOICE LINE ITEM ANALYSIS SECTION
+# Purpose: Drill-down layer explaining realized revenue composition
+# This does NOT recalculate totals - it explains what revenue consists of
+# =============================================================================
+
+def render_line_item_analysis_section(line_items_df, customer_name):
+    """
+    Render Invoice Line Item Analysis Section
+    
+    Purpose: Explain what realized revenue consists of at the product/SKU level
+    
+    Key principles:
+    - Group by Correct Customer and Rep Master (authoritative attribution)
+    - Use Amount as line-level revenue, Quantity as unit-level volume
+    - Do NOT recompute transaction totals
+    - Use probabilistic language for container-related behavior
+    """
+    st.markdown("### 📦 Product & SKU Analysis")
+    st.caption("Drill-down analysis of invoice line items — explains what revenue consists of")
+    
+    if line_items_df.empty:
+        st.info("No invoice line item data available for this customer.")
+        return
+    
+    # Calculate totals for context (not recomputing - just line item sum)
+    total_line_revenue = line_items_df['Amount'].sum() if 'Amount' in line_items_df.columns else 0
+    total_quantity = line_items_df['Quantity'].sum() if 'Quantity' in line_items_df.columns else 0
+    line_count = len(line_items_df)
+    unique_items = line_items_df['Item'].nunique() if 'Item' in line_items_df.columns else 0
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Line Item Revenue", f"${total_line_revenue:,.0f}")
+    with col2:
+        st.metric("Total Units", f"{total_quantity:,.0f}")
+    with col3:
+        st.metric("Line Items", f"{line_count:,}")
+    with col4:
+        st.metric("Unique SKUs", f"{unique_items:,}")
+    
+    # Create tabs for different analysis views
+    analysis_tabs = st.tabs(["📊 Product Types", "🏷️ Item Types", "🔝 Top Items", "📈 SKU Patterns"])
+    
+    # =========================================================================
+    # TAB 1: Product Type Analysis (Calyx || Product Type - Strategic Grouping)
+    # =========================================================================
+    with analysis_tabs[0]:
+        st.markdown("#### Strategic Product Grouping")
+        st.caption("Groups products by strategic category (Calyx || Product Type)")
+        
+        if 'Calyx || Product Type' in line_items_df.columns:
+            product_type_summary = line_items_df.groupby('Calyx || Product Type').agg({
+                'Amount': 'sum',
+                'Quantity': 'sum',
+                'Item': 'nunique'
+            }).reset_index()
+            product_type_summary.columns = ['Product Type', 'Revenue', 'Units', 'SKU Count']
+            product_type_summary = product_type_summary.sort_values('Revenue', ascending=False)
+            
+            # Calculate percentage of total
+            product_type_summary['% of Revenue'] = (product_type_summary['Revenue'] / total_line_revenue * 100).round(1)
+            
+            # Create visualization
+            if len(product_type_summary) > 0:
+                # Use columns for chart and table
+                chart_col, table_col = st.columns([1, 1])
+                
+                with chart_col:
+                    # Create pie/bar chart
+                    fig = go.Figure(data=[go.Pie(
+                        labels=product_type_summary['Product Type'].head(8),
+                        values=product_type_summary['Revenue'].head(8),
+                        hole=0.4,
+                        textinfo='label+percent',
+                        textposition='outside',
+                        marker=dict(colors=['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'])
+                    )])
+                    fig.update_layout(
+                        title="Revenue by Product Type",
+                        showlegend=False,
+                        height=350,
+                        margin=dict(t=50, b=20, l=20, r=20)
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with table_col:
+                    display_df = product_type_summary.copy()
+                    display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+                    display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
+                    display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Product Type column not available in line item data.")
+    
+    # =========================================================================
+    # TAB 2: Item Type Breakdown (Calyx | Item Type - Operational Grouping)
+    # =========================================================================
+    with analysis_tabs[1]:
+        st.markdown("#### Operational Item Grouping")
+        st.caption("Groups products by operational category (Calyx | Item Type)")
+        
+        if 'Calyx | Item Type' in line_items_df.columns:
+            item_type_summary = line_items_df.groupby('Calyx | Item Type').agg({
+                'Amount': 'sum',
+                'Quantity': 'sum',
+                'Item': 'nunique'
+            }).reset_index()
+            item_type_summary.columns = ['Item Type', 'Revenue', 'Units', 'SKU Count']
+            item_type_summary = item_type_summary.sort_values('Revenue', ascending=False)
+            
+            # Filter out empty/nan
+            item_type_summary = item_type_summary[item_type_summary['Item Type'].str.strip() != '']
+            
+            # Calculate percentage
+            item_type_summary['% of Revenue'] = (item_type_summary['Revenue'] / total_line_revenue * 100).round(1)
+            
+            if len(item_type_summary) > 0:
+                # Bar chart
+                fig = go.Figure(data=[go.Bar(
+                    x=item_type_summary['Item Type'].head(10),
+                    y=item_type_summary['Revenue'].head(10),
+                    marker_color='#3b82f6',
+                    text=item_type_summary['Revenue'].head(10).apply(lambda x: f"${x/1000:.1f}K" if x >= 1000 else f"${x:.0f}"),
+                    textposition='outside'
+                )])
+                fig.update_layout(
+                    title="Revenue by Item Type",
+                    xaxis_title="Item Type",
+                    yaxis_title="Revenue ($)",
+                    height=400,
+                    margin=dict(t=50, b=100),
+                    xaxis_tickangle=-45
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Table
+                display_df = item_type_summary.copy()
+                display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+                display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
+                display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Item Type column not available in line item data.")
+    
+    # =========================================================================
+    # TAB 3: Top Items by Revenue
+    # =========================================================================
+    with analysis_tabs[2]:
+        st.markdown("#### Top Revenue-Generating Items")
+        st.caption("Individual SKUs ranked by revenue contribution")
+        
+        if 'Item' in line_items_df.columns and 'Amount' in line_items_df.columns:
+            # Group by Item (and optionally Item Description)
+            group_cols = ['Item']
+            if 'Item Description' in line_items_df.columns:
+                group_cols.append('Item Description')
+            
+            item_summary = line_items_df.groupby(group_cols).agg({
+                'Amount': 'sum',
+                'Quantity': 'sum',
+                'Document Number': 'nunique'  # Number of invoices containing this item
+            }).reset_index()
+            
+            # Rename columns
+            if 'Item Description' in item_summary.columns:
+                item_summary.columns = ['Item', 'Description', 'Revenue', 'Units', 'Invoice Count']
+            else:
+                item_summary.columns = ['Item', 'Revenue', 'Units', 'Invoice Count']
+            
+            item_summary = item_summary.sort_values('Revenue', ascending=False)
+            
+            # Calculate metrics
+            item_summary['Avg Unit Price'] = (item_summary['Revenue'] / item_summary['Units'].replace(0, 1)).round(2)
+            item_summary['% of Revenue'] = (item_summary['Revenue'] / total_line_revenue * 100).round(1)
+            
+            # Show top items selector
+            num_items = st.slider("Show top N items", min_value=5, max_value=min(50, len(item_summary)), value=15, key=f"top_items_{customer_name[:20]}")
+            
+            top_items = item_summary.head(num_items)
+            
+            # Create bar chart
+            fig = go.Figure(data=[go.Bar(
+                y=top_items['Item'],
+                x=top_items['Revenue'],
+                orientation='h',
+                marker_color='#10b981',
+                text=top_items['Revenue'].apply(lambda x: f"${x:,.0f}"),
+                textposition='outside'
+            )])
+            fig.update_layout(
+                title=f"Top {num_items} Items by Revenue",
+                xaxis_title="Revenue ($)",
+                yaxis_title="",
+                height=max(400, num_items * 25),
+                margin=dict(l=150, r=50, t=50, b=50),
+                yaxis=dict(autorange="reversed")
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Display table
+            with st.expander("📋 View Detailed Item Data"):
+                display_df = top_items.copy()
+                display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+                display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
+                display_df['Avg Unit Price'] = display_df['Avg Unit Price'].apply(lambda x: f"${x:,.2f}")
+                display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Required columns not available for item analysis.")
+    
+    # =========================================================================
+    # TAB 4: SKU Purchase Patterns
+    # =========================================================================
+    with analysis_tabs[3]:
+        st.markdown("#### SKU Purchase Patterns & Repeat Behavior")
+        st.caption("Analyzes purchasing frequency and co-occurrence patterns")
+        
+        if 'Item' in line_items_df.columns and 'Document Number' in line_items_df.columns:
+            # Repeat purchase analysis
+            item_frequency = line_items_df.groupby('Item').agg({
+                'Document Number': 'nunique',
+                'Amount': 'sum',
+                'Quantity': 'sum'
+            }).reset_index()
+            item_frequency.columns = ['Item', 'Purchase Occasions', 'Total Revenue', 'Total Units']
+            item_frequency = item_frequency.sort_values('Purchase Occasions', ascending=False)
+            
+            # Categorize items
+            def categorize_frequency(occasions):
+                if occasions >= 10:
+                    return "Core Item (10+ purchases)"
+                elif occasions >= 5:
+                    return "Regular Item (5-9 purchases)"
+                elif occasions >= 2:
+                    return "Repeat Item (2-4 purchases)"
+                else:
+                    return "One-Time Item"
+            
+            item_frequency['Category'] = item_frequency['Purchase Occasions'].apply(categorize_frequency)
+            
+            # Summary by category
+            category_summary = item_frequency.groupby('Category').agg({
+                'Item': 'count',
+                'Total Revenue': 'sum',
+                'Purchase Occasions': 'sum'
+            }).reset_index()
+            category_summary.columns = ['Category', 'SKU Count', 'Revenue', 'Total Purchases']
+            
+            # Order categories
+            category_order = ["Core Item (10+ purchases)", "Regular Item (5-9 purchases)", 
+                            "Repeat Item (2-4 purchases)", "One-Time Item"]
+            category_summary['Sort'] = category_summary['Category'].apply(lambda x: category_order.index(x) if x in category_order else 99)
+            category_summary = category_summary.sort_values('Sort').drop('Sort', axis=1)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**SKU Purchase Frequency Distribution**")
+                
+                fig = go.Figure(data=[go.Pie(
+                    labels=category_summary['Category'],
+                    values=category_summary['SKU Count'],
+                    hole=0.4,
+                    textinfo='value+percent',
+                    marker=dict(colors=['#10b981', '#3b82f6', '#f59e0b', '#94a3b8'])
+                )])
+                fig.update_layout(
+                    title="SKUs by Purchase Frequency",
+                    height=300,
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.3)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                st.markdown("**Revenue by Purchase Pattern**")
+                
+                fig = go.Figure(data=[go.Bar(
+                    x=category_summary['Category'],
+                    y=category_summary['Revenue'],
+                    marker_color=['#10b981', '#3b82f6', '#f59e0b', '#94a3b8'],
+                    text=category_summary['Revenue'].apply(lambda x: f"${x/1000:.1f}K" if x >= 1000 else f"${x:.0f}"),
+                    textposition='outside'
+                )])
+                fig.update_layout(
+                    title="Revenue by SKU Category",
+                    height=300,
+                    xaxis_tickangle=-30,
+                    margin=dict(b=80)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            # Summary table
+            display_df = category_summary.copy()
+            display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+            # Most frequently purchased items
+            st.markdown("---")
+            st.markdown("**Most Frequently Purchased Items**")
+            
+            top_repeat = item_frequency[item_frequency['Purchase Occasions'] > 1].head(10)
+            if not top_repeat.empty:
+                display_repeat = top_repeat.copy()
+                display_repeat['Total Revenue'] = display_repeat['Total Revenue'].apply(lambda x: f"${x:,.0f}")
+                display_repeat['Total Units'] = display_repeat['Total Units'].apply(lambda x: f"{x:,.0f}")
+                st.dataframe(display_repeat[['Item', 'Purchase Occasions', 'Total Revenue', 'Total Units', 'Category']], 
+                           use_container_width=True, hide_index=True)
+            else:
+                st.info("No repeat purchases identified in this period.")
+            
+            # Container behavior note
+            st.markdown("---")
+            st.info("""
+                💡 **Note on Container Purchases**: A single container purchase may consist of multiple SKUs 
+                (lid, base, label, application). Components like lids (45D, 15D) may be shared across 
+                container types. Quantity alignment between components is a signal, not a requirement.
+            """)
+        else:
+            st.warning("Required columns not available for pattern analysis.")
+
+
 # ========== MAIN RENDER FUNCTION ==========
 
 def render_yearly_planning_2026():
@@ -1908,7 +2265,7 @@ def render_yearly_planning_2026():
     
     # Load data
     with st.spinner("Loading data..."):
-        sales_orders_df, invoices_df, deals_df = load_qbr_data()
+        sales_orders_df, invoices_df, deals_df, invoice_line_items_df = load_qbr_data()
     
     # Check if data loaded
     if sales_orders_df.empty and invoices_df.empty:
@@ -2287,6 +2644,9 @@ def render_yearly_planning_2026():
     # Deals - filter by Close Date
     filtered_deals_df = filter_by_date(deals_df, 'Close Date', start_date, end_date)
     
+    # Invoice Line Items - filter by Date
+    filtered_line_items_df = filter_by_date(invoice_line_items_df, 'Date', start_date, end_date)
+    
     st.markdown("---")
     
     # Prepare data for all selected customers (using filtered dataframes)
@@ -2304,7 +2664,13 @@ def render_yearly_planning_2026():
         
         customer_deals = get_customer_deals(customer_name, selected_rep, filtered_deals_df)
         
-        all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals))
+        # Invoice Line Items - group by Correct Customer and Rep Master (authoritative attribution)
+        customer_line_items = filtered_line_items_df[
+            (filtered_line_items_df['Correct Customer'] == customer_name) &
+            (filtered_line_items_df['Rep Master'] == selected_rep)
+        ].copy() if not filtered_line_items_df.empty and 'Correct Customer' in filtered_line_items_df.columns else pd.DataFrame()
+        
+        all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items))
     
     # Download buttons section
     date_info = f" | 📅 {date_label}" if date_label != "All Time" else ""
@@ -2323,7 +2689,7 @@ def render_yearly_planning_2026():
     # Create download buttons
     if len(selected_customers) == 1:
         # Single customer - just one download button
-        customer_name, customer_orders, customer_invoices, customer_deals = all_customers_data[0]
+        customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items = all_customers_data[0]
         html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
@@ -2372,7 +2738,7 @@ def render_yearly_planning_2026():
         # Individual download buttons in expandable section
         with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
-            for idx, (customer_name, customer_orders, customer_invoices, customer_deals) in enumerate(all_customers_data):
+            for idx, (customer_name, customer_orders, customer_invoices, customer_deals, _) in enumerate(all_customers_data):
                 html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals)
                 with cols[idx % 3]:
                     st.download_button(
@@ -2398,7 +2764,7 @@ def render_yearly_planning_2026():
     # Display customer QBR sections
     if len(all_customers_data) == 1:
         # Single customer - display directly
-        selected_customer, customer_orders, customer_invoices, customer_deals = all_customers_data[0]
+        selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items = all_customers_data[0]
         
         st.markdown(f"""
             <div style="
@@ -2427,9 +2793,16 @@ def render_yearly_planning_2026():
         render_order_type_mix_section(customer_orders)
         st.markdown("---")
         render_pipeline_section(customer_deals, selected_customer)
+        
+        # =========================================================================
+        # INVOICE LINE ITEM ANALYSIS - Drill-down layer for realized revenue
+        # =========================================================================
+        st.markdown("---")
+        render_line_item_analysis_section(customer_line_items, selected_customer)
+        
     else:
         # Multiple customers - use tabs with Combined view first
-        tab_names = ["📊 Combined View"] + [name[:25] + "..." if len(name) > 25 else name for name, _, _, _ in all_customers_data]
+        tab_names = ["📊 Combined View"] + [name[:25] + "..." if len(name) > 25 else name for name, *_ in all_customers_data]
         tabs = st.tabs(tab_names)
         
         # Combined View Tab
@@ -2452,6 +2825,7 @@ def render_yearly_planning_2026():
             all_orders = pd.concat([data[1] for data in all_customers_data if not data[1].empty], ignore_index=True) if any(not data[1].empty for data in all_customers_data) else pd.DataFrame()
             all_invoices = pd.concat([data[2] for data in all_customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in all_customers_data) else pd.DataFrame()
             all_deals = pd.concat([data[3] for data in all_customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in all_customers_data) else pd.DataFrame()
+            all_line_items = pd.concat([data[4] for data in all_customers_data if not data[4].empty], ignore_index=True) if any(not data[4].empty for data in all_customers_data) else pd.DataFrame()
             
             # Combined Summary Metrics
             st.markdown("### 📈 Combined Summary")
@@ -2511,7 +2885,7 @@ def render_yearly_planning_2026():
             st.markdown("### 👥 Customer Breakdown")
             
             breakdown_data = []
-            for customer_name, customer_orders, customer_invoices, customer_deals in all_customers_data:
+            for customer_name, customer_orders, customer_invoices, customer_deals, _ in all_customers_data:
                 # Calculate metrics for each customer
                 if not customer_orders.empty and 'Updated Status' in customer_orders.columns:
                     cust_pending = customer_orders[customer_orders['Updated Status'].isin(pending_statuses)]
@@ -2561,9 +2935,14 @@ def render_yearly_planning_2026():
             st.markdown("---")
             st.markdown("### 🎯 Combined Pipeline")
             render_pipeline_section(all_deals, "All Selected Customers")
+            
+            # Combined Line Item Analysis
+            st.markdown("---")
+            st.markdown("### 📦 Combined Product Analysis")
+            render_line_item_analysis_section(all_line_items, "All Selected Customers")
         
         # Individual customer tabs
-        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals)) in enumerate(zip(tabs[1:], all_customers_data)):
+        for idx, (tab, (selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items)) in enumerate(zip(tabs[1:], all_customers_data)):
             with tab:
                 st.markdown(f"""
                     <div style="
@@ -2592,6 +2971,10 @@ def render_yearly_planning_2026():
                 render_order_type_mix_section(customer_orders)
                 st.markdown("---")
                 render_pipeline_section(customer_deals, selected_customer)
+                
+                # Line Item Analysis
+                st.markdown("---")
+                render_line_item_analysis_section(customer_line_items, selected_customer)
 
 
 # ========== ENTRY POINT ==========
