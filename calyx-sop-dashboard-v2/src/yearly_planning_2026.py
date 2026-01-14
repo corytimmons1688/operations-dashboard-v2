@@ -2015,26 +2015,39 @@ def categorize_product(item_name, item_description="", calyx_product_type=""):
     die_tool, is_alphanumeric = extract_die_tool(item_name)
     
     # =========================================================================
-    # 1. SHIPPING/TAXES/FEES
+    # 1. SHIPPING/TAXES/FEES - Break out into specific types
     # =========================================================================
-    shipping_patterns = [
-        r'^\$\d+OFF',
-        r'DISCOUNT|PROMO|%\s*OFF',
-        r'^ACCOUNTING',
-        r'^SHIPPING$|SHIPPING\s+FEE|EXPEDITE\s*FEE|CONVENIENCE\s*FEE',
-        r'\bTAX\b|GST|HST',
-        r'CANADIAN\s*(BUSINESS|GOODS)',
-        r'REPLACEMENT\s*ORDER',
-        r'CREATIVE$',
-        r'TESTIMONIAL',
-        r'MODULAR.*SERIAL',
-        r'OVERPAYMENT',
-        r'DIE\s*CUT\s*SAMPLE\s*CHARGE',
-    ]
+    # Taxes
+    if re.search(r'\bTAX\b|GST|HST|CANADIAN\s*(BUSINESS|GOODS)', all_text):
+        return ('Fees & Adjustments', 'Taxes', None)
     
-    for pattern in shipping_patterns:
-        if re.search(pattern, all_text):
-            return ('Shipping/Fees', 'Fee/Adjustment', None)
+    # Shipping
+    if re.search(r'^SHIPPING|SHIPPING\s*FEE|FREIGHT', all_text):
+        return ('Fees & Adjustments', 'Shipping', None)
+    
+    # Expedite Fees
+    if re.search(r'EXPEDITE\s*FEE|RUSH\s*FEE', all_text):
+        return ('Fees & Adjustments', 'Expedite Fee', None)
+    
+    # Convenience Fees
+    if re.search(r'CONVENIENCE\s*FEE', all_text):
+        return ('Fees & Adjustments', 'Convenience Fee', None)
+    
+    # Discounts/Promos
+    if re.search(r'^\$\d+OFF|DISCOUNT|PROMO|%\s*OFF', all_text):
+        return ('Fees & Adjustments', 'Discount', None)
+    
+    # Accounting adjustments
+    if re.search(r'^ACCOUNTING|OVERPAYMENT|BAD\s*DEBT|REPLACEMENT\s*ORDER', all_text):
+        return ('Fees & Adjustments', 'Accounting Adjustment', None)
+    
+    # Sample/Creative charges
+    if re.search(r'DIE\s*CUT\s*SAMPLE|SAMPLE\s*CHARGE|CREATIVE$|TESTIMONIAL', all_text):
+        return ('Fees & Adjustments', 'Sample/Creative', None)
+    
+    # Other fees (catch-all for fee-like items)
+    if re.search(r'MODULAR.*SERIAL', all_text):
+        return ('Fees & Adjustments', 'Other Fee', None)
     
     # =========================================================================
     # 2. CALYX CURE
@@ -2238,7 +2251,7 @@ def categorize_product(item_name, item_description="", calyx_product_type=""):
             return ('Drams', 'Application Fee', 'fee')
         if re.search(r'116|90', all_text) and 'TUBE' in all_text:
             return ('Tubes', 'Application Fee', 'fee')
-        return ('Shipping/Fees', 'Application Fee', 'fee')
+        return ('Fees & Adjustments', 'Application Fee', 'fee')
     
     # =========================================================================
     # 13. UNCATEGORIZED
@@ -2380,7 +2393,7 @@ def create_unified_product_view(df):
         component = row.get('Component Type', '')
         
         # For categories that are already complete products
-        if cat in ['Tubes', 'Boxes', 'Flexpack', 'Calyx Cure', 'Shipping/Fees', 'Other']:
+        if cat in ['Tubes', 'Boxes', 'Flexpack', 'Calyx Cure', 'Fees & Adjustments', 'Other']:
             return cat
         
         # For Drams - unify base + lid + labels
@@ -2452,8 +2465,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
     line_count = len(line_items_df)
     
     # Separate product items from fees for display purposes
-    product_df = line_items_df[line_items_df['Product Category'] != 'Shipping/Fees'].copy()
-    fees_df = line_items_df[line_items_df['Product Category'] == 'Shipping/Fees'].copy()
+    product_df = line_items_df[line_items_df['Product Category'] != 'Fees & Adjustments'].copy()
+    fees_df = line_items_df[line_items_df['Product Category'] == 'Fees & Adjustments'].copy()
     
     product_revenue = product_df['Amount'].sum() if not product_df.empty else 0
     fees_revenue = fees_df['Amount'].sum() if not fees_df.empty else 0
@@ -2470,9 +2483,29 @@ def render_line_item_analysis_section(line_items_df, customer_name):
     with col4:
         st.metric("Product Categories", f"{unique_categories}")
     
-    # Show fees separately if they exist
+    # Show fees separately if they exist with detailed breakdown
     if fees_revenue != 0:
-        st.caption(f"💡 Includes ${fees_revenue:,.0f} in fees/adjustments ({len(fees_df)} items)")
+        with st.expander(f"💰 Fees & Adjustments: ${fees_revenue:,.0f} ({len(fees_df)} items)", expanded=False):
+            # Break down fees by type
+            fees_breakdown = fees_df.groupby('Product Sub-Category').agg({
+                'Amount': 'sum',
+                'Quantity': 'sum'
+            }).reset_index()
+            fees_breakdown.columns = ['Type', 'Amount', 'Count']
+            fees_breakdown = fees_breakdown.sort_values('Amount', ascending=False)
+            
+            # Format for display
+            for _, row in fees_breakdown.iterrows():
+                amount = row['Amount']
+                amount_str = f"${amount:,.0f}" if amount >= 0 else f"-${abs(amount):,.0f}"
+                color = "#10b981" if amount < 0 else "#f59e0b"  # Green for credits, amber for charges
+                st.markdown(f"""
+                    <div style="display: flex; justify-content: space-between; padding: 8px 12px; 
+                                background: #1e293b; border-radius: 6px; margin-bottom: 6px;">
+                        <span style="color: #e2e8f0;">{row['Type']}</span>
+                        <span style="color: {color}; font-weight: 600;">{amount_str}</span>
+                    </div>
+                """, unsafe_allow_html=True)
     
     if product_df.empty:
         st.info("No product line items found (only fees/adjustments).")
@@ -2520,8 +2553,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 fig.update_layout(
                     title="Revenue by Product Category",
                     showlegend=False,
-                    height=400,
-                    margin=dict(t=50, b=20, l=20, r=20)
+                    height=450,
+                    margin=dict(t=60, b=60, l=60, r=60)
                 )
                 st.plotly_chart(fig, use_container_width=True)
             
@@ -2618,9 +2651,9 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                             title=f"{category} Components",
                             xaxis_title="",
                             yaxis_title="Revenue ($)",
-                            height=300,
-                            margin=dict(t=50, b=80),
-                            xaxis_tickangle=-30
+                            height=350,
+                            margin=dict(t=60, b=100, l=60, r=40),
+                            xaxis_tickangle=-35
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     
@@ -2636,18 +2669,26 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                     if not subcat_summary.empty:
                         st.markdown(f"**{subcat_summary.iloc[0]['Component']}**: ${subcat_summary.iloc[0]['Revenue']:,.0f} ({subcat_summary.iloc[0]['Units']:,.0f} units)")
                 
-                # Show top items in this category
+                # Show top items in this category - ROLLED UP by Sub-Category
                 st.markdown("---")
                 st.markdown("**Top Items in this Category:**")
                 
-                # Use Item Description for readability
-                item_col = 'Item Description' if 'Item Description' in cat_df.columns else 'Item'
-                top_items = cat_df.groupby(item_col).agg({
-                    'Amount': 'sum',
-                    'Quantity': 'sum'
-                }).reset_index().sort_values('Amount', ascending=False).head(5)
+                # Group by Product Sub-Category for clean rolled-up view
+                if 'Product Sub-Category' in cat_df.columns:
+                    top_items = cat_df.groupby('Product Sub-Category').agg({
+                        'Amount': 'sum',
+                        'Quantity': 'sum'
+                    }).reset_index().sort_values('Amount', ascending=False).head(5)
+                    top_items.columns = ['Item', 'Revenue', 'Units']
+                else:
+                    # Fallback to Item Description if Sub-Category not available
+                    item_col = 'Item Description' if 'Item Description' in cat_df.columns else 'Item'
+                    top_items = cat_df.groupby(item_col).agg({
+                        'Amount': 'sum',
+                        'Quantity': 'sum'
+                    }).reset_index().sort_values('Amount', ascending=False).head(5)
+                    top_items.columns = ['Item', 'Revenue', 'Units']
                 
-                top_items.columns = ['Item', 'Revenue', 'Units']
                 top_items['Revenue'] = top_items['Revenue'].apply(lambda x: f"${x:,.0f}")
                 top_items['Units'] = top_items['Units'].apply(lambda x: f"{x:,.0f}")
                 st.dataframe(top_items, use_container_width=True, hide_index=True)
@@ -2708,8 +2749,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 title="Orders per Category",
                 xaxis_title="",
                 yaxis_title="Number of Orders",
-                height=350,
-                margin=dict(b=100),
+                height=380,
+                margin=dict(t=60, b=120, l=60, r=40),
                 xaxis_tickangle=-45
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -2739,8 +2780,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 title="Revenue by Pattern",
                 xaxis_title="",
                 yaxis_title="Revenue ($)",
-                height=350,
-                margin=dict(b=50)
+                height=380,
+                margin=dict(t=60, b=80, l=60, r=40)
             )
             st.plotly_chart(fig, use_container_width=True)
         
