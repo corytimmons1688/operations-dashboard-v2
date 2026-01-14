@@ -1318,7 +1318,7 @@ def load_qbr_data():
     # LOAD AND PROCESS INVOICE LINE ITEMS
     # This is the drill-down layer explaining realized revenue composition
     # =========================================================================
-    invoice_line_items_df = load_google_sheets_data("_NS_InvoicesLineItems_Data", "A:Z", version=CACHE_VERSION, silent=True)
+    invoice_line_items_df = load_google_sheets_data("Invoice Line Item", "A:Z", version=CACHE_VERSION, silent=True)
     
     if not invoice_line_items_df.empty:
         # Remove duplicate columns
@@ -1952,8 +1952,8 @@ def render_line_item_analysis_section(line_items_df, customer_name):
     st.markdown("### 📦 Product & SKU Analysis")
     st.caption("Drill-down analysis of invoice line items — explains what revenue consists of")
     
-    if line_items_df.empty:
-        st.info("No invoice line item data available for this customer.")
+    if line_items_df is None or line_items_df.empty:
+        st.info(f"No invoice line item data available for {customer_name}.")
         return
     
     # Calculate totals for context (not recomputing - just line item sum)
