@@ -399,6 +399,20 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         if 'Total Quantity Affected' in customer_ncrs.columns:
             total_qty_affected = customer_ncrs['Total Quantity Affected'].sum()
         
+        # Source breakdown
+        netsuite_count = 0
+        hubspot_count = 0
+        if 'NCR Source' in customer_ncrs.columns:
+            netsuite_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'NetSuite'])
+            hubspot_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'HubSpot'])
+        
+        # Resolution time metrics
+        avg_resolution = None
+        if 'Resolution Days' in customer_ncrs.columns:
+            resolution_data = customer_ncrs['Resolution Days'].dropna()
+            if len(resolution_data) > 0:
+                avg_resolution = resolution_data.mean()
+        
         # Issue Type breakdown
         issue_rows = ""
         if 'Issue Type' in customer_ncrs.columns:
@@ -426,6 +440,27 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         # NCR rate color
         rate_class = "success" if ncr_rate < 5 else "warning" if ncr_rate < 10 else ""
         
+        # Build source breakdown HTML
+        source_html = ""
+        if netsuite_count > 0 or hubspot_count > 0:
+            resolution_text = f"{avg_resolution:.1f} days" if avg_resolution is not None else "N/A"
+            source_html = f"""
+            <div style="display: flex; gap: 15px; margin: 15px 0; flex-wrap: wrap;">
+                <div style="background: #f1f5f9; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #3b82f6;">
+                    <div style="color: #64748b; font-size: 0.75rem;">NetSuite (Nov 2024+)</div>
+                    <div style="color: #1e293b; font-weight: 600;">{netsuite_count} NCRs</div>
+                </div>
+                <div style="background: #f1f5f9; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #f59e0b;">
+                    <div style="color: #64748b; font-size: 0.75rem;">HubSpot (Historical)</div>
+                    <div style="color: #1e293b; font-weight: 600;">{hubspot_count} NCRs</div>
+                </div>
+                <div style="background: #f1f5f9; padding: 10px 15px; border-radius: 6px; border-left: 3px solid #10b981;">
+                    <div style="color: #64748b; font-size: 0.75rem;">Avg Resolution</div>
+                    <div style="color: #1e293b; font-weight: 600;">{resolution_text}</div>
+                </div>
+            </div>
+            """
+        
         ncr_html = f"""
         <div class="section">
             <div class="section-title">⚠️ Quality & Non-Conformance</div>
@@ -444,6 +479,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <div class="metric-value">{total_qty_affected:,.0f}</div>
                 </div>
             </div>
+            {source_html}
             {f'''
             <h4 style="color: #475569; margin: 20px 0 10px 0;">Issue Type Breakdown</h4>
             <table class="data-table">
@@ -1527,10 +1563,16 @@ def load_qbr_data():
     # =========================================================================
     # LOAD AND PROCESS NCR (NON-CONFORMANCE) DATA
     # Used to track quality issues by customer
+    # NetSuite NCR = source of truth from November 2024 onwards
+    # HubSpot NCR = historical data before November 2024
     # =========================================================================
-    ncr_df = load_google_sheets_data("Non-Conformance Details", "A:W", version=CACHE_VERSION, silent=True)
     
-    if not ncr_df.empty:
+    # --- NetSuite NCR Data (Nov 2024+) ---
+    ncr_df = pd.DataFrame()  # Initialize as empty
+    ncr_raw = load_google_sheets_data("Non-Conformance Details", "A:W", version=CACHE_VERSION, silent=True)
+    
+    if not ncr_raw.empty:
+        ncr_df = ncr_raw.copy()
         # Remove duplicate columns
         if ncr_df.columns.duplicated().any():
             ncr_df = ncr_df.loc[:, ~ncr_df.columns.duplicated()]
@@ -1559,8 +1601,152 @@ def load_qbr_data():
             ncr_df['Date Submitted'] = pd.to_datetime(ncr_df['Date Submitted'], errors='coerce')
         if 'On Time Ship Date' in ncr_df.columns:
             ncr_df['On Time Ship Date'] = pd.to_datetime(ncr_df['On Time Ship Date'], errors='coerce')
+        
+        # Add source indicator
+        ncr_df['NCR Source'] = 'NetSuite'
+        
+        # Standardize column for matching
+        ncr_df['Matched Customer'] = ncr_df.get('Corrected Customer Name', '')
     
-    return sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df
+    # --- HubSpot NCR Data (Historical, pre-Nov 2024) ---
+    hb_ncr_df = pd.DataFrame()  # Initialize as empty
+    hb_ncr_raw = load_google_sheets_data("HB NCR", "A:J", version=CACHE_VERSION, silent=True)
+    
+    if not hb_ncr_raw.empty:
+        hb_ncr_df = hb_ncr_raw.copy()
+        # Remove duplicate columns
+        if hb_ncr_df.columns.duplicated().any():
+            hb_ncr_df = hb_ncr_df.loc[:, ~hb_ncr_df.columns.duplicated()]
+        
+        # Filter to Customer NCR Pipeline only
+        if 'Pipeline' in hb_ncr_df.columns:
+            hb_ncr_df = hb_ncr_df[hb_ncr_df['Pipeline'].str.strip() == 'Customer NCR Pipeline'].copy()
+        
+        if not hb_ncr_df.empty:
+            # Clean text fields
+            for col in ['Ticket ID', 'Ticket name', 'Ticket status', 'Pipeline', 
+                        'Ticket description', 'Company Name', 'Company Name 2']:
+                if col in hb_ncr_df.columns:
+                    hb_ncr_df[col] = hb_ncr_df[col].astype(str).str.strip()
+                    hb_ncr_df[col] = hb_ncr_df[col].replace('nan', '')
+            
+            # Clean date data
+            if 'Create date' in hb_ncr_df.columns:
+                hb_ncr_df['Create date'] = pd.to_datetime(hb_ncr_df['Create date'], errors='coerce')
+            if 'Close date' in hb_ncr_df.columns:
+                hb_ncr_df['Close date'] = pd.to_datetime(hb_ncr_df['Close date'], errors='coerce')
+            
+            # Calculate resolution time (days to close)
+            if 'Create date' in hb_ncr_df.columns and 'Close date' in hb_ncr_df.columns:
+                hb_ncr_df['Resolution Days'] = (hb_ncr_df['Close date'] - hb_ncr_df['Create date']).dt.days
+            
+            # --- Customer Matching Logic ---
+            # Priority 1: Company Name 2 (exact match, same naming convention)
+            # Priority 2: Company Name (fuzzy match)
+            # Priority 3: Extract from Ticket name (format "NCR600 - Customer Name")
+            
+            def extract_customer_from_ticket(ticket_name):
+                """Extract customer name from ticket format 'NCR### - Customer Name'"""
+                if not ticket_name or ticket_name == '':
+                    return ''
+                # Try to split on ' - ' and take everything after
+                if ' - ' in ticket_name:
+                    parts = ticket_name.split(' - ', 1)
+                    if len(parts) > 1:
+                        return parts[1].strip()
+                return ''
+            
+            def match_customer(row, valid_customers):
+                """Match customer using priority logic with fuzzy matching"""
+                from difflib import get_close_matches
+                
+                # Priority 1: Company Name 2 (exact - same naming convention)
+                company_name_2 = row.get('Company Name 2', '')
+                if company_name_2 and company_name_2 != '':
+                    return company_name_2
+                
+                # Priority 2: Company Name (try exact first, then fuzzy)
+                company_name = row.get('Company Name', '')
+                if company_name and company_name != '':
+                    # Try exact match first
+                    if company_name in valid_customers:
+                        return company_name
+                    # Fuzzy match
+                    matches = get_close_matches(company_name, valid_customers, n=1, cutoff=0.8)
+                    if matches:
+                        return matches[0]
+                
+                # Priority 3: Extract from Ticket name and fuzzy match
+                ticket_name = row.get('Ticket name', '')
+                extracted = extract_customer_from_ticket(ticket_name)
+                if extracted:
+                    # Try exact match first
+                    if extracted in valid_customers:
+                        return extracted
+                    # Fuzzy match
+                    matches = get_close_matches(extracted, valid_customers, n=1, cutoff=0.7)
+                    if matches:
+                        return matches[0]
+                
+                return ''  # No match found
+            
+            # Get list of valid customers for fuzzy matching
+            valid_customers = set()
+            if not sales_orders_df.empty and 'Corrected Customer Name' in sales_orders_df.columns:
+                valid_customers.update(sales_orders_df['Corrected Customer Name'].dropna().unique())
+            if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns:
+                valid_customers.update(invoices_df['Corrected Customer'].dropna().unique())
+            valid_customers = [c for c in valid_customers if c and c not in ['', 'nan', 'None', '#N/A']]
+            
+            # Apply customer matching
+            hb_ncr_df['Matched Customer'] = hb_ncr_df.apply(
+                lambda row: match_customer(row, valid_customers), axis=1
+            )
+            
+            # Map HubSpot columns to standardized NCR columns
+            hb_ncr_df['NC Number'] = hb_ncr_df.get('Ticket ID', '')
+            hb_ncr_df['Date Submitted'] = hb_ncr_df.get('Create date', pd.NaT)
+            hb_ncr_df['Status'] = hb_ncr_df.get('Ticket status', '')
+            hb_ncr_df['Defect Summary'] = hb_ncr_df.get('Ticket description', '')
+            hb_ncr_df['Issue Type'] = 'HubSpot NCR'  # Generic type for historical
+            hb_ncr_df['Total Quantity Affected'] = 0  # Not tracked in HubSpot
+            hb_ncr_df['NCR Source'] = 'HubSpot'
+            hb_ncr_df['Close Date'] = hb_ncr_df.get('Close date', pd.NaT)
+    
+    # --- Combine NCR Data ---
+    # Columns to keep for combined dataframe
+    ncr_columns = ['NC Number', 'Date Submitted', 'Status', 'Issue Type', 'Defect Summary',
+                   'Total Quantity Affected', 'Matched Customer', 'NCR Source', 'Sales Order']
+    
+    combined_ncr_df = pd.DataFrame()
+    
+    if not ncr_df.empty:
+        # Ensure Sales Order column exists
+        if 'Sales Order' not in ncr_df.columns:
+            ncr_df['Sales Order'] = ''
+        # Select columns that exist
+        ns_cols = [c for c in ncr_columns if c in ncr_df.columns]
+        combined_ncr_df = ncr_df[ns_cols].copy()
+    
+    if not hb_ncr_df.empty:
+        # Add Sales Order placeholder if not exists
+        if 'Sales Order' not in hb_ncr_df.columns:
+            hb_ncr_df['Sales Order'] = ''
+        # Add Close Date and Resolution Days to combined
+        hb_cols = [c for c in ncr_columns if c in hb_ncr_df.columns]
+        if 'Close Date' in hb_ncr_df.columns:
+            hb_cols.append('Close Date')
+        if 'Resolution Days' in hb_ncr_df.columns:
+            hb_cols.append('Resolution Days')
+        
+        hb_subset = hb_ncr_df[hb_cols].copy()
+        
+        if combined_ncr_df.empty:
+            combined_ncr_df = hb_subset
+        else:
+            combined_ncr_df = pd.concat([combined_ncr_df, hb_subset], ignore_index=True)
+    
+    return sales_orders_df, invoices_df, deals_df, invoice_line_items_df, combined_ncr_df
 
 
 # ========== HELPER FUNCTIONS ==========
@@ -3061,6 +3247,7 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     """
     Section: Non-Conformance Report (NCR) Analysis
     Shows quality issues for the customer - how many orders had NCRs, issue types, etc.
+    Combines data from both NetSuite (Nov 2024+) and HubSpot (historical)
     """
     st.markdown("### ⚠️ Quality & Non-Conformance")
     st.caption("Non-conformance reports (NCRs) associated with this customer's orders")
@@ -3111,7 +3298,21 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     if 'Total Quantity Affected' in customer_ncrs.columns:
         total_qty_affected = customer_ncrs['Total Quantity Affected'].sum()
     
-    # Summary metrics
+    # Source breakdown
+    netsuite_count = 0
+    hubspot_count = 0
+    if 'NCR Source' in customer_ncrs.columns:
+        netsuite_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'NetSuite'])
+        hubspot_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'HubSpot'])
+    
+    # Resolution time metrics (HubSpot data has this)
+    avg_resolution = None
+    if 'Resolution Days' in customer_ncrs.columns:
+        resolution_data = customer_ncrs['Resolution Days'].dropna()
+        if len(resolution_data) > 0:
+            avg_resolution = resolution_data.mean()
+    
+    # Summary metrics row 1
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -3139,6 +3340,93 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
             st.metric("Top Issue Type", top_issue, f"{top_count} occurrences")
         else:
             st.metric("Issue Types", "N/A")
+    
+    # Source breakdown and resolution metrics row
+    if netsuite_count > 0 or hubspot_count > 0 or avg_resolution is not None:
+        st.markdown("---")
+        
+        source_cols = st.columns(4)
+        
+        with source_cols[0]:
+            st.markdown(f"""
+                <div style="
+                    background: #1e293b;
+                    padding: 12px 16px;
+                    border-radius: 8px;
+                    border-left: 3px solid #3b82f6;
+                ">
+                    <div style="color: #94a3b8; font-size: 0.8rem;">NetSuite NCRs</div>
+                    <div style="color: #f1f5f9; font-size: 1.3rem; font-weight: 600;">{netsuite_count}</div>
+                    <div style="color: #64748b; font-size: 0.75rem;">Nov 2024+</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with source_cols[1]:
+            st.markdown(f"""
+                <div style="
+                    background: #1e293b;
+                    padding: 12px 16px;
+                    border-radius: 8px;
+                    border-left: 3px solid #f59e0b;
+                ">
+                    <div style="color: #94a3b8; font-size: 0.8rem;">HubSpot NCRs</div>
+                    <div style="color: #f1f5f9; font-size: 1.3rem; font-weight: 600;">{hubspot_count}</div>
+                    <div style="color: #64748b; font-size: 0.75rem;">Historical</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with source_cols[2]:
+            if avg_resolution is not None:
+                resolution_color = "#10b981" if avg_resolution <= 7 else "#f59e0b" if avg_resolution <= 14 else "#ef4444"
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 12px 16px;
+                        border-radius: 8px;
+                        border-left: 3px solid {resolution_color};
+                    ">
+                        <div style="color: #94a3b8; font-size: 0.8rem;">Avg Resolution</div>
+                        <div style="color: #f1f5f9; font-size: 1.3rem; font-weight: 600;">{avg_resolution:.1f} days</div>
+                        <div style="color: #64748b; font-size: 0.75rem;">Create → Close</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 12px 16px;
+                        border-radius: 8px;
+                        border-left: 3px solid #475569;
+                    ">
+                        <div style="color: #94a3b8; font-size: 0.8rem;">Avg Resolution</div>
+                        <div style="color: #64748b; font-size: 1.3rem; font-weight: 600;">N/A</div>
+                        <div style="color: #64748b; font-size: 0.75rem;">No data</div>
+                    </div>
+                """, unsafe_allow_html=True)
+        
+        with source_cols[3]:
+            # Closed vs Open
+            if 'Close Date' in customer_ncrs.columns or 'Status' in customer_ncrs.columns:
+                closed_count = 0
+                if 'Close Date' in customer_ncrs.columns:
+                    closed_count = customer_ncrs['Close Date'].notna().sum()
+                elif 'Status' in customer_ncrs.columns:
+                    closed_statuses = ['Closed', 'Resolved', 'Complete', 'Done']
+                    closed_count = customer_ncrs['Status'].isin(closed_statuses).sum()
+                
+                open_count = ncr_count - closed_count
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 12px 16px;
+                        border-radius: 8px;
+                        border-left: 3px solid {'#10b981' if open_count == 0 else '#ef4444'};
+                    ">
+                        <div style="color: #94a3b8; font-size: 0.8rem;">Status</div>
+                        <div style="color: #f1f5f9; font-size: 1.3rem; font-weight: 600;">{closed_count} Closed</div>
+                        <div style="color: {'#10b981' if open_count == 0 else '#fbbf24'}; font-size: 0.75rem;">{open_count} Open</div>
+                    </div>
+                """, unsafe_allow_html=True)
     
     # Issue Type Breakdown
     if 'Issue Type' in customer_ncrs.columns:
@@ -3202,10 +3490,10 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     
     # NCR Details Expander
     with st.expander("📋 View NCR Details"):
-        # Select columns to display
+        # Select columns to display - include source and resolution info
         display_cols = []
-        for col in ['NC Number', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
-                    'Defect Summary', 'Total Quantity Affected', 'Date Submitted']:
+        for col in ['NC Number', 'NCR Source', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
+                    'Defect Summary', 'Total Quantity Affected', 'Date Submitted', 'Close Date', 'Resolution Days']:
             if col in customer_ncrs.columns:
                 display_cols.append(col)
         
@@ -3215,14 +3503,25 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
             # Format quantity
             if 'Total Quantity Affected' in display_df.columns:
                 display_df['Total Quantity Affected'] = display_df['Total Quantity Affected'].apply(
-                    lambda x: f"{x:,.0f}" if pd.notna(x) else "0"
+                    lambda x: f"{x:,.0f}" if pd.notna(x) and x > 0 else "-"
                 )
             
-            # Format date
+            # Format dates
             if 'Date Submitted' in display_df.columns:
                 display_df['Date Submitted'] = pd.to_datetime(
                     display_df['Date Submitted'], errors='coerce'
                 ).dt.strftime('%Y-%m-%d').fillna('')
+            
+            if 'Close Date' in display_df.columns:
+                display_df['Close Date'] = pd.to_datetime(
+                    display_df['Close Date'], errors='coerce'
+                ).dt.strftime('%Y-%m-%d').fillna('')
+            
+            # Format resolution days
+            if 'Resolution Days' in display_df.columns:
+                display_df['Resolution Days'] = display_df['Resolution Days'].apply(
+                    lambda x: f"{x:.0f} days" if pd.notna(x) else "-"
+                )
             
             st.dataframe(display_df, use_container_width=True, hide_index=True)
         else:
@@ -3682,18 +3981,23 @@ def render_yearly_planning_2026():
         else:
             customer_line_items = pd.DataFrame()
         
-        # NCR Data - match by Corrected Customer Name or by Sales Order
-        # Primary: Match by Corrected Customer Name
+        # NCR Data - match using 'Matched Customer' column (works for both HubSpot and NetSuite sources)
         # Secondary: Match by Sales Order numbers that belong to this customer
         customer_ncrs = pd.DataFrame()
         if not filtered_ncr_df.empty:
-            # Direct match on Corrected Customer Name
-            if 'Corrected Customer Name' in filtered_ncr_df.columns:
+            # Primary: Match on 'Matched Customer' column (standardized across both sources)
+            if 'Matched Customer' in filtered_ncr_df.columns:
+                customer_ncrs = filtered_ncr_df[
+                    filtered_ncr_df['Matched Customer'] == customer_name
+                ].copy()
+            
+            # Fallback: Try 'Corrected Customer Name' for NetSuite NCRs
+            if customer_ncrs.empty and 'Corrected Customer Name' in filtered_ncr_df.columns:
                 customer_ncrs = filtered_ncr_df[
                     filtered_ncr_df['Corrected Customer Name'] == customer_name
                 ].copy()
             
-            # If no direct match, try matching via Sales Order
+            # Secondary: If still no match, try matching via Sales Order
             if customer_ncrs.empty and 'Sales Order' in filtered_ncr_df.columns and not customer_orders.empty and 'SO Number' in customer_orders.columns:
                 customer_so_numbers = customer_orders['SO Number'].dropna().unique()
                 # Clean SO numbers for matching
