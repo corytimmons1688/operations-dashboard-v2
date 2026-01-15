@@ -1703,12 +1703,85 @@ def load_qbr_data():
                 lambda row: match_customer(row, valid_customers), axis=1
             )
             
+            # --- Categorize HubSpot NCRs based on description ---
+            def categorize_hubspot_ncr(description):
+                """Categorize HubSpot NCR based on ticket description to match NetSuite Issue Types"""
+                if not description or description == '' or pd.isna(description):
+                    return 'Defective Product'
+                
+                desc_lower = str(description).lower()
+                
+                # Damaged in Transit - carrier damage, broken in shipping
+                if any(kw in desc_lower for kw in ['damaged', 'broken', 'crushed', 'fedex damaged', 
+                                                    'ups damaged', 'transit', 'carrier', 'pallet.*damage']):
+                    return 'Damaged in Transit'
+                
+                # Shipped to Wrong Address - misshipments, swapped orders
+                if any(kw in desc_lower for kw in ['wrong address', 'misshipped', 'swapped', 
+                                                    'wrong location', 'delivered to wrong']):
+                    return 'Shipped to Wrong Address'
+                
+                # Missing Labels Wrong Qty - shortages
+                if any(kw in desc_lower for kw in ['short', 'missing', 'shorted', 'only received',
+                                                    'ran short', 'labels short']):
+                    return 'Missing Labels Wrong Qty'
+                
+                # Order Entry Error - system/data entry issues, customer ordered wrong
+                if any(kw in desc_lower for kw in ['hubspot', 'netsuite', 'set up incorrectly', 
+                                                    'entered into', 'system switched',
+                                                    'customer ordered wrong', 'mistakenly ordered',
+                                                    'accidentally placed', 'customer error',
+                                                    'deal & so was reflective of the wrong',
+                                                    'proofing queue']):
+                    return 'Order Entry Error'
+                
+                # Wrong Material - wrong product shipped (includes wrong color/size)
+                if any(kw in desc_lower for kw in ['wrong color', 'wrong size', 'wrong finish',
+                                                    'received white instead', 'received black instead', 
+                                                    'instead of', '25d instead', '15d instead', 
+                                                    '7ml instead', '45d instead', '4ml instead',
+                                                    'wrong sku', 'wrong product', 'mislabeled box',
+                                                    'shipped black instead', 'shipped white instead',
+                                                    'wrong core', 'not the artwork']):
+                    return 'Wrong Material'
+                
+                # Incorrect Color - specifically color-related manufacturing issues
+                if any(kw in desc_lower for kw in ['grey caps', 'marbling', 'translucent',
+                                                    'color.*mixed', 'pigment']):
+                    return 'Incorrect Color'
+                
+                # Artwork/Print/Label defects
+                if any(kw in desc_lower for kw in ['print', 'artwork', 'off center', 'embossing',
+                                                    'cut off', 'varnish', 'laminate', 'tactile',
+                                                    'telescoping', 'backing.*rip', 'paper backing',
+                                                    'poor print', 'skipout']):
+                    return 'Artwork Error'
+                
+                # Defective Product - manufacturing defects, contamination, fit issues
+                if any(kw in desc_lower for kw in ['warped', 'warping', 'defect', 'grease', 
+                                                    'debris', 'contaminated', 'filth', 'insect', 
+                                                    'hair', 'doesn\'t fit', 'not sealing', 'leaking',
+                                                    'cracked', 'irregular', 'lid.*fit', 'snapping',
+                                                    'boxes not forming', 'not in.*bag']):
+                    return 'Defective Product'
+                
+                # Customer Returns (not defect-related)
+                if any(kw in desc_lower for kw in ['customer return', 'return', 'exchange',
+                                                    'would like to replace', 'swap out']):
+                    return 'Order Entry Error'
+                
+                # Default fallback
+                return 'Defective Product'
+            
             # Map HubSpot columns to standardized NCR columns
             hb_ncr_df['NC Number'] = hb_ncr_df.get('Ticket ID', '')
             hb_ncr_df['Date Submitted'] = hb_ncr_df.get('Create date', pd.NaT)
             hb_ncr_df['Status'] = hb_ncr_df.get('Ticket status', '')
             hb_ncr_df['Defect Summary'] = hb_ncr_df.get('Ticket description', '')
-            hb_ncr_df['Issue Type'] = 'HubSpot NCR'  # Generic type for historical
+            
+            # Categorize based on description - matching NetSuite Issue Types
+            hb_ncr_df['Issue Type'] = hb_ncr_df['Defect Summary'].apply(categorize_hubspot_ncr)
+            
             hb_ncr_df['Total Quantity Affected'] = 0  # Not tracked in HubSpot
             hb_ncr_df['NCR Source'] = 'HubSpot'
             hb_ncr_df['Close Date'] = hb_ncr_df.get('Close date', pd.NaT)
