@@ -1610,7 +1610,7 @@ def load_qbr_data():
     
     # --- HubSpot NCR Data (Historical, pre-Nov 2024) ---
     hb_ncr_df = pd.DataFrame()  # Initialize as empty
-    hb_ncr_raw = load_google_sheets_data("HB NCR", "A2:J", version=CACHE_VERSION, silent=True)
+    hb_ncr_raw = load_google_sheets_data("HB NCR", "A2:O", version=CACHE_VERSION, silent=True)
     
     if not hb_ncr_raw.empty:
         hb_ncr_df = hb_ncr_raw.copy()
@@ -1782,7 +1782,34 @@ def load_qbr_data():
             # Categorize based on description - matching NetSuite Issue Types
             hb_ncr_df['Issue Type'] = hb_ncr_df['Defect Summary'].apply(categorize_hubspot_ncr)
             
-            hb_ncr_df['Total Quantity Affected'] = 0  # Not tracked in HubSpot
+            # Calculate Total Quantity Affected from QTY columns and determine Product Type
+            # Priority order: Boxes → Containers → Flexpack → Labels → General QTY
+            qty_columns = [
+                ('QTY of boxes effected', 'Boxes'),
+                ('QTY of containers effected', 'Containers'),
+                ('Flexpack QTY Effected', 'Flexpack'),
+                ('QTY of labels effected', 'Labels'),
+                ('QTY Effected', 'General')
+            ]
+            
+            def get_qty_and_product_type(row):
+                """Get quantity affected and product type from first non-empty QTY column"""
+                for col_name, product_type in qty_columns:
+                    if col_name in row.index:
+                        val = row[col_name]
+                        if pd.notna(val) and str(val).strip() not in ['', 'nan', '0']:
+                            try:
+                                qty = float(str(val).replace(',', '').strip())
+                                if qty > 0:
+                                    return qty, product_type
+                            except (ValueError, TypeError):
+                                continue
+                return 0, 'Unknown'
+            
+            # Apply to get both quantity and product type
+            qty_product = hb_ncr_df.apply(get_qty_and_product_type, axis=1)
+            hb_ncr_df['Total Quantity Affected'] = qty_product.apply(lambda x: x[0])
+            hb_ncr_df['Product Type Affected'] = qty_product.apply(lambda x: x[1])
             hb_ncr_df['NCR Source'] = 'HubSpot'
             hb_ncr_df['Close Date'] = hb_ncr_df.get('Close date', pd.NaT)
     
@@ -1805,12 +1832,14 @@ def load_qbr_data():
         # Add Sales Order placeholder if not exists
         if 'Sales Order' not in hb_ncr_df.columns:
             hb_ncr_df['Sales Order'] = ''
-        # Add Close Date and Resolution Days to combined
+        # Add Close Date, Resolution Days, and Product Type Affected to combined
         hb_cols = [c for c in ncr_columns if c in hb_ncr_df.columns]
         if 'Close Date' in hb_ncr_df.columns:
             hb_cols.append('Close Date')
         if 'Resolution Days' in hb_ncr_df.columns:
             hb_cols.append('Resolution Days')
+        if 'Product Type Affected' in hb_ncr_df.columns:
+            hb_cols.append('Product Type Affected')
         
         hb_subset = hb_ncr_df[hb_cols].copy()
         
@@ -3563,9 +3592,9 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     
     # NCR Details Expander
     with st.expander("📋 View NCR Details"):
-        # Select columns to display - include source and resolution info
+        # Select columns to display - include source, product type, and resolution info
         display_cols = []
-        for col in ['NC Number', 'NCR Source', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
+        for col in ['NC Number', 'NCR Source', 'Product Type Affected', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
                     'Defect Summary', 'Total Quantity Affected', 'Date Submitted', 'Close Date', 'Resolution Days']:
             if col in customer_ncrs.columns:
                 display_cols.append(col)
