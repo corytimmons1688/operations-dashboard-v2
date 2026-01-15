@@ -1610,7 +1610,7 @@ def load_qbr_data():
     
     # --- HubSpot NCR Data (Historical, pre-Nov 2024) ---
     hb_ncr_df = pd.DataFrame()  # Initialize as empty
-    hb_ncr_raw = load_google_sheets_data("HB NCR", "A:J", version=CACHE_VERSION, silent=True)
+    hb_ncr_raw = load_google_sheets_data("HB NCR", "A2:J", version=CACHE_VERSION, silent=True)
     
     if not hb_ncr_raw.empty:
         hb_ncr_df = hb_ncr_raw.copy()
