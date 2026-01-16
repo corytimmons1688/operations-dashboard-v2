@@ -406,25 +406,26 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         line_item_html = f"""
         <div class="section">
             <div class="section-header">
-                <div class="section-icon">📦</div>
+                <div class="section-icon-box blue">📦</div>
                 <div>
                     <div class="section-title">Product Mix Analysis</div>
                     <div class="section-subtitle">Breakdown of your purchases by product category</div>
                 </div>
             </div>
             
-            <div class="summary-box">
-                <div class="summary-item">
-                    <div class="summary-value">${product_revenue:,.0f}</div>
-                    <div class="summary-label">Product Purchases</div>
+            <div class="stats-row">
+                <div class="stat-card purple">
+                    <div class="stat-value">${product_revenue:,.0f}</div>
+                    <div class="stat-label">Product Purchases</div>
                 </div>
-                <div class="summary-item">
-                    <div class="summary-value">{len(category_summary) if category_rows else 0}</div>
-                    <div class="summary-label">Categories</div>
+                <div class="stat-card">
+                    <div class="stat-value">{len(category_summary) if category_rows else 0}</div>
+                    <div class="stat-label">Categories</div>
                 </div>
             </div>
             
             {f'''
+            <div class="table-container">
             <table class="data-table product-table">
                 <thead>
                     <tr>
@@ -436,6 +437,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 </thead>
                 <tbody>{category_rows}</tbody>
             </table>
+            </div>
             ''' if category_rows else '<p class="no-data">No product category data available.</p>'}
         </div>
         """
@@ -512,42 +514,44 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         ncr_html = f"""
         <div class="section">
             <div class="section-header">
-                <div class="section-icon">📋</div>
+                <div class="section-icon-box {'green' if rate_class == 'success' else 'amber'}">📋</div>
                 <div>
                     <div class="section-title">Quality Performance</div>
                     <div class="section-subtitle">Non-conformance tracking and resolution metrics</div>
                 </div>
             </div>
             
-            <div class="quality-summary">
-                <div class="quality-card {rate_class}">
+            <div class="quality-grid">
+                <div class="quality-score-card {rate_class}">
                     <div class="quality-badge">{rate_badge}</div>
                     <div class="quality-rate">{ncr_rate:.1f}%</div>
                     <div class="quality-label">NCR Rate</div>
                     <div class="quality-detail">{ncr_count} of {total_orders} orders</div>
                 </div>
-                <div class="quality-metrics">
-                    <div class="quality-metric">
-                        <div class="metric-val">{ncr_count}</div>
-                        <div class="metric-lbl">Total NCRs</div>
+                <div class="quality-metrics-grid">
+                    <div class="quality-metric-card">
+                        <div class="qm-value">{ncr_count}</div>
+                        <div class="qm-label">Total NCRs</div>
                     </div>
-                    <div class="quality-metric">
-                        <div class="metric-val">{total_qty_affected:,.0f}</div>
-                        <div class="metric-lbl">Units Affected</div>
+                    <div class="quality-metric-card">
+                        <div class="qm-value">{total_qty_affected:,.0f}</div>
+                        <div class="qm-label">Units Affected</div>
                     </div>
-                    <div class="quality-metric">
-                        <div class="metric-val">{resolution_text}</div>
-                        <div class="metric-lbl">Avg Resolution</div>
+                    <div class="quality-metric-card">
+                        <div class="qm-value">{resolution_text}</div>
+                        <div class="qm-label">Avg Resolution</div>
                     </div>
                 </div>
             </div>
             
             {f'''
-            <h4 style="color: #475569; margin: 25px 0 15px 0; font-size: 1rem;">Issue Type Analysis</h4>
+            <h4 style="color: #475569; margin: 30px 0 15px 0; font-size: 1.1rem; font-weight: 600;">Issue Type Analysis</h4>
+            <div class="table-container">
             <table class="data-table">
                 <thead><tr><th style="text-align: left;">Issue Type</th><th style="text-align: center;">Count</th><th style="text-align: right;">Qty Affected</th><th style="text-align: right;">% of Total</th></tr></thead>
                 <tbody>{issue_rows}</tbody>
             </table>
+            </div>
             ''' if issue_rows else ''}
         </div>
         """
@@ -556,17 +560,17 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         ncr_html = f"""
         <div class="section">
             <div class="section-header">
-                <div class="section-icon">✅</div>
+                <div class="section-icon-box green">✅</div>
                 <div>
                     <div class="section-title">Quality Performance</div>
                     <div class="section-subtitle">Non-conformance tracking and resolution metrics</div>
                 </div>
             </div>
             <div class="success-banner">
-                <div class="success-icon">🏆</div>
-                <div>
-                    <div class="success-title">Zero Quality Issues</div>
-                    <div class="success-detail">{total_orders} orders delivered with no non-conformance reports</div>
+                <div class="success-emoji">🏆</div>
+                <div class="success-content">
+                    <h4>Zero Quality Issues</h4>
+                    <p>{total_orders} orders delivered with no non-conformance reports</p>
                 </div>
             </div>
         </div>
@@ -838,7 +842,26 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         <meta charset="UTF-8">
         <title>Account Review - {customer_name}</title>
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+            @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+            
+            :root {{
+                --primary: #0ea5e9;
+                --primary-dark: #0284c7;
+                --secondary: #8b5cf6;
+                --success: #10b981;
+                --warning: #f59e0b;
+                --danger: #ef4444;
+                --dark: #0f172a;
+                --dark-light: #1e293b;
+                --gray-100: #f8fafc;
+                --gray-200: #e2e8f0;
+                --gray-300: #cbd5e1;
+                --gray-400: #94a3b8;
+                --gray-500: #64748b;
+                --gray-600: #475569;
+                --text: #1e293b;
+                --text-light: #64748b;
+            }}
             
             * {{
                 margin: 0;
@@ -847,30 +870,45 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             }}
             
             body {{
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
                 background: #ffffff;
-                color: #1e293b;
-                line-height: 1.6;
-                padding: 0;
+                color: var(--text);
+                line-height: 1.7;
+                font-size: 14px;
             }}
             
+            /* ═══════════════════════════════════════════════════════════════
+               COVER SECTION - Premium Hero Design
+               ═══════════════════════════════════════════════════════════════ */
             .cover {{
-                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #164e63 100%);
+                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 40%, #0f766e 100%);
                 color: white;
-                padding: 60px 50px;
+                padding: 80px 60px;
                 position: relative;
                 overflow: hidden;
+                min-height: 320px;
             }}
             
             .cover::before {{
                 content: '';
                 position: absolute;
-                top: -50%;
-                right: -20%;
-                width: 60%;
-                height: 200%;
-                background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
-                transform: rotate(15deg);
+                top: -100px;
+                right: -100px;
+                width: 500px;
+                height: 500px;
+                background: radial-gradient(circle, rgba(14, 165, 233, 0.15) 0%, transparent 70%);
+                border-radius: 50%;
+            }}
+            
+            .cover::after {{
+                content: '';
+                position: absolute;
+                bottom: -150px;
+                left: -100px;
+                width: 400px;
+                height: 400px;
+                background: radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, transparent 70%);
+                border-radius: 50%;
             }}
             
             .cover-content {{
@@ -878,495 +916,649 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 z-index: 1;
             }}
             
-            .logo-area {{
-                margin-bottom: 40px;
+            .brand-container {{
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                margin-bottom: 50px;
             }}
             
-            .logo-text {{
-                font-size: 1.1rem;
-                font-weight: 600;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                opacity: 0.9;
+            .brand-logo {{
+                width: 50px;
+                height: 50px;
+                border-radius: 12px;
+                object-fit: contain;
+                box-shadow: 0 10px 30px rgba(14, 165, 233, 0.3);
             }}
             
-            .cover h1 {{
-                font-size: 3rem;
+            .brand-text {{
+                font-size: 1.4rem;
+                font-weight: 700;
+                letter-spacing: 1px;
+                background: linear-gradient(90deg, #fff 0%, #a5f3fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+            }}
+            
+            .cover-title {{
+                font-size: 3.5rem;
                 font-weight: 800;
-                margin-bottom: 10px;
-                letter-spacing: -1px;
+                margin-bottom: 8px;
+                letter-spacing: -2px;
+                line-height: 1.1;
             }}
             
-            .cover .customer-name {{
-                font-size: 2rem;
+            .cover-subtitle {{
+                font-size: 2.2rem;
                 font-weight: 300;
-                color: #67e8f9;
-                margin-bottom: 30px;
+                background: linear-gradient(90deg, #67e8f9 0%, #a5f3fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
+                margin-bottom: 40px;
             }}
             
             .cover-meta {{
                 display: flex;
-                gap: 40px;
-                font-size: 0.95rem;
-                opacity: 0.85;
+                gap: 35px;
             }}
             
-            .cover-meta-item {{
-                display: flex;
-                align-items: center;
-                gap: 8px;
-            }}
-            
-            .main-content {{
-                padding: 50px;
-            }}
-            
-            /* Executive Summary */
-            .exec-summary {{
-                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-                border-radius: 16px;
-                padding: 35px;
-                margin-bottom: 40px;
-                border: 1px solid #e2e8f0;
-            }}
-            
-            .exec-title {{
-                font-size: 1.3rem;
-                font-weight: 700;
-                color: #0f172a;
-                margin-bottom: 25px;
+            .meta-pill {{
                 display: flex;
                 align-items: center;
                 gap: 10px;
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                padding: 12px 20px;
+                border-radius: 50px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+            }}
+            
+            .meta-pill span {{
+                font-size: 0.9rem;
+                font-weight: 500;
+            }}
+            
+            /* ═══════════════════════════════════════════════════════════════
+               MAIN CONTENT AREA
+               ═══════════════════════════════════════════════════════════════ */
+            .main-content {{
+                padding: 60px;
+                background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100px);
+            }}
+            
+            /* ═══════════════════════════════════════════════════════════════
+               EXECUTIVE SUMMARY - Premium Cards
+               ═══════════════════════════════════════════════════════════════ */
+            .exec-summary {{
+                background: white;
+                border-radius: 24px;
+                padding: 40px;
+                margin-bottom: 50px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 20px 50px -15px rgba(0, 0, 0, 0.1);
+                border: 1px solid var(--gray-200);
+            }}
+            
+            .exec-header {{
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                margin-bottom: 35px;
+            }}
+            
+            .exec-icon {{
+                width: 48px;
+                height: 48px;
+                background: linear-gradient(135deg, var(--primary) 0%, #06b6d4 100%);
+                border-radius: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 22px;
+                box-shadow: 0 8px 20px rgba(14, 165, 233, 0.25);
+            }}
+            
+            .exec-title {{
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: var(--dark);
             }}
             
             .exec-grid {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
-                gap: 25px;
-            }}
-            
-            .exec-card {{
-                background: white;
-                border-radius: 12px;
-                padding: 20px;
-                text-align: center;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            }}
-            
-            .exec-value {{
-                font-size: 2rem;
-                font-weight: 700;
-                color: #0f172a;
-                margin-bottom: 5px;
-            }}
-            
-            .exec-value.green {{ color: #059669; }}
-            .exec-value.blue {{ color: #2563eb; }}
-            .exec-value.amber {{ color: #d97706; }}
-            
-            .exec-label {{
-                font-size: 0.85rem;
-                color: #64748b;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }}
-            
-            .health-indicator {{
-                background: white;
-                border-radius: 12px;
-                padding: 20px 25px;
-                display: flex;
-                align-items: center;
                 gap: 20px;
-                margin-top: 25px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                margin-bottom: 30px;
             }}
             
-            .health-score {{
-                width: 80px;
-                height: 80px;
-                border-radius: 50%;
+            .metric-card {{
+                background: linear-gradient(135deg, var(--gray-100) 0%, white 100%);
+                border-radius: 16px;
+                padding: 24px;
+                text-align: center;
+                border: 1px solid var(--gray-200);
+                transition: all 0.3s ease;
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .metric-card::before {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 100%);
+                opacity: 0;
+                transition: opacity 0.3s;
+            }}
+            
+            .metric-card.highlight::before {{
+                opacity: 1;
+            }}
+            
+            .metric-card.green {{ border-color: #86efac; background: linear-gradient(135deg, #f0fdf4 0%, white 100%); }}
+            .metric-card.green::before {{ background: linear-gradient(90deg, var(--success) 0%, #34d399 100%); opacity: 1; }}
+            
+            .metric-card.blue {{ border-color: #93c5fd; background: linear-gradient(135deg, #eff6ff 0%, white 100%); }}
+            .metric-card.blue::before {{ background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%); opacity: 1; }}
+            
+            .metric-value {{
+                font-size: 2.2rem;
+                font-weight: 800;
+                color: var(--dark);
+                margin-bottom: 6px;
+                letter-spacing: -1px;
+            }}
+            
+            .metric-card.green .metric-value {{ color: #059669; }}
+            .metric-card.blue .metric-value {{ color: #2563eb; }}
+            .metric-card.amber .metric-value {{ color: #d97706; }}
+            
+            .metric-label {{
+                font-size: 0.8rem;
+                font-weight: 600;
+                color: var(--gray-500);
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+            }}
+            
+            /* Health Score Widget */
+            .health-widget {{
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                border-radius: 20px;
+                padding: 28px 35px;
                 display: flex;
                 align-items: center;
-                justify-content: center;
-                font-size: 1.5rem;
-                font-weight: 800;
+                gap: 25px;
                 color: white;
             }}
             
-            .health-score.excellent {{ background: linear-gradient(135deg, #059669, #10b981); }}
-            .health-score.good {{ background: linear-gradient(135deg, #2563eb, #3b82f6); }}
-            .health-score.attention {{ background: linear-gradient(135deg, #d97706, #f59e0b); }}
-            .health-score.concern {{ background: linear-gradient(135deg, #dc2626, #ef4444); }}
-            
-            .health-details h4 {{
-                font-size: 1.1rem;
-                font-weight: 600;
-                color: #0f172a;
-                margin-bottom: 5px;
+            .health-ring {{
+                position: relative;
+                width: 90px;
+                height: 90px;
             }}
             
-            .health-details p {{
+            .health-ring-bg {{
+                position: absolute;
+                inset: 0;
+                border-radius: 50%;
+                background: rgba(255, 255, 255, 0.1);
+            }}
+            
+            .health-ring-progress {{
+                position: absolute;
+                inset: 0;
+                border-radius: 50%;
+            }}
+            
+            .health-ring-progress.excellent {{ background: conic-gradient(#10b981 0deg, #10b981 324deg, transparent 324deg); }}
+            .health-ring-progress.good {{ background: conic-gradient(#3b82f6 0deg, #3b82f6 270deg, transparent 270deg); }}
+            .health-ring-progress.attention {{ background: conic-gradient(#f59e0b 0deg, #f59e0b 216deg, transparent 216deg); }}
+            .health-ring-progress.concern {{ background: conic-gradient(#ef4444 0deg, #ef4444 144deg, transparent 144deg); }}
+            
+            .health-ring-inner {{
+                position: absolute;
+                inset: 8px;
+                border-radius: 50%;
+                background: var(--dark);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            
+            .health-score-value {{
+                font-size: 1.6rem;
+                font-weight: 800;
+            }}
+            
+            .health-info h4 {{
+                font-size: 1.15rem;
+                font-weight: 700;
+                margin-bottom: 6px;
+            }}
+            
+            .health-info p {{
                 font-size: 0.9rem;
-                color: #64748b;
+                opacity: 0.75;
+                line-height: 1.5;
             }}
             
-            /* Sections */
+            /* ═══════════════════════════════════════════════════════════════
+               SECTION STYLING
+               ═══════════════════════════════════════════════════════════════ */
             .section {{
-                margin-bottom: 45px;
+                margin-bottom: 50px;
                 page-break-inside: avoid;
             }}
             
             .section-header {{
                 display: flex;
-                align-items: flex-start;
-                gap: 15px;
-                margin-bottom: 25px;
-                padding-bottom: 15px;
-                border-bottom: 2px solid #e2e8f0;
+                align-items: center;
+                gap: 18px;
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 2px solid var(--gray-200);
             }}
             
-            .section-icon {{
-                font-size: 1.8rem;
-                line-height: 1;
-            }}
-            
-            .section-title {{
-                font-size: 1.4rem;
-                font-weight: 700;
-                color: #0f172a;
-            }}
-            
-            .section-subtitle {{
-                font-size: 0.9rem;
-                color: #64748b;
-                margin-top: 3px;
-            }}
-            
-            /* Summary Boxes */
-            .summary-box {{
+            .section-icon-box {{
+                width: 52px;
+                height: 52px;
+                background: linear-gradient(135deg, var(--gray-100) 0%, white 100%);
+                border: 2px solid var(--gray-200);
+                border-radius: 14px;
                 display: flex;
-                gap: 20px;
-                margin-bottom: 25px;
+                align-items: center;
+                justify-content: center;
+                font-size: 24px;
             }}
             
-            .summary-item {{
+            .section-icon-box.blue {{
                 background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-                border-radius: 12px;
-                padding: 20px 30px;
-                flex: 1;
-                text-align: center;
-                border: 1px solid #bfdbfe;
+                border-color: #93c5fd;
             }}
             
-            .summary-value {{
-                font-size: 2.2rem;
-                font-weight: 700;
-                color: #1e40af;
-            }}
-            
-            .summary-label {{
-                font-size: 0.85rem;
-                color: #3b82f6;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-                margin-top: 5px;
-            }}
-            
-            /* Data Tables */
-            .data-table {{
-                width: 100%;
-                border-collapse: collapse;
-                font-size: 0.9rem;
-                margin-top: 15px;
-            }}
-            
-            .data-table th {{
-                background: #0f172a;
-                color: white;
-                padding: 14px 16px;
-                text-align: left;
-                font-weight: 600;
-                font-size: 0.8rem;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }}
-            
-            .data-table td {{
-                padding: 14px 16px;
-                border-bottom: 1px solid #e2e8f0;
-            }}
-            
-            .data-table tr:nth-child(even) {{
-                background: #f8fafc;
-            }}
-            
-            .data-table.compact td {{
-                padding: 10px 16px;
-            }}
-            
-            /* Status Badges */
-            .status-badge {{
-                display: inline-block;
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 0.75rem;
-                font-weight: 600;
-                text-transform: uppercase;
-            }}
-            
-            .status-badge.pa {{
-                background: #fef3c7;
-                color: #92400e;
-            }}
-            
-            .status-badge.pf {{
-                background: #dbeafe;
-                color: #1e40af;
-            }}
-            
-            .pipeline-badge {{
-                display: inline-block;
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 0.75rem;
-                font-weight: 600;
-            }}
-            
-            .pipeline-badge.commit {{
-                background: #dcfce7;
-                color: #166534;
-            }}
-            
-            .pipeline-badge.expect {{
-                background: #dbeafe;
-                color: #1e40af;
-            }}
-            
-            .pipeline-badge.opportunity {{
-                background: #f3e8ff;
-                color: #7c3aed;
-            }}
-            
-            /* Quality Section */
-            .quality-summary {{
-                display: flex;
-                gap: 25px;
-                margin-bottom: 25px;
-            }}
-            
-            .quality-card {{
-                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-                border: 2px solid #86efac;
-                border-radius: 16px;
-                padding: 25px;
-                text-align: center;
-                min-width: 180px;
-            }}
-            
-            .quality-card.success {{
+            .section-icon-box.green {{
                 background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
                 border-color: #86efac;
             }}
             
-            .quality-card.warning {{
+            .section-icon-box.purple {{
+                background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+                border-color: #c4b5fd;
+            }}
+            
+            .section-icon-box.amber {{
                 background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
                 border-color: #fcd34d;
             }}
             
-            .quality-card.danger {{
-                background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%);
-                border-color: #fca5a5;
+            .section-title {{
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: var(--dark);
+            }}
+            
+            .section-subtitle {{
+                font-size: 0.9rem;
+                color: var(--gray-500);
+                margin-top: 4px;
+            }}
+            
+            /* Summary Stats Row */
+            .stats-row {{
+                display: flex;
+                gap: 20px;
+                margin-bottom: 30px;
+            }}
+            
+            .stat-card {{
+                flex: 1;
+                background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+                border: 1px solid #bfdbfe;
+                border-radius: 16px;
+                padding: 24px 30px;
+                text-align: center;
+            }}
+            
+            .stat-card.green {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border-color: #86efac;
+            }}
+            
+            .stat-card.purple {{
+                background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%);
+                border-color: #c4b5fd;
+            }}
+            
+            .stat-value {{
+                font-size: 2.5rem;
+                font-weight: 800;
+                color: #1e40af;
+                letter-spacing: -1px;
+            }}
+            
+            .stat-card.green .stat-value {{ color: #059669; }}
+            .stat-card.purple .stat-value {{ color: #7c3aed; }}
+            
+            .stat-label {{
+                font-size: 0.8rem;
+                font-weight: 600;
+                color: #3b82f6;
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+                margin-top: 6px;
+            }}
+            
+            .stat-card.green .stat-label {{ color: #059669; }}
+            .stat-card.purple .stat-label {{ color: #7c3aed; }}
+            
+            /* ═══════════════════════════════════════════════════════════════
+               DATA TABLES - Premium Design
+               ═══════════════════════════════════════════════════════════════ */
+            .table-container {{
+                background: white;
+                border-radius: 16px;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+                border: 1px solid var(--gray-200);
+            }}
+            
+            .data-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.9rem;
+            }}
+            
+            .data-table th {{
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                color: white;
+                padding: 16px 20px;
+                text-align: left;
+                font-weight: 600;
+                font-size: 0.75rem;
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+            }}
+            
+            .data-table th:first-child {{
+                border-top-left-radius: 0;
+            }}
+            
+            .data-table th:last-child {{
+                border-top-right-radius: 0;
+            }}
+            
+            .data-table td {{
+                padding: 16px 20px;
+                border-bottom: 1px solid var(--gray-200);
+                color: var(--gray-600);
+            }}
+            
+            .data-table tr:last-child td {{
+                border-bottom: none;
+            }}
+            
+            .data-table tr:nth-child(even) {{
+                background: var(--gray-100);
+            }}
+            
+            .data-table tr:hover {{
+                background: #f1f5f9;
+            }}
+            
+            /* Status Badges */
+            .badge {{
+                display: inline-block;
+                padding: 6px 14px;
+                border-radius: 50px;
+                font-size: 0.7rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            
+            .badge-pending {{
+                background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+                color: #92400e;
+            }}
+            
+            .badge-approved {{
+                background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+                color: #1e40af;
+            }}
+            
+            .badge-confirmed {{
+                background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+                color: #166534;
+            }}
+            
+            .badge-likely {{
+                background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+                color: #1e40af;
+            }}
+            
+            .badge-tentative {{
+                background: linear-gradient(135deg, #f3e8ff 0%, #e9d5ff 100%);
+                color: #7c3aed;
+            }}
+            
+            .badge-discussion {{
+                background: linear-gradient(135deg, var(--gray-200) 0%, var(--gray-300) 100%);
+                color: var(--gray-600);
+            }}
+            
+            /* ═══════════════════════════════════════════════════════════════
+               QUALITY SECTION - Premium Cards
+               ═══════════════════════════════════════════════════════════════ */
+            .quality-grid {{
+                display: grid;
+                grid-template-columns: 200px 1fr;
+                gap: 25px;
+                margin-bottom: 30px;
+            }}
+            
+            .quality-score-card {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border: 2px solid #86efac;
+                border-radius: 20px;
+                padding: 30px;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+            }}
+            
+            .quality-score-card.success {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border-color: #86efac;
+            }}
+            
+            .quality-score-card.warning {{
+                background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+                border-color: #fcd34d;
             }}
             
             .quality-badge {{
                 display: inline-block;
-                padding: 4px 12px;
-                border-radius: 20px;
-                font-size: 0.7rem;
-                font-weight: 700;
+                padding: 6px 16px;
+                border-radius: 50px;
+                font-size: 0.65rem;
+                font-weight: 800;
                 text-transform: uppercase;
+                letter-spacing: 1px;
                 background: white;
-                margin-bottom: 10px;
+                margin-bottom: 15px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
             }}
             
-            .quality-card.success .quality-badge {{ color: #166534; }}
-            .quality-card.warning .quality-badge {{ color: #92400e; }}
-            .quality-card.danger .quality-badge {{ color: #991b1b; }}
+            .quality-score-card.success .quality-badge {{ color: #166534; }}
+            .quality-score-card.warning .quality-badge {{ color: #92400e; }}
             
             .quality-rate {{
-                font-size: 2.5rem;
+                font-size: 3rem;
                 font-weight: 800;
+                letter-spacing: -2px;
             }}
             
-            .quality-card.success .quality-rate {{ color: #166534; }}
-            .quality-card.warning .quality-rate {{ color: #92400e; }}
-            .quality-card.danger .quality-rate {{ color: #991b1b; }}
+            .quality-score-card.success .quality-rate {{ color: #059669; }}
+            .quality-score-card.warning .quality-rate {{ color: #d97706; }}
             
             .quality-label {{
                 font-size: 0.85rem;
-                color: #64748b;
-                margin-top: 5px;
+                color: var(--gray-500);
+                font-weight: 600;
+                margin-top: 8px;
             }}
             
             .quality-detail {{
                 font-size: 0.8rem;
-                color: #94a3b8;
-                margin-top: 8px;
+                color: var(--gray-400);
+                margin-top: 10px;
             }}
             
-            .quality-metrics {{
-                flex: 1;
-                display: flex;
+            .quality-metrics-grid {{
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
                 gap: 15px;
             }}
             
-            .quality-metric {{
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 12px;
-                padding: 20px;
+            .quality-metric-card {{
+                background: var(--gray-100);
+                border: 1px solid var(--gray-200);
+                border-radius: 14px;
+                padding: 22px;
                 text-align: center;
-                flex: 1;
             }}
             
-            .quality-metric .metric-val {{
-                font-size: 1.5rem;
-                font-weight: 700;
-                color: #0f172a;
+            .qm-value {{
+                font-size: 1.8rem;
+                font-weight: 800;
+                color: var(--dark);
             }}
             
-            .quality-metric .metric-lbl {{
-                font-size: 0.75rem;
-                color: #64748b;
+            .qm-label {{
+                font-size: 0.7rem;
+                font-weight: 600;
+                color: var(--gray-500);
                 text-transform: uppercase;
-                margin-top: 5px;
+                letter-spacing: 0.5px;
+                margin-top: 6px;
             }}
             
             /* Success Banner */
             .success-banner {{
                 background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
                 border: 2px solid #86efac;
-                border-radius: 16px;
-                padding: 30px;
+                border-radius: 20px;
+                padding: 35px 40px;
                 display: flex;
                 align-items: center;
-                gap: 20px;
+                gap: 25px;
             }}
             
-            .success-icon {{
-                font-size: 3rem;
+            .success-emoji {{
+                font-size: 3.5rem;
             }}
             
-            .success-title {{
-                font-size: 1.3rem;
+            .success-content h4 {{
+                font-size: 1.4rem;
                 font-weight: 700;
                 color: #166534;
+                margin-bottom: 6px;
             }}
             
-            .success-detail {{
-                font-size: 0.95rem;
+            .success-content p {{
+                font-size: 1rem;
                 color: #15803d;
-                margin-top: 5px;
             }}
             
-            /* Aging Grid */
-            .aging-grid {{
-                display: flex;
-                gap: 15px;
-                margin-bottom: 20px;
-            }}
-            
-            .aging-item {{
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 8px;
-                padding: 12px 20px;
-                flex: 1;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }}
-            
-            .aging-bucket {{
-                font-size: 0.8rem;
-                color: #64748b;
-            }}
-            
-            .aging-amount {{
-                font-weight: 700;
-            }}
-            
-            /* Overdue Rows */
-            .overdue-90 td {{
-                background: #fef2f2 !important;
-            }}
-            
-            .overdue-30 td {{
-                background: #fffbeb !important;
-            }}
-            
-            /* Charts */
+            /* ═══════════════════════════════════════════════════════════════
+               CHARTS SECTION
+               ═══════════════════════════════════════════════════════════════ */
             .chart-container {{
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 12px;
-                padding: 20px;
-                margin: 20px 0;
+                background: var(--gray-100);
+                border: 1px solid var(--gray-200);
+                border-radius: 16px;
+                padding: 25px;
+                margin: 25px 0;
                 text-align: center;
             }}
             
             .chart-container img {{
                 max-width: 100%;
                 height: auto;
-                border-radius: 8px;
+                border-radius: 12px;
             }}
             
-            /* Two Column Layout */
-            .two-col {{
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 30px;
-            }}
-            
-            /* No Data */
+            /* ═══════════════════════════════════════════════════════════════
+               NO DATA STATE
+               ═══════════════════════════════════════════════════════════════ */
             .no-data {{
-                color: #94a3b8;
+                color: var(--gray-400);
                 font-style: italic;
-                padding: 20px;
+                padding: 40px;
                 text-align: center;
-                background: #f8fafc;
-                border-radius: 8px;
+                background: var(--gray-100);
+                border-radius: 16px;
+                border: 1px dashed var(--gray-300);
             }}
             
-            /* Footer */
+            /* ═══════════════════════════════════════════════════════════════
+               FOOTER - Premium Design
+               ═══════════════════════════════════════════════════════════════ */
             .footer {{
                 margin-top: 60px;
-                padding: 30px 50px;
-                background: #0f172a;
-                color: white;
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                padding: 50px 60px;
                 text-align: center;
+                color: white;
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .footer::before {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--secondary) 100%);
             }}
             
             .footer-main {{
-                font-size: 1.1rem;
-                font-weight: 600;
+                font-size: 1.4rem;
+                font-weight: 700;
                 margin-bottom: 10px;
             }}
             
             .footer-sub {{
                 font-size: 0.9rem;
-                opacity: 0.7;
+                opacity: 0.6;
             }}
             
+            .footer-brand {{
+                margin-top: 25px;
+                font-size: 0.8rem;
+                opacity: 0.4;
+                text-transform: uppercase;
+                letter-spacing: 2px;
+            }}
+            
+            /* ═══════════════════════════════════════════════════════════════
+               PRINT STYLES
+               ═══════════════════════════════════════════════════════════════ */
             @media print {{
                 body {{
                     padding: 0;
                 }}
-                .cover {{
-                    -webkit-print-color-adjust: exact;
-                    print-color-adjust: exact;
+                .cover, .footer, .section, .metric-card, .stat-card, .quality-score-card {{
+                    -webkit-print-color-adjust: exact !important;
+                    print-color-adjust: exact !important;
                 }}
                 .section {{
                     page-break-inside: avoid;
@@ -1378,23 +1570,27 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </style>
     </head>
     <body>
+        <!-- ═══════════════════════════════════════════════════════════════
+             COVER SECTION
+             ═══════════════════════════════════════════════════════════════ -->
         <div class="cover">
             <div class="cover-content">
-                <div class="logo-area">
-                    <div class="logo-text">Calyx Containers</div>
+                <div class="brand-container">
+                    <img src="https://raw.githubusercontent.com/corytimmons1688/operations-dashboard-v2/main/calyx-sop-dashboard-v2/calyx_logo.png" alt="Calyx" class="brand-logo">
+                    <div class="brand-text">CALYX CONTAINERS</div>
                 </div>
-                <h1>Account Review</h1>
-                <div class="customer-name">{customer_name}</div>
+                <div class="cover-title">Account Review</div>
+                <div class="cover-subtitle">{customer_name}</div>
                 <div class="cover-meta">
-                    <div class="cover-meta-item">
+                    <div class="meta-pill">
                         <span>📅</span>
                         <span>{generated_date}</span>
                     </div>
-                    <div class="cover-meta-item">
+                    <div class="meta-pill">
                         <span>👤</span>
-                        <span>Account Manager: {rep_name}</span>
+                        <span>{rep_name}</span>
                     </div>
-                    <div class="cover-meta-item">
+                    <div class="meta-pill">
                         <span>📊</span>
                         <span>{period_display}</span>
                     </div>
@@ -1404,134 +1600,153 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         
         <div class="main-content">
             {f'''
-            <!-- Executive Summary -->
+            <!-- ═══════════════════════════════════════════════════════════════
+                 EXECUTIVE SUMMARY
+                 ═══════════════════════════════════════════════════════════════ -->
             <div class="exec-summary">
-                <div class="exec-title">📊 Executive Summary</div>
+                <div class="exec-header">
+                    <div class="exec-icon">📊</div>
+                    <div class="exec-title">Executive Summary</div>
+                </div>
                 <div class="exec-grid">
-                    <div class="exec-card">
-                        <div class="exec-value green">${total_revenue:,.0f}</div>
-                        <div class="exec-label">{purchases_label}</div>
+                    <div class="metric-card green highlight">
+                        <div class="metric-value">${total_revenue:,.0f}</div>
+                        <div class="metric-label">{purchases_label}</div>
                     </div>
-                    <div class="exec-card">
-                        <div class="exec-value blue">{total_invoices}</div>
-                        <div class="exec-label">{orders_label}</div>
+                    <div class="metric-card blue highlight">
+                        <div class="metric-value">{total_invoices}</div>
+                        <div class="metric-label">{orders_label}</div>
                     </div>
-                    <div class="exec-card">
-                        <div class="exec-value">${pending_value:,.0f}</div>
-                        <div class="exec-label">In Progress</div>
+                    <div class="metric-card">
+                        <div class="metric-value">${pending_value:,.0f}</div>
+                        <div class="metric-label">In Progress</div>
                     </div>
-                    <div class="exec-card">
-                        <div class="exec-value {'green' if ot_rate >= 90 else 'amber' if ot_rate >= 70 else ''}">{ot_rate:.0f}%</div>
-                        <div class="exec-label">On-Time Rate</div>
+                    <div class="metric-card {'green' if ot_rate >= 90 else 'amber' if ot_rate >= 70 else ''}">
+                        <div class="metric-value">{ot_rate:.0f}%</div>
+                        <div class="metric-label">On-Time Rate</div>
                     </div>
                 </div>
-                <div class="health-indicator">
-                    <div class="health-score {health_class}">{health_score}</div>
-                    <div class="health-details">
+                <div class="health-widget">
+                    <div class="health-ring">
+                        <div class="health-ring-bg"></div>
+                        <div class="health-ring-progress {health_class}"></div>
+                        <div class="health-ring-inner">
+                            <div class="health-score-value">{health_score}</div>
+                        </div>
+                    </div>
+                    <div class="health-info">
                         <h4>Account Health: {health_label}</h4>
-                        <p>{'All metrics looking strong!' if not health_factors else ' • '.join(health_factors)}</p>
+                        <p>{'All metrics looking strong! Keep up the great partnership.' if not health_factors else ' · '.join(health_factors)}</p>
                     </div>
                 </div>
             </div>
             ''' if pdf_config.get('exec_summary', True) else ''}
             
             {f'''
-            <!-- Orders in Progress -->
+            <!-- ═══════════════════════════════════════════════════════════════
+                 ORDERS IN PROGRESS
+                 ═══════════════════════════════════════════════════════════════ -->
             <div class="section">
                 <div class="section-header">
-                    <div class="section-icon">📦</div>
+                    <div class="section-icon-box blue">📦</div>
                     <div>
                         <div class="section-title">Orders in Progress</div>
                         <div class="section-subtitle">Active orders currently being processed</div>
                     </div>
                 </div>
-                <div class="summary-box">
-                    <div class="summary-item">
-                        <div class="summary-value">{pending_count}</div>
-                        <div class="summary-label">Active Orders</div>
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-value">{pending_count}</div>
+                        <div class="stat-label">Active Orders</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">${pending_value:,.0f}</div>
-                        <div class="summary-label">Total Value</div>
+                    <div class="stat-card">
+                        <div class="stat-value">${pending_value:,.0f}</div>
+                        <div class="stat-label">Total Value</div>
                     </div>
                 </div>
-                {pending_orders_html if pending_orders_html else '<p class="no-data">No orders currently in progress</p>'}
+                {f'<div class="table-container">{pending_orders_html}</div>' if pending_orders_html else '<p class="no-data">No orders currently in progress</p>'}
             </div>
             ''' if pdf_config.get('orders_in_progress', True) else ''}
             
             {f'''
-            <!-- Account Balance -->
+            <!-- ═══════════════════════════════════════════════════════════════
+                 ACCOUNT BALANCE
+                 ═══════════════════════════════════════════════════════════════ -->
             <div class="section">
                 <div class="section-header">
-                    <div class="section-icon">💳</div>
+                    <div class="section-icon-box green">💳</div>
                     <div>
                         <div class="section-title">Account Balance</div>
-                        <div class="section-subtitle">Outstanding invoices</div>
+                        <div class="section-subtitle">Outstanding invoices and payment status</div>
                     </div>
                 </div>
-                <div class="summary-box">
-                    <div class="summary-item">
-                        <div class="summary-value">{open_invoice_count}</div>
-                        <div class="summary-label">Open Invoices</div>
+                <div class="stats-row">
+                    <div class="stat-card">
+                        <div class="stat-value">{open_invoice_count}</div>
+                        <div class="stat-label">Open Invoices</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">${open_invoice_value:,.0f}</div>
-                        <div class="summary-label">Balance Due</div>
+                    <div class="stat-card green">
+                        <div class="stat-value">${open_invoice_value:,.0f}</div>
+                        <div class="stat-label">Balance Due</div>
                     </div>
                 </div>
-                {open_invoices_html if open_invoices_html else '<p class="no-data">No outstanding invoices — account is current!</p>'}
+                {f'<div class="table-container">{open_invoices_html}</div>' if open_invoices_html else '<div class="success-banner"><div class="success-emoji">✨</div><div class="success-content"><h4>Account Current</h4><p>No outstanding invoices — thank you for staying current!</p></div></div>'}
             </div>
             ''' if pdf_config.get('open_invoices', True) else ''}
             
             {f'''
-            <!-- Purchase History -->
+            <!-- ═══════════════════════════════════════════════════════════════
+                 PURCHASE HISTORY
+                 ═══════════════════════════════════════════════════════════════ -->
             <div class="section">
                 <div class="section-header">
-                    <div class="section-icon">💰</div>
+                    <div class="section-icon-box purple">💰</div>
                     <div>
                         <div class="section-title">Purchase History</div>
                         <div class="section-subtitle">Historical purchasing trends and patterns</div>
                     </div>
                 </div>
-                <div class="summary-box">
-                    <div class="summary-item">
-                        <div class="summary-value">${total_revenue:,.0f}</div>
-                        <div class="summary-label">Lifetime Value</div>
+                <div class="stats-row">
+                    <div class="stat-card purple">
+                        <div class="stat-value">${total_revenue:,.0f}</div>
+                        <div class="stat-label">Lifetime Value</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">${avg_invoice:,.0f}</div>
-                        <div class="summary-label">Avg Order</div>
+                    <div class="stat-card">
+                        <div class="stat-value">${avg_invoice:,.0f}</div>
+                        <div class="stat-label">Avg Order</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">{avg_cadence:.0f}</div>
-                        <div class="summary-label">Days Between Orders</div>
+                    <div class="stat-card">
+                        <div class="stat-value">{avg_cadence:.0f}</div>
+                        <div class="stat-label">Days Between Orders</div>
                     </div>
                 </div>
-                {yearly_html}
+                {f'<div class="table-container">{yearly_html}</div>' if yearly_html else ''}
                 {charts_html.get('revenue', '')}
             </div>
             
-            <!-- Delivery Performance -->
+            <!-- ═══════════════════════════════════════════════════════════════
+                 DELIVERY PERFORMANCE
+                 ═══════════════════════════════════════════════════════════════ -->
             <div class="section">
                 <div class="section-header">
-                    <div class="section-icon">⏱️</div>
+                    <div class="section-icon-box amber">⏱️</div>
                     <div>
                         <div class="section-title">Delivery Performance</div>
                         <div class="section-subtitle">On-time delivery metrics and trends</div>
                     </div>
                 </div>
-                <div class="summary-box">
-                    <div class="summary-item">
-                        <div class="summary-value">{ot_rate:.1f}%</div>
-                        <div class="summary-label">On-Time Rate</div>
+                <div class="stats-row">
+                    <div class="stat-card {'green' if ot_rate >= 90 else ''}">
+                        <div class="stat-value">{ot_rate:.1f}%</div>
+                        <div class="stat-label">On-Time Rate</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">{avg_variance:+.1f}</div>
-                        <div class="summary-label">Avg Days Variance</div>
+                    <div class="stat-card">
+                        <div class="stat-value">{avg_variance:+.1f}</div>
+                        <div class="stat-label">Avg Days Variance</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">{completed_count}</div>
-                        <div class="summary-label">Orders Measured</div>
+                    <div class="stat-card">
+                        <div class="stat-value">{completed_count}</div>
+                        <div class="stat-label">Orders Measured</div>
                     </div>
                 </div>
                 {charts_html.get('ontime', '')}
@@ -1539,26 +1754,28 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             ''' if pdf_config.get('purchase_history', True) else ''}
             
             {f'''
-            <!-- Upcoming Business -->
+            <!-- ═══════════════════════════════════════════════════════════════
+                 UPCOMING BUSINESS
+                 ═══════════════════════════════════════════════════════════════ -->
             <div class="section">
                 <div class="section-header">
-                    <div class="section-icon">🎯</div>
+                    <div class="section-icon-box green">🎯</div>
                     <div>
                         <div class="section-title">Upcoming Business</div>
                         <div class="section-subtitle">Business opportunities in progress</div>
                     </div>
                 </div>
-                <div class="summary-box">
-                    <div class="summary-item">
-                        <div class="summary-value">${pipeline_value:,.0f}</div>
-                        <div class="summary-label">Projected Value</div>
+                <div class="stats-row">
+                    <div class="stat-card green">
+                        <div class="stat-value">${pipeline_value:,.0f}</div>
+                        <div class="stat-label">Projected Value</div>
                     </div>
-                    <div class="summary-item">
-                        <div class="summary-value">{pipeline_count}</div>
-                        <div class="summary-label">Opportunities</div>
+                    <div class="stat-card">
+                        <div class="stat-value">{pipeline_count}</div>
+                        <div class="stat-label">Opportunities</div>
                     </div>
                 </div>
-                {pipeline_html}
+                {f'<div class="table-container">{pipeline_html}</div>' if pipeline_html else ''}
             </div>
             ''' if pdf_config.get('upcoming_business', True) and pipeline_html else ''}
             
@@ -1567,9 +1784,13 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             {ncr_html if pdf_config.get('quality_ncr', True) else ''}
         </div>
         
+        <!-- ═══════════════════════════════════════════════════════════════
+             FOOTER
+             ═══════════════════════════════════════════════════════════════ -->
         <div class="footer">
             <div class="footer-main">Thank you for your partnership!</div>
-            <div class="footer-sub">Calyx Containers • {generated_date} • Questions? Contact {rep_name}</div>
+            <div class="footer-sub">Questions? Reach out to {rep_name}</div>
+            <div class="footer-brand">Calyx Containers · {generated_date}</div>
         </div>
     </body>
     </html>
@@ -2276,7 +2497,26 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
         <meta charset="UTF-8">
         <title>Portfolio Review - {rep_name}</title>
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+            @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+            
+            :root {{
+                --primary: #0ea5e9;
+                --primary-dark: #0284c7;
+                --secondary: #8b5cf6;
+                --success: #10b981;
+                --warning: #f59e0b;
+                --danger: #ef4444;
+                --dark: #0f172a;
+                --dark-light: #1e293b;
+                --gray-100: #f8fafc;
+                --gray-200: #e2e8f0;
+                --gray-300: #cbd5e1;
+                --gray-400: #94a3b8;
+                --gray-500: #64748b;
+                --gray-600: #475569;
+                --text: #1e293b;
+                --text-light: #64748b;
+            }}
             
             * {{
                 margin: 0;
@@ -2285,63 +2525,112 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
             }}
             
             body {{
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
                 background: #ffffff;
-                color: #1e293b;
-                line-height: 1.6;
-                padding: 0;
+                color: var(--text);
+                line-height: 1.7;
+                font-size: 14px;
             }}
             
-            /* Cover Page */
+            /* Portfolio Cover - Premium Design */
             .portfolio-cover {{
-                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #164e63 100%);
+                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 40%, #0f766e 100%);
                 color: white;
-                padding: 60px 50px;
+                padding: 80px 60px;
                 position: relative;
                 overflow: hidden;
                 page-break-after: always;
+                min-height: 500px;
             }}
             
             .portfolio-cover::before {{
                 content: '';
                 position: absolute;
-                top: -50%;
-                right: -20%;
-                width: 60%;
-                height: 200%;
-                background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
-                transform: rotate(15deg);
+                top: -100px;
+                right: -100px;
+                width: 500px;
+                height: 500px;
+                background: radial-gradient(circle, rgba(14, 165, 233, 0.15) 0%, transparent 70%);
+                border-radius: 50%;
             }}
             
-            .portfolio-cover .logo-text {{
-                font-size: 1.1rem;
-                font-weight: 600;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                opacity: 0.9;
-                margin-bottom: 40px;
+            .portfolio-cover::after {{
+                content: '';
+                position: absolute;
+                bottom: -150px;
+                left: -100px;
+                width: 400px;
+                height: 400px;
+                background: radial-gradient(circle, rgba(139, 92, 246, 0.1) 0%, transparent 70%);
+                border-radius: 50%;
+            }}
+            
+            .portfolio-cover .brand-container {{
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                margin-bottom: 50px;
+                position: relative;
+                z-index: 1;
+            }}
+            
+            .portfolio-cover .brand-logo {{
+                width: 50px;
+                height: 50px;
+                border-radius: 12px;
+                object-fit: contain;
+                box-shadow: 0 10px 30px rgba(14, 165, 233, 0.3);
+            }}
+            
+            .portfolio-cover .brand-text {{
+                font-size: 1.4rem;
+                font-weight: 700;
+                letter-spacing: 1px;
+                background: linear-gradient(90deg, #fff 0%, #a5f3fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
             }}
             
             .portfolio-cover h1 {{
-                font-size: 3rem;
+                font-size: 3.5rem;
                 font-weight: 800;
                 margin-bottom: 10px;
-                letter-spacing: -1px;
+                letter-spacing: -2px;
+                position: relative;
+                z-index: 1;
             }}
             
             .portfolio-cover .subtitle {{
-                font-size: 1.5rem;
+                font-size: 2.2rem;
                 font-weight: 300;
-                color: #67e8f9;
+                background: linear-gradient(90deg, #67e8f9 0%, #a5f3fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
                 margin-bottom: 40px;
+                position: relative;
+                z-index: 1;
             }}
             
             .portfolio-meta {{
                 display: flex;
-                gap: 40px;
-                font-size: 0.95rem;
-                opacity: 0.85;
+                gap: 25px;
                 margin-bottom: 50px;
+                position: relative;
+                z-index: 1;
+            }}
+            
+            .portfolio-meta .meta-pill {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                padding: 12px 20px;
+                border-radius: 50px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                font-size: 0.9rem;
             }}
             
             .portfolio-stats {{
@@ -2349,41 +2638,52 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
                 grid-template-columns: repeat(3, 1fr);
                 gap: 20px;
                 margin-top: 40px;
+                position: relative;
+                z-index: 1;
             }}
             
             .portfolio-stat {{
-                background: rgba(255,255,255,0.1);
-                border-radius: 12px;
-                padding: 25px;
+                background: rgba(255,255,255,0.08);
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 16px;
+                padding: 30px;
                 text-align: center;
             }}
             
             .portfolio-stat-value {{
-                font-size: 2.5rem;
+                font-size: 2.8rem;
                 font-weight: 800;
-                color: #67e8f9;
+                background: linear-gradient(90deg, #67e8f9 0%, #a5f3fc 100%);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                background-clip: text;
             }}
             
             .portfolio-stat-label {{
-                font-size: 0.85rem;
-                opacity: 0.8;
+                font-size: 0.8rem;
+                opacity: 0.7;
                 text-transform: uppercase;
-                letter-spacing: 0.5px;
-                margin-top: 8px;
+                letter-spacing: 1px;
+                margin-top: 10px;
             }}
             
             .account-list {{
                 background: rgba(255,255,255,0.05);
-                border-radius: 12px;
-                padding: 25px;
+                backdrop-filter: blur(10px);
+                border: 1px solid rgba(255,255,255,0.1);
+                border-radius: 16px;
+                padding: 25px 30px;
                 margin-top: 40px;
+                position: relative;
+                z-index: 1;
             }}
             
             .account-list-title {{
-                font-size: 0.85rem;
+                font-size: 0.8rem;
                 text-transform: uppercase;
                 letter-spacing: 1px;
-                opacity: 0.7;
+                opacity: 0.6;
                 margin-bottom: 15px;
             }}
             
@@ -2394,11 +2694,11 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
             }}
             
             .account-tag {{
-                background: rgba(103, 232, 249, 0.2);
+                background: rgba(103, 232, 249, 0.15);
                 border: 1px solid rgba(103, 232, 249, 0.3);
-                color: #67e8f9;
-                padding: 6px 14px;
-                border-radius: 20px;
+                color: #a5f3fc;
+                padding: 8px 16px;
+                border-radius: 50px;
                 font-size: 0.85rem;
                 font-weight: 500;
             }}
@@ -2409,190 +2709,294 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
             }}
             
             .customer-header {{
-                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
                 color: white;
-                padding: 40px 50px;
+                padding: 50px 60px;
                 margin-bottom: 0;
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .customer-header::before {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--secondary) 100%);
             }}
             
             .customer-header h2 {{
-                font-size: 2rem;
-                font-weight: 700;
-                margin-bottom: 8px;
+                font-size: 2.2rem;
+                font-weight: 800;
+                margin-bottom: 10px;
+                letter-spacing: -1px;
             }}
             
             .customer-header .customer-meta {{
                 display: flex;
                 gap: 30px;
                 font-size: 0.9rem;
-                opacity: 0.8;
+                opacity: 0.75;
             }}
             
-            /* Executive Summary styles */
+            /* Executive Summary styles - Premium */
             .exec-summary {{
-                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-                border-radius: 16px;
-                padding: 35px;
-                margin-bottom: 40px;
-                border: 1px solid #e2e8f0;
+                background: white;
+                border-radius: 24px;
+                padding: 40px;
+                margin-bottom: 50px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 20px 50px -15px rgba(0, 0, 0, 0.1);
+                border: 1px solid var(--gray-200);
+            }}
+            
+            .exec-header {{
+                display: flex;
+                align-items: center;
+                gap: 15px;
+                margin-bottom: 35px;
+            }}
+            
+            .exec-icon {{
+                width: 48px;
+                height: 48px;
+                background: linear-gradient(135deg, var(--primary) 0%, #06b6d4 100%);
+                border-radius: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 22px;
+                box-shadow: 0 8px 20px rgba(14, 165, 233, 0.25);
             }}
             
             .exec-title {{
-                font-size: 1.3rem;
+                font-size: 1.5rem;
                 font-weight: 700;
-                color: #0f172a;
-                margin-bottom: 25px;
-                display: flex;
-                align-items: center;
-                gap: 10px;
+                color: var(--dark);
             }}
             
             .exec-grid {{
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
-                gap: 25px;
-            }}
-            
-            .exec-card {{
-                background: white;
-                border-radius: 12px;
-                padding: 20px;
-                text-align: center;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            }}
-            
-            .exec-value {{
-                font-size: 2rem;
-                font-weight: 700;
-                color: #0f172a;
-                margin-bottom: 5px;
-            }}
-            
-            .exec-value.green {{ color: #059669; }}
-            .exec-value.blue {{ color: #2563eb; }}
-            .exec-value.amber {{ color: #d97706; }}
-            
-            .exec-label {{
-                font-size: 0.85rem;
-                color: #64748b;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }}
-            
-            .health-indicator {{
-                background: white;
-                border-radius: 12px;
-                padding: 20px 25px;
-                display: flex;
-                align-items: center;
                 gap: 20px;
-                margin-top: 25px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                margin-bottom: 30px;
             }}
             
-            .health-score {{
-                width: 80px;
-                height: 80px;
-                border-radius: 50%;
+            .metric-card {{
+                background: linear-gradient(135deg, var(--gray-100) 0%, white 100%);
+                border-radius: 16px;
+                padding: 24px;
+                text-align: center;
+                border: 1px solid var(--gray-200);
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .metric-card::before {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 100%);
+                opacity: 0;
+            }}
+            
+            .metric-card.highlight::before {{ opacity: 1; }}
+            .metric-card.green {{ border-color: #86efac; background: linear-gradient(135deg, #f0fdf4 0%, white 100%); }}
+            .metric-card.green::before {{ background: linear-gradient(90deg, var(--success) 0%, #34d399 100%); opacity: 1; }}
+            .metric-card.blue {{ border-color: #93c5fd; background: linear-gradient(135deg, #eff6ff 0%, white 100%); }}
+            .metric-card.blue::before {{ background: linear-gradient(90deg, #3b82f6 0%, #60a5fa 100%); opacity: 1; }}
+            
+            .metric-value {{
+                font-size: 2.2rem;
+                font-weight: 800;
+                color: var(--dark);
+                margin-bottom: 6px;
+                letter-spacing: -1px;
+            }}
+            
+            .metric-card.green .metric-value {{ color: #059669; }}
+            .metric-card.blue .metric-value {{ color: #2563eb; }}
+            .metric-card.amber .metric-value {{ color: #d97706; }}
+            
+            .metric-label {{
+                font-size: 0.8rem;
+                font-weight: 600;
+                color: var(--gray-500);
+                text-transform: uppercase;
+                letter-spacing: 0.8px;
+            }}
+            
+            /* Health Widget - Premium */
+            .health-widget {{
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                border-radius: 20px;
+                padding: 28px 35px;
                 display: flex;
                 align-items: center;
-                justify-content: center;
-                font-size: 1.5rem;
-                font-weight: 800;
+                gap: 25px;
                 color: white;
             }}
             
-            .health-score.excellent {{ background: linear-gradient(135deg, #059669, #10b981); }}
-            .health-score.good {{ background: linear-gradient(135deg, #2563eb, #3b82f6); }}
-            .health-score.attention {{ background: linear-gradient(135deg, #d97706, #f59e0b); }}
-            .health-score.concern {{ background: linear-gradient(135deg, #dc2626, #ef4444); }}
-            
-            .health-details h4 {{
-                font-size: 1.1rem;
-                font-weight: 600;
-                color: #0f172a;
-                margin-bottom: 5px;
+            .health-ring {{
+                position: relative;
+                width: 90px;
+                height: 90px;
             }}
             
-            .health-details p {{
+            .health-ring-bg {{
+                position: absolute;
+                inset: 0;
+                border-radius: 50%;
+                background: rgba(255, 255, 255, 0.1);
+            }}
+            
+            .health-ring-progress {{
+                position: absolute;
+                inset: 0;
+                border-radius: 50%;
+            }}
+            
+            .health-ring-progress.excellent {{ background: conic-gradient(#10b981 0deg, #10b981 324deg, transparent 324deg); }}
+            .health-ring-progress.good {{ background: conic-gradient(#3b82f6 0deg, #3b82f6 270deg, transparent 270deg); }}
+            .health-ring-progress.attention {{ background: conic-gradient(#f59e0b 0deg, #f59e0b 216deg, transparent 216deg); }}
+            .health-ring-progress.concern {{ background: conic-gradient(#ef4444 0deg, #ef4444 144deg, transparent 144deg); }}
+            
+            .health-ring-inner {{
+                position: absolute;
+                inset: 8px;
+                border-radius: 50%;
+                background: var(--dark);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }}
+            
+            .health-score-value {{
+                font-size: 1.6rem;
+                font-weight: 800;
+            }}
+            
+            .health-info h4 {{
+                font-size: 1.15rem;
+                font-weight: 700;
+                margin-bottom: 6px;
+            }}
+            
+            .health-info p {{
                 font-size: 0.9rem;
-                color: #64748b;
+                opacity: 0.75;
+                line-height: 1.5;
             }}
             
-            /* Rest of styles inherited from individual report */
+            /* Rest of styles - Premium */
             .main-content {{
-                padding: 40px 50px;
+                padding: 60px;
+                background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100px);
             }}
             
             .section {{
-                margin-bottom: 40px;
+                margin-bottom: 50px;
                 page-break-inside: avoid;
             }}
             
             .section-header {{
                 display: flex;
-                align-items: flex-start;
-                gap: 15px;
-                margin-bottom: 20px;
-                padding-bottom: 12px;
-                border-bottom: 2px solid #e2e8f0;
+                align-items: center;
+                gap: 18px;
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 2px solid var(--gray-200);
             }}
             
-            .section-icon {{
-                font-size: 1.5rem;
-                line-height: 1;
+            .section-icon-box {{
+                width: 52px;
+                height: 52px;
+                background: linear-gradient(135deg, var(--gray-100) 0%, white 100%);
+                border: 2px solid var(--gray-200);
+                border-radius: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 24px;
             }}
+            
+            .section-icon-box.blue {{ background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%); border-color: #93c5fd; }}
+            .section-icon-box.green {{ background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #86efac; }}
+            .section-icon-box.purple {{ background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%); border-color: #c4b5fd; }}
+            .section-icon-box.amber {{ background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }}
             
             .section-title {{
-                font-size: 1.25rem;
+                font-size: 1.5rem;
                 font-weight: 700;
-                color: #0f172a;
+                color: var(--dark);
             }}
             
             .section-subtitle {{
-                font-size: 0.85rem;
-                color: #64748b;
-                margin-top: 3px;
+                font-size: 0.9rem;
+                color: var(--gray-500);
+                margin-top: 4px;
             }}
             
-            .summary-box {{
+            .stats-row {{
                 display: flex;
-                gap: 15px;
-                margin-bottom: 20px;
+                gap: 20px;
+                margin-bottom: 30px;
             }}
             
-            .summary-item {{
-                background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-                border-radius: 10px;
-                padding: 16px 24px;
+            .stat-card {{
                 flex: 1;
-                text-align: center;
+                background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
                 border: 1px solid #bfdbfe;
+                border-radius: 16px;
+                padding: 24px 30px;
+                text-align: center;
             }}
             
-            .summary-value {{
-                font-size: 1.8rem;
-                font-weight: 700;
+            .stat-card.green {{ background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #86efac; }}
+            .stat-card.purple {{ background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%); border-color: #c4b5fd; }}
+            
+            .stat-value {{
+                font-size: 2.5rem;
+                font-weight: 800;
                 color: #1e40af;
+                letter-spacing: -1px;
             }}
             
-            .summary-label {{
+            .stat-card.green .stat-value {{ color: #059669; }}
+            .stat-card.purple .stat-value {{ color: #7c3aed; }}
+            
+            .stat-label {{
                 font-size: 0.8rem;
+                font-weight: 600;
                 color: #3b82f6;
                 text-transform: uppercase;
-                letter-spacing: 0.5px;
-                margin-top: 4px;
+                letter-spacing: 0.8px;
+                margin-top: 6px;
+            }}
+            
+            .stat-card.green .stat-label {{ color: #059669; }}
+            .stat-card.purple .stat-label {{ color: #7c3aed; }}
+            
+            .table-container {{
+                background: white;
+                border-radius: 16px;
+                overflow: hidden;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+                border: 1px solid var(--gray-200);
             }}
             
             .data-table {{
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 0.85rem;
-                margin-top: 12px;
+                font-size: 0.9rem;
             }}
             
             .data-table th {{
-                background: #0f172a;
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
                 color: white;
                 padding: 12px 14px;
                 text-align: left;
@@ -2682,35 +3086,58 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
             .quality-card.warning .quality-rate {{ color: #92400e; }}
             .quality-card.danger .quality-rate {{ color: #991b1b; }}
             
-            .quality-label {{ font-size: 0.8rem; color: #64748b; margin-top: 4px; }}
-            .quality-detail {{ font-size: 0.75rem; color: #94a3b8; margin-top: 6px; }}
+            .quality-label {{ font-size: 0.85rem; color: var(--gray-500); font-weight: 600; margin-top: 8px; }}
+            .quality-detail {{ font-size: 0.8rem; color: var(--gray-400); margin-top: 10px; }}
             
-            .quality-metrics {{ flex: 1; display: flex; gap: 12px; }}
-            .quality-metric {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; text-align: center; flex: 1; }}
-            .quality-metric .metric-val {{ font-size: 1.3rem; font-weight: 700; color: #0f172a; }}
-            .quality-metric .metric-lbl {{ font-size: 0.7rem; color: #64748b; text-transform: uppercase; margin-top: 4px; }}
+            /* Quality Grid - Premium */
+            .quality-grid {{
+                display: grid;
+                grid-template-columns: 200px 1fr;
+                gap: 25px;
+                margin-bottom: 30px;
+            }}
+            
+            .quality-score-card {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border: 2px solid #86efac;
+                border-radius: 20px;
+                padding: 30px;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+            }}
+            
+            .quality-score-card.success {{ background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #86efac; }}
+            .quality-score-card.warning {{ background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }}
+            
+            .quality-metrics-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }}
+            .quality-metric-card {{ background: var(--gray-100); border: 1px solid var(--gray-200); border-radius: 14px; padding: 22px; text-align: center; }}
+            .qm-value {{ font-size: 1.8rem; font-weight: 800; color: var(--dark); }}
+            .qm-label {{ font-size: 0.7rem; font-weight: 600; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px; }}
             
             .success-banner {{
                 background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
                 border: 2px solid #86efac;
-                border-radius: 12px;
-                padding: 25px;
+                border-radius: 20px;
+                padding: 35px 40px;
                 display: flex;
                 align-items: center;
-                gap: 15px;
+                gap: 25px;
             }}
             
-            .success-icon {{ font-size: 2.5rem; }}
-            .success-title {{ font-size: 1.2rem; font-weight: 700; color: #166534; }}
-            .success-detail {{ font-size: 0.9rem; color: #15803d; margin-top: 4px; }}
+            .success-emoji {{ font-size: 3.5rem; }}
+            .success-content h4 {{ font-size: 1.4rem; font-weight: 700; color: #166534; margin-bottom: 6px; }}
+            .success-content p {{ font-size: 1rem; color: #15803d; }}
             
             .no-data {{
-                color: #94a3b8;
+                color: var(--gray-400);
                 font-style: italic;
-                padding: 15px;
+                padding: 40px;
                 text-align: center;
-                background: #f8fafc;
-                border-radius: 8px;
+                background: var(--gray-100);
+                border-radius: 16px;
+                border: 1px dashed var(--gray-300);
             }}
             
             /* Product table styling */
@@ -2720,31 +3147,51 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
                 color: #059669;
             }}
             
-            /* Footer */
+            /* Footer - Premium */
             .portfolio-footer {{
-                margin-top: 40px;
-                padding: 25px 50px;
-                background: #0f172a;
-                color: white;
+                margin-top: 60px;
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                padding: 50px 60px;
                 text-align: center;
+                color: white;
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .portfolio-footer::before {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--secondary) 100%);
             }}
             
             .footer-main {{
-                font-size: 1rem;
-                font-weight: 600;
-                margin-bottom: 8px;
+                font-size: 1.4rem;
+                font-weight: 700;
+                margin-bottom: 10px;
             }}
             
             .footer-sub {{
-                font-size: 0.85rem;
-                opacity: 0.7;
+                font-size: 0.9rem;
+                opacity: 0.6;
+            }}
+            
+            .footer-brand {{
+                margin-top: 25px;
+                font-size: 0.8rem;
+                opacity: 0.4;
+                text-transform: uppercase;
+                letter-spacing: 2px;
             }}
             
             @media print {{
                 body {{ padding: 0; }}
-                .portfolio-cover, .customer-header {{
-                    -webkit-print-color-adjust: exact;
-                    print-color-adjust: exact;
+                .portfolio-cover, .customer-header, .metric-card, .stat-card, .quality-score-card {{
+                    -webkit-print-color-adjust: exact !important;
+                    print-color-adjust: exact !important;
                 }}
                 .section {{ page-break-inside: avoid; }}
                 .chart-container {{ page-break-inside: avoid; }}
@@ -2775,13 +3222,22 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", 
     # Portfolio Cover Page
     html += f"""
         <div class="portfolio-cover">
-            <div class="logo-text">Calyx Containers</div>
+            <div class="brand-container">
+                <img src="https://raw.githubusercontent.com/corytimmons1688/operations-dashboard-v2/main/calyx-sop-dashboard-v2/calyx_logo.png" alt="Calyx" class="brand-logo">
+                <div class="brand-text">CALYX CONTAINERS</div>
+            </div>
             <h1>Portfolio Review</h1>
-            <div class="subtitle">{period_display} Account Summary</div>
+            <div class="subtitle">{period_display}</div>
             
             <div class="portfolio-meta">
-                <span>📅 {generated_date}</span>
-                <span>👤 Account Manager: {rep_name}</span>
+                <div class="meta-pill">
+                    <span>📅</span>
+                    <span>{generated_date}</span>
+                </div>
+                <div class="meta-pill">
+                    <span>👤</span>
+                    <span>{rep_name}</span>
+                </div>
                 <span>📊 {num_customers} Accounts</span>
             </div>
             
