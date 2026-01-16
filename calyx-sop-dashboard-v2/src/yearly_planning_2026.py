@@ -4651,6 +4651,76 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
                 display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+            # Verification section - shows actual line items for each category
+            with st.expander("🔍 Verify Categorization (View Raw Line Items)"):
+                st.caption("Review the actual SKUs/items included in each category to verify correct classification")
+                
+                # Category selector
+                verify_category = st.selectbox(
+                    "Select category to inspect:",
+                    options=parent_summary['Category'].tolist(),
+                    key=f"{key_prefix}_verify_cat"
+                )
+                
+                if verify_category:
+                    # Get items in this category
+                    cat_items = product_df[product_df[parent_col] == verify_category].copy()
+                    
+                    # Determine which columns to show
+                    verify_cols = []
+                    if 'Item' in cat_items.columns:
+                        verify_cols.append('Item')
+                    if 'Item Description' in cat_items.columns:
+                        verify_cols.append('Item Description')
+                    verify_cols.extend(['Product Category', 'Product Sub-Category', 'Unified Category'])
+                    if 'Amount' in cat_items.columns:
+                        verify_cols.append('Amount')
+                    if 'Quantity' in cat_items.columns:
+                        verify_cols.append('Quantity')
+                    if 'Document Number' in cat_items.columns:
+                        verify_cols.append('Document Number')
+                    
+                    # Filter to existing columns
+                    verify_cols = [c for c in verify_cols if c in cat_items.columns]
+                    
+                    if verify_cols:
+                        verify_display = cat_items[verify_cols].copy()
+                        
+                        # Format Amount
+                        if 'Amount' in verify_display.columns:
+                            verify_display['Amount'] = verify_display['Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "-")
+                        
+                        # Format Quantity
+                        if 'Quantity' in verify_display.columns:
+                            verify_display['Quantity'] = verify_display['Quantity'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
+                        
+                        # Show summary stats
+                        st.markdown(f"""
+                            <div style="background: #1e293b; padding: 10px 15px; border-radius: 6px; margin-bottom: 10px;">
+                                <span style="color: #94a3b8;">Items in <strong style="color: #f1f5f9;">{verify_category}</strong>:</span>
+                                <span style="color: #10b981; font-weight: 600; margin-left: 10px;">{len(cat_items)} line items</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        # Show the data
+                        st.dataframe(
+                            verify_display.sort_values('Amount' if 'Amount' in verify_display.columns else verify_cols[0], ascending=False),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400
+                        )
+                        
+                        # Show unique sub-categories in this parent
+                        if 'Product Sub-Category' in cat_items.columns:
+                            unique_subcats = cat_items['Product Sub-Category'].unique()
+                            st.markdown("**Sub-categories found:**")
+                            for subcat in unique_subcats:
+                                subcat_count = len(cat_items[cat_items['Product Sub-Category'] == subcat])
+                                subcat_revenue = cat_items[cat_items['Product Sub-Category'] == subcat]['Amount'].sum() if 'Amount' in cat_items.columns else 0
+                                st.markdown(f"- `{subcat}`: {subcat_count} items, ${subcat_revenue:,.0f}")
+                    else:
+                        st.info("No detailed item data available for verification.")
     
     # =========================================================================
     # TAB 2: Category Breakdown (Drill-down into each category)
