@@ -329,9 +329,11 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         total_line_revenue = li_df['Amount'].sum() if 'Amount' in li_df.columns else 0
         product_revenue = product_df['Amount'].sum() if not product_df.empty else 0
         
-        # Build category breakdown table using Parent Category (rolled up for PDF)
+        # Build category breakdown table using Parent Category with sub-category details
         category_rows = ""
         parent_col = 'Parent Category' if 'Parent Category' in product_df.columns else 'Unified Category'
+        unified_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
+        
         if not product_df.empty and parent_col in product_df.columns:
             category_summary = product_df.groupby(parent_col).agg({
                 'Amount': 'sum',
@@ -343,9 +345,12 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             
             for idx, row in category_summary.iterrows():
                 bar_width = row['% of Revenue']
+                parent_cat = row['Category']
+                
+                # Main category row
                 category_rows += f"""
                 <tr>
-                    <td style="font-weight: 500;">{row['Category']}</td>
+                    <td style="font-weight: 600;">{parent_cat}</td>
                     <td style="text-align: right; font-weight: 600; color: #059669;">${row['Revenue']:,.0f}</td>
                     <td style="text-align: right;">{row['Units']:,.0f}</td>
                     <td style="width: 150px;">
@@ -354,6 +359,31 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                         </div>
                     </td>
                     <td style="text-align: right; font-weight: 500;">{row['% of Revenue']:.1f}%</td>
+                </tr>"""
+                
+                # Add sub-category breakdown for Drams and Concentrates
+                if parent_cat in ['Drams', 'Concentrates']:
+                    parent_cat_df = product_df[product_df[parent_col] == parent_cat]
+                    sub_categories = parent_cat_df[unified_col].unique()
+                    
+                    if len(sub_categories) > 1 or (len(sub_categories) == 1 and sub_categories[0] != parent_cat):
+                        subcat_breakdown = parent_cat_df.groupby(unified_col).agg({
+                            'Amount': 'sum',
+                            'Quantity': 'sum'
+                        }).reset_index()
+                        subcat_breakdown.columns = ['Sub-Category', 'Revenue', 'Units']
+                        subcat_breakdown = subcat_breakdown.sort_values('Revenue', ascending=False)
+                        
+                        for _, sub_row in subcat_breakdown.iterrows():
+                            sub_name = sub_row['Sub-Category']
+                            sub_pct = (sub_row['Revenue'] / row['Revenue'] * 100) if row['Revenue'] > 0 else 0
+                            category_rows += f"""
+                <tr style="background: #f8fafc;">
+                    <td style="padding-left: 30px; color: #64748b; font-size: 0.85rem;">↳ {sub_name}</td>
+                    <td style="text-align: right; color: #64748b;">${sub_row['Revenue']:,.0f}</td>
+                    <td style="text-align: right; color: #64748b;">{sub_row['Units']:,.0f}</td>
+                    <td></td>
+                    <td style="text-align: right; color: #64748b; font-size: 0.85rem;">{sub_pct:.1f}%</td>
                 </tr>"""
         
         line_item_html = f"""
@@ -2679,12 +2709,14 @@ def generate_combined_qbr_html(customers_data, rep_name):
         # Generate this customer's individual report content
         single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
         
-        # Extract just the main content (skip cover and footer)
-        # Find the main-content div and extract its contents
-        main_match = re.search(r'<div class="main-content">(.*?)</div>\s*<div class="footer">', single_html, re.DOTALL)
+        # Extract just the main-content section (between main-content div and footer)
+        # Find where main-content starts
+        main_start = single_html.find('<div class="main-content">')
+        footer_start = single_html.find('<div class="footer">')
         
-        if main_match:
-            main_content = main_match.group(1)
+        if main_start != -1 and footer_start != -1:
+            # Get everything from main-content to just before footer
+            main_content = single_html[main_start:footer_start]
             
             # Add customer section with header
             customer_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty and 'Amount' in customer_invoices.columns else 0
@@ -2700,9 +2732,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
                         <span>#{idx + 1} of {num_customers}</span>
                     </div>
                 </div>
-                <div class="main-content">
-                    {main_content}
-                </div>
+                {main_content}
             </div>
             """
     
@@ -2727,10 +2757,10 @@ def generate_combined_summary_html(customers_data, rep_name):
     customer_names = [c[0] for c in customers_data]
     num_customers = len(customers_data)
     
-    # Aggregate all data
-    all_orders = pd.concat([data[1] for data in customers_data if not data[1].empty], ignore_index=True) if any(not data[1].empty for data in customers_data) else pd.DataFrame()
-    all_invoices = pd.concat([data[2] for data in customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in customers_data) else pd.DataFrame()
-    all_deals = pd.concat([data[3] for data in customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in customers_data) else pd.DataFrame()
+    # Aggregate all data (handle None values)
+    all_orders = pd.concat([data[1] for data in customers_data if data[1] is not None and not data[1].empty], ignore_index=True) if any(data[1] is not None and not data[1].empty for data in customers_data) else pd.DataFrame()
+    all_invoices = pd.concat([data[2] for data in customers_data if data[2] is not None and not data[2].empty], ignore_index=True) if any(data[2] is not None and not data[2].empty for data in customers_data) else pd.DataFrame()
+    all_deals = pd.concat([data[3] for data in customers_data if data[3] is not None and not data[3].empty], ignore_index=True) if any(data[3] is not None and not data[3].empty for data in customers_data) else pd.DataFrame()
     
     # Aggregate line items and NCRs if available
     all_line_items = pd.DataFrame()
@@ -5941,11 +5971,11 @@ def render_yearly_planning_2026():
             """, unsafe_allow_html=True)
             
             # Aggregate all data
-            all_orders = pd.concat([data[1] for data in all_customers_data if not data[1].empty], ignore_index=True) if any(not data[1].empty for data in all_customers_data) else pd.DataFrame()
-            all_invoices = pd.concat([data[2] for data in all_customers_data if not data[2].empty], ignore_index=True) if any(not data[2].empty for data in all_customers_data) else pd.DataFrame()
-            all_deals = pd.concat([data[3] for data in all_customers_data if not data[3].empty], ignore_index=True) if any(not data[3].empty for data in all_customers_data) else pd.DataFrame()
-            all_line_items = pd.concat([data[4] for data in all_customers_data if not data[4].empty], ignore_index=True) if any(not data[4].empty for data in all_customers_data) else pd.DataFrame()
-            all_ncrs = pd.concat([data[5] for data in all_customers_data if not data[5].empty], ignore_index=True) if any(not data[5].empty for data in all_customers_data) else pd.DataFrame()
+            all_orders = pd.concat([data[1] for data in all_customers_data if data[1] is not None and not data[1].empty], ignore_index=True) if any(data[1] is not None and not data[1].empty for data in all_customers_data) else pd.DataFrame()
+            all_invoices = pd.concat([data[2] for data in all_customers_data if data[2] is not None and not data[2].empty], ignore_index=True) if any(data[2] is not None and not data[2].empty for data in all_customers_data) else pd.DataFrame()
+            all_deals = pd.concat([data[3] for data in all_customers_data if data[3] is not None and not data[3].empty], ignore_index=True) if any(data[3] is not None and not data[3].empty for data in all_customers_data) else pd.DataFrame()
+            all_line_items = pd.concat([data[4] for data in all_customers_data if data[4] is not None and not data[4].empty], ignore_index=True) if any(data[4] is not None and not data[4].empty for data in all_customers_data) else pd.DataFrame()
+            all_ncrs = pd.concat([data[5] for data in all_customers_data if data[5] is not None and not data[5].empty], ignore_index=True) if any(data[5] is not None and not data[5].empty for data in all_customers_data) else pd.DataFrame()
             
             # Combined Summary Metrics
             st.markdown("### 📈 Combined Summary")
