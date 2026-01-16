@@ -271,9 +271,10 @@ def create_pipeline_chart(customer_deals):
 
 
 def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items=None, customer_ncrs=None):
-    """Generate a clean HTML report for PDF export with charts"""
+    """Generate a professional, customer-facing HTML report for PDF export"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
+    report_quarter = f"Q{((datetime.now().month - 1) // 3) + 1} {datetime.now().year}"
     
     # ===== Generate Charts =====
     charts_html = {}
@@ -327,13 +328,12 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         
         total_line_revenue = li_df['Amount'].sum() if 'Amount' in li_df.columns else 0
         product_revenue = product_df['Amount'].sum() if not product_df.empty else 0
-        fees_revenue = fees_df['Amount'].sum() if not fees_df.empty else 0
-        line_count = len(li_df)
         
-        # Build category breakdown table
+        # Build category breakdown table using Parent Category (rolled up for PDF)
         category_rows = ""
-        if not product_df.empty and 'Unified Category' in product_df.columns:
-            category_summary = product_df.groupby('Unified Category').agg({
+        parent_col = 'Parent Category' if 'Parent Category' in product_df.columns else 'Unified Category'
+        if not product_df.empty and parent_col in product_df.columns:
+            category_summary = product_df.groupby(parent_col).agg({
                 'Amount': 'sum',
                 'Quantity': 'sum'
             }).reset_index()
@@ -341,42 +341,1210 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             category_summary = category_summary.sort_values('Revenue', ascending=False)
             category_summary['% of Revenue'] = (category_summary['Revenue'] / product_revenue * 100).round(1) if product_revenue > 0 else 0
             
-            for _, row in category_summary.iterrows():
-                category_rows += f"<tr><td>{row['Category']}</td><td>${row['Revenue']:,.0f}</td><td>{row['Units']:,.0f}</td><td>{row['% of Revenue']:.1f}%</td></tr>"
-        
-        # Fees breakdown
-        fees_html = ""
-        if fees_revenue != 0:
-            fees_color = "#059669" if fees_revenue < 0 else "#d97706"
-            fees_html = f'<p style="color: {fees_color}; margin-top: 10px;">Fees & Adjustments: ${fees_revenue:,.0f}</p>'
+            for idx, row in category_summary.iterrows():
+                bar_width = row['% of Revenue']
+                category_rows += f"""
+                <tr>
+                    <td style="font-weight: 500;">{row['Category']}</td>
+                    <td style="text-align: right; font-weight: 600; color: #059669;">${row['Revenue']:,.0f}</td>
+                    <td style="text-align: right;">{row['Units']:,.0f}</td>
+                    <td style="width: 150px;">
+                        <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
+                            <div style="background: linear-gradient(90deg, #3b82f6, #1d4ed8); height: 100%; width: {bar_width}%;"></div>
+                        </div>
+                    </td>
+                    <td style="text-align: right; font-weight: 500;">{row['% of Revenue']:.1f}%</td>
+                </tr>"""
         
         line_item_html = f"""
         <div class="section">
-            <div class="section-title">📦 Product & SKU Analysis</div>
-            <div class="metric-row">
-                <div class="metric-card">
-                    <div class="metric-label">Total Revenue</div>
-                    <div class="metric-value">${total_line_revenue:,.0f}</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Product Revenue</div>
-                    <div class="metric-value">${product_revenue:,.0f}</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-label">Line Items</div>
-                    <div class="metric-value">{line_count:,}</div>
+            <div class="section-header">
+                <div class="section-icon">📦</div>
+                <div>
+                    <div class="section-title">Product Mix Analysis</div>
+                    <div class="section-subtitle">Breakdown of your purchases by product category</div>
                 </div>
             </div>
+            
+            <div class="summary-box">
+                <div class="summary-item">
+                    <div class="summary-value">${product_revenue:,.0f}</div>
+                    <div class="summary-label">Product Purchases</div>
+                </div>
+                <div class="summary-item">
+                    <div class="summary-value">{len(category_summary) if category_rows else 0}</div>
+                    <div class="summary-label">Categories</div>
+                </div>
+            </div>
+            
             {f'''
-            <h4 style="color: #475569; margin: 20px 0 10px 0;">Product Category Breakdown</h4>
-            <table class="data-table">
-                <thead><tr><th>Category</th><th>Revenue</th><th>Units</th><th>% of Total</th></tr></thead>
+            <table class="data-table product-table">
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">Product Category</th>
+                        <th style="text-align: right;">Revenue</th>
+                        <th style="text-align: right;">Units</th>
+                        <th style="text-align: center;">Distribution</th>
+                        <th style="text-align: right;">Share</th>
+                    </tr>
+                </thead>
                 <tbody>{category_rows}</tbody>
             </table>
-            ''' if category_rows else '<p style="color: #64748b;">No product category data available.</p>'}
-            {fees_html}
+            ''' if category_rows else '<p class="no-data">No product category data available.</p>'}
         </div>
         """
+    
+    # ===== Generate NCR Analysis HTML =====
+    ncr_html = ""
+    total_orders = len(customer_orders) if not customer_orders.empty else 0
+    
+    if customer_ncrs is not None and not customer_ncrs.empty:
+        ncr_count = len(customer_ncrs)
+        
+        # Get unique Sales Orders with NCRs
+        ncr_so_numbers = set()
+        if 'Sales Order' in customer_ncrs.columns:
+            ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
+            ncr_so_numbers = {str(so).strip() for so in ncr_so_numbers if str(so).strip()}
+        
+        orders_with_ncrs = len(ncr_so_numbers)
+        ncr_rate = (orders_with_ncrs / total_orders * 100) if total_orders > 0 else 0
+        
+        # Total Quantity Affected
+        total_qty_affected = 0
+        if 'Total Quantity Affected' in customer_ncrs.columns:
+            total_qty_affected = customer_ncrs['Total Quantity Affected'].sum()
+        
+        # Source breakdown
+        netsuite_count = 0
+        hubspot_count = 0
+        if 'NCR Source' in customer_ncrs.columns:
+            netsuite_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'NetSuite'])
+            hubspot_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'HubSpot'])
+        
+        # Resolution time metrics
+        avg_resolution = None
+        if 'Resolution Days' in customer_ncrs.columns:
+            resolution_data = customer_ncrs['Resolution Days'].dropna()
+            if len(resolution_data) > 0:
+                avg_resolution = resolution_data.mean()
+        
+        # Issue Type breakdown
+        issue_rows = ""
+        if 'Issue Type' in customer_ncrs.columns:
+            issue_summary = customer_ncrs.groupby('Issue Type').agg({
+                'NC Number': 'count' if 'NC Number' in customer_ncrs.columns else 'size',
+                'Total Quantity Affected': 'sum' if 'Total Quantity Affected' in customer_ncrs.columns else lambda x: 0
+            }).reset_index()
+            
+            if 'NC Number' in issue_summary.columns:
+                issue_summary = issue_summary.rename(columns={'NC Number': 'NCR Count'})
+            else:
+                issue_summary['NCR Count'] = issue_summary.iloc[:, 1]
+            
+            if 'Total Quantity Affected' in issue_summary.columns:
+                issue_summary = issue_summary.rename(columns={'Total Quantity Affected': 'Qty Affected'})
+            else:
+                issue_summary['Qty Affected'] = 0
+            
+            issue_summary = issue_summary.sort_values('NCR Count', ascending=False)
+            issue_summary['% of NCRs'] = (issue_summary['NCR Count'] / ncr_count * 100).round(1) if ncr_count > 0 else 0
+            
+            for _, row in issue_summary.iterrows():
+                issue_rows += f"<tr><td>{row['Issue Type']}</td><td style='text-align: center;'>{row['NCR Count']}</td><td style='text-align: right;'>{row['Qty Affected']:,.0f}</td><td style='text-align: right;'>{row['% of NCRs']:.1f}%</td></tr>"
+        
+        # NCR rate styling
+        if ncr_rate < 5:
+            rate_class = "success"
+            rate_badge = "Excellent"
+        elif ncr_rate < 10:
+            rate_class = "warning"
+            rate_badge = "Moderate"
+        else:
+            rate_class = "danger"
+            rate_badge = "Needs Attention"
+        
+        resolution_text = f"{avg_resolution:.1f} days" if avg_resolution is not None else "N/A"
+        
+        ncr_html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">⚠️</div>
+                <div>
+                    <div class="section-title">Quality Performance</div>
+                    <div class="section-subtitle">Non-conformance tracking and resolution metrics</div>
+                </div>
+            </div>
+            
+            <div class="quality-summary">
+                <div class="quality-card {rate_class}">
+                    <div class="quality-badge">{rate_badge}</div>
+                    <div class="quality-rate">{ncr_rate:.1f}%</div>
+                    <div class="quality-label">NCR Rate</div>
+                    <div class="quality-detail">{orders_with_ncrs} of {total_orders} orders</div>
+                </div>
+                <div class="quality-metrics">
+                    <div class="quality-metric">
+                        <div class="metric-val">{ncr_count}</div>
+                        <div class="metric-lbl">Total NCRs</div>
+                    </div>
+                    <div class="quality-metric">
+                        <div class="metric-val">{total_qty_affected:,.0f}</div>
+                        <div class="metric-lbl">Units Affected</div>
+                    </div>
+                    <div class="quality-metric">
+                        <div class="metric-val">{resolution_text}</div>
+                        <div class="metric-lbl">Avg Resolution</div>
+                    </div>
+                </div>
+            </div>
+            
+            {f'''
+            <h4 style="color: #475569; margin: 25px 0 15px 0; font-size: 1rem;">Issue Type Analysis</h4>
+            <table class="data-table">
+                <thead><tr><th style="text-align: left;">Issue Type</th><th style="text-align: center;">Count</th><th style="text-align: right;">Qty Affected</th><th style="text-align: right;">% of Total</th></tr></thead>
+                <tbody>{issue_rows}</tbody>
+            </table>
+            ''' if issue_rows else ''}
+        </div>
+        """
+    else:
+        # No NCRs - show positive message
+        ncr_html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">✅</div>
+                <div>
+                    <div class="section-title">Quality Performance</div>
+                    <div class="section-subtitle">Non-conformance tracking and resolution metrics</div>
+                </div>
+            </div>
+            <div class="success-banner">
+                <div class="success-icon">🏆</div>
+                <div>
+                    <div class="success-title">Zero Quality Issues</div>
+                    <div class="success-detail">{total_orders} orders delivered with no non-conformance reports</div>
+                </div>
+            </div>
+        </div>
+        """
+    
+    # ===== Calculate all metrics =====
+    
+    # Pending Orders
+    pending_statuses = ['Pending Approval', 'Pending Fulfillment', 'PA', 'PF']
+    pending_orders = pd.DataFrame()
+    if not customer_orders.empty:
+        try:
+            if 'Updated Status' in customer_orders.columns:
+                pending_orders = customer_orders[
+                    customer_orders['Updated Status'].isin(pending_statuses) | 
+                    customer_orders['Status'].isin(['Pending Approval', 'Pending Fulfillment'])
+                ]
+            elif 'Status' in customer_orders.columns:
+                pending_orders = customer_orders[
+                    customer_orders['Status'].isin(['Pending Approval', 'Pending Fulfillment'])
+                ]
+        except Exception:
+            pending_orders = pd.DataFrame()
+    
+    pending_count = len(pending_orders)
+    pending_value = pending_orders['Amount'].sum() if not pending_orders.empty else 0
+    
+    # Pending Orders Detail Table
+    pending_orders_html = ""
+    if not pending_orders.empty:
+        order_rows = ""
+        for _, order in pending_orders.sort_values('Amount', ascending=False).head(10).iterrows():
+            so_num = order.get('SO Number', 'N/A')
+            order_type = order.get('Order Type', 'N/A')
+            amount = order.get('Amount', 0)
+            order_date = order.get('Order Start Date')
+            if pd.notna(order_date):
+                order_date = order_date.strftime('%b %d, %Y')
+            else:
+                order_date = 'N/A'
+            status_col = 'Updated Status' if 'Updated Status' in order.index else 'Status'
+            status = order.get(status_col, 'N/A')
+            status_badge = "pa" if "Approval" in str(status) else "pf"
+            order_rows += f"""
+            <tr>
+                <td><strong>{so_num}</strong></td>
+                <td>{order_type}</td>
+                <td style="text-align: right; font-weight: 600; color: #059669;">${amount:,.0f}</td>
+                <td>{order_date}</td>
+                <td><span class="status-badge {status_badge}">{status}</span></td>
+            </tr>"""
+        
+        pending_orders_html = f"""
+        <table class="data-table">
+            <thead><tr><th>Order #</th><th>Type</th><th style="text-align: right;">Value</th><th>Date</th><th>Status</th></tr></thead>
+            <tbody>{order_rows}</tbody>
+        </table>
+        """
+    
+    # Open Invoices
+    open_invoices = customer_invoices[customer_invoices['Status'] == 'Open'] if not customer_invoices.empty else pd.DataFrame()
+    open_invoice_count = len(open_invoices)
+    open_invoice_value = open_invoices['Amount Remaining'].sum() if not open_invoices.empty and 'Amount Remaining' in open_invoices.columns else 0
+    
+    # Open Invoices Detail Table with Aging
+    open_invoices_html = ""
+    aging_summary_html = ""
+    if not open_invoices.empty and 'Due Date' in open_invoices.columns:
+        today = pd.Timestamp.now()
+        open_inv = open_invoices.copy()
+        open_inv['Days Overdue'] = (today - open_inv['Due Date']).dt.days
+        
+        # Aging buckets
+        def aging_bucket(days):
+            if days <= 0: return 'Current'
+            elif days <= 30: return '1-30 Days'
+            elif days <= 60: return '31-60 Days'
+            elif days <= 90: return '61-90 Days'
+            else: return '90+ Days'
+        
+        open_inv['Aging'] = open_inv['Days Overdue'].apply(aging_bucket)
+        
+        # Aging summary
+        aging_summary = open_inv.groupby('Aging')['Amount Remaining'].sum()
+        bucket_order = ['Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days']
+        
+        aging_items = ""
+        for bucket in bucket_order:
+            if bucket in aging_summary.index:
+                amt = aging_summary[bucket]
+                color = "#ef4444" if bucket == '90+ Days' else "#f59e0b" if '60' in bucket or '90' in bucket else "#64748b"
+                aging_items += f'<div class="aging-item"><span class="aging-bucket">{bucket}</span><span class="aging-amount" style="color: {color};">${amt:,.0f}</span></div>'
+        
+        if aging_items:
+            aging_summary_html = f'<div class="aging-grid">{aging_items}</div>'
+        
+        # Individual invoice details
+        invoice_rows = ""
+        for _, inv in open_inv.sort_values('Days Overdue', ascending=False).head(10).iterrows():
+            doc_num = inv.get('Document Number', 'N/A')
+            amount = inv.get('Amount Remaining', 0)
+            due_date = inv.get('Due Date')
+            if pd.notna(due_date):
+                due_date = due_date.strftime('%b %d, %Y')
+            else:
+                due_date = 'N/A'
+            days_over = inv.get('Days Overdue', 0)
+            aging = inv.get('Aging', 'N/A')
+            row_class = "overdue-90" if days_over > 90 else "overdue-30" if days_over > 30 else ""
+            invoice_rows += f"""
+            <tr class="{row_class}">
+                <td><strong>{doc_num}</strong></td>
+                <td style="text-align: right;">${amount:,.0f}</td>
+                <td>{due_date}</td>
+                <td style="text-align: center;">{days_over:.0f}</td>
+                <td>{aging}</td>
+            </tr>"""
+        
+        open_invoices_html = f"""
+        <table class="data-table">
+            <thead><tr><th>Invoice #</th><th style="text-align: right;">Amount</th><th>Due Date</th><th style="text-align: center;">Days</th><th>Aging</th></tr></thead>
+            <tbody>{invoice_rows}</tbody>
+        </table>
+        """
+    
+    # Revenue
+    total_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty else 0
+    total_invoices = len(customer_invoices)
+    avg_invoice = total_revenue / total_invoices if total_invoices > 0 else 0
+    
+    # Year breakdown
+    yearly_html = ""
+    if not customer_invoices.empty and 'Date' in customer_invoices.columns:
+        invoices_copy = customer_invoices.copy()
+        invoices_copy['Year'] = invoices_copy['Date'].dt.year
+        yearly_data = invoices_copy.groupby('Year').agg({'Amount': 'sum', 'Document Number': 'count'}).reset_index()
+        yearly_data.columns = ['Year', 'Revenue', 'Invoices']
+        yearly_data = yearly_data.sort_values('Year', ascending=False)
+        
+        yearly_rows = ""
+        for _, row in yearly_data.iterrows():
+            yearly_rows += f"<tr><td style='font-weight: 600;'>{int(row['Year'])}</td><td style='text-align: right; color: #059669; font-weight: 600;'>${row['Revenue']:,.0f}</td><td style='text-align: center;'>{int(row['Invoices'])}</td></tr>"
+        
+        yearly_html = f"""
+        <table class="data-table compact">
+            <thead><tr><th>Year</th><th style="text-align: right;">Revenue</th><th style="text-align: center;">Orders</th></tr></thead>
+            <tbody>{yearly_rows}</tbody>
+        </table>
+        """
+    
+    # On-Time Performance
+    promise_col = 'Customer Promise Date' if 'Customer Promise Date' in customer_orders.columns else 'Customer Promise Last Date to Ship'
+    ot_rate = 0
+    avg_variance = 0
+    completed_count = 0
+    if promise_col in customer_orders.columns:
+        completed = customer_orders[
+            (customer_orders['Status'].isin(['Billed', 'Closed'])) &
+            (customer_orders['Actual Ship Date'].notna()) &
+            (customer_orders[promise_col].notna())
+        ].copy()
+        if not completed.empty:
+            completed['Variance'] = (completed['Actual Ship Date'] - completed[promise_col]).dt.days
+            ot_count = (completed['Variance'] <= 0).sum()
+            completed_count = len(completed)
+            ot_rate = (ot_count / completed_count * 100) if completed_count > 0 else 0
+            avg_variance = completed['Variance'].mean()
+    
+    # Order Cadence
+    avg_cadence = 0
+    last_order = 'N/A'
+    days_since_last = 0
+    if not customer_orders.empty and 'Order Start Date' in customer_orders.columns:
+        orders_dated = customer_orders[customer_orders['Order Start Date'].notna()].sort_values('Order Start Date')
+        if len(orders_dated) > 1:
+            orders_dated['Days Between'] = orders_dated['Order Start Date'].diff().dt.days
+            avg_cadence = orders_dated['Days Between'].mean()
+            last_order_date = orders_dated['Order Start Date'].max()
+            last_order = last_order_date.strftime('%B %d, %Y')
+            days_since_last = (pd.Timestamp.now() - last_order_date).days
+        elif len(orders_dated) == 1:
+            last_order_date = orders_dated['Order Start Date'].max()
+            last_order = last_order_date.strftime('%B %d, %Y')
+            days_since_last = (pd.Timestamp.now() - last_order_date).days
+    
+    # Order Type Mix
+    order_type_html = ""
+    if not customer_orders.empty and 'Order Type' in customer_orders.columns:
+        valid_orders = customer_orders[
+            (customer_orders['Order Type'].notna()) & 
+            (customer_orders['Order Type'] != '') & 
+            (customer_orders['Order Type'] != 'nan')
+        ]
+        if not valid_orders.empty:
+            type_mix = valid_orders.groupby('Order Type').agg({'Amount': ['sum', 'count']}).round(0)
+            type_mix.columns = ['Value', 'Count']
+            type_mix = type_mix.sort_values('Value', ascending=False)
+            total_val = type_mix['Value'].sum()
+            
+            type_rows = ""
+            for order_type, row in type_mix.iterrows():
+                pct = (row['Value'] / total_val * 100) if total_val > 0 else 0
+                type_rows += f"""
+                <tr>
+                    <td style="font-weight: 500;">{order_type}</td>
+                    <td style="text-align: right; color: #059669; font-weight: 600;">${row['Value']:,.0f}</td>
+                    <td style="text-align: center;">{int(row['Count'])}</td>
+                    <td style="text-align: right;">{pct:.1f}%</td>
+                </tr>"""
+            
+            order_type_html = f"""
+            <table class="data-table">
+                <thead><tr><th>Category</th><th style="text-align: right;">Value</th><th style="text-align: center;">Orders</th><th style="text-align: right;">Share</th></tr></thead>
+                <tbody>{type_rows}</tbody>
+            </table>
+            """
+    
+    # Pipeline
+    pipeline_html = ""
+    pipeline_value = 0
+    pipeline_count = 0
+    if not customer_deals.empty:
+        open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+        open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)]
+        if not open_deals.empty:
+            pipeline_value = open_deals['Amount'].sum()
+            pipeline_count = len(open_deals)
+            
+            deal_rows = ""
+            for _, deal in open_deals.sort_values('Amount', ascending=False).iterrows():
+                close_date = deal['Close Date'].strftime('%b %d, %Y') if pd.notna(deal['Close Date']) else 'TBD'
+                status = deal['Close Status']
+                status_class = "commit" if status == "Commit" else "expect" if status == "Expect" else "opportunity"
+                deal_rows += f"""
+                <tr>
+                    <td style="font-weight: 500;">{deal['Deal Name']}</td>
+                    <td style="text-align: right; color: #059669; font-weight: 600;">${deal['Amount']:,.0f}</td>
+                    <td><span class="pipeline-badge {status_class}">{status}</span></td>
+                    <td>{close_date}</td>
+                </tr>"""
+            
+            pipeline_html = f"""
+            <table class="data-table">
+                <thead><tr><th>Order Description</th><th style="text-align: right;">Value</th><th>Stage</th><th>Expected</th></tr></thead>
+                <tbody>{deal_rows}</tbody>
+            </table>
+            """
+    
+    # Calculate executive summary metrics
+    health_score = 100
+    health_factors = []
+    
+    # Factor 1: Payment health
+    if open_invoice_value > total_revenue * 0.1:
+        health_score -= 15
+        health_factors.append("High outstanding balance")
+    
+    # Factor 2: Quality
+    if customer_ncrs is not None and not customer_ncrs.empty:
+        ncr_rate_calc = (len(customer_ncrs) / total_orders * 100) if total_orders > 0 else 0
+        if ncr_rate_calc > 10:
+            health_score -= 20
+            health_factors.append("Elevated NCR rate")
+        elif ncr_rate_calc > 5:
+            health_score -= 10
+    
+    # Factor 3: On-time delivery
+    if ot_rate < 70:
+        health_score -= 15
+        health_factors.append("Delivery performance needs improvement")
+    elif ot_rate < 85:
+        health_score -= 5
+    
+    # Factor 4: Engagement
+    if days_since_last > avg_cadence * 2 and avg_cadence > 0:
+        health_score -= 10
+        health_factors.append("Longer than usual since last order")
+    
+    health_score = max(0, min(100, health_score))
+    health_class = "excellent" if health_score >= 90 else "good" if health_score >= 75 else "attention" if health_score >= 60 else "concern"
+    health_label = "Excellent" if health_score >= 90 else "Good" if health_score >= 75 else "Needs Attention" if health_score >= 60 else "Concern"
+    
+    # ===== Generate HTML =====
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Account Review - {customer_name}</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+            
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #ffffff;
+                color: #1e293b;
+                line-height: 1.6;
+                padding: 0;
+            }}
+            
+            .cover {{
+                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #164e63 100%);
+                color: white;
+                padding: 60px 50px;
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .cover::before {{
+                content: '';
+                position: absolute;
+                top: -50%;
+                right: -20%;
+                width: 60%;
+                height: 200%;
+                background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
+                transform: rotate(15deg);
+            }}
+            
+            .cover-content {{
+                position: relative;
+                z-index: 1;
+            }}
+            
+            .logo-area {{
+                margin-bottom: 40px;
+            }}
+            
+            .logo-text {{
+                font-size: 1.1rem;
+                font-weight: 600;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                opacity: 0.9;
+            }}
+            
+            .cover h1 {{
+                font-size: 3rem;
+                font-weight: 800;
+                margin-bottom: 10px;
+                letter-spacing: -1px;
+            }}
+            
+            .cover .customer-name {{
+                font-size: 2rem;
+                font-weight: 300;
+                color: #67e8f9;
+                margin-bottom: 30px;
+            }}
+            
+            .cover-meta {{
+                display: flex;
+                gap: 40px;
+                font-size: 0.95rem;
+                opacity: 0.85;
+            }}
+            
+            .cover-meta-item {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }}
+            
+            .main-content {{
+                padding: 50px;
+            }}
+            
+            /* Executive Summary */
+            .exec-summary {{
+                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                border-radius: 16px;
+                padding: 35px;
+                margin-bottom: 40px;
+                border: 1px solid #e2e8f0;
+            }}
+            
+            .exec-title {{
+                font-size: 1.3rem;
+                font-weight: 700;
+                color: #0f172a;
+                margin-bottom: 25px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            
+            .exec-grid {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 25px;
+            }}
+            
+            .exec-card {{
+                background: white;
+                border-radius: 12px;
+                padding: 20px;
+                text-align: center;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            
+            .exec-value {{
+                font-size: 2rem;
+                font-weight: 700;
+                color: #0f172a;
+                margin-bottom: 5px;
+            }}
+            
+            .exec-value.green {{ color: #059669; }}
+            .exec-value.blue {{ color: #2563eb; }}
+            .exec-value.amber {{ color: #d97706; }}
+            
+            .exec-label {{
+                font-size: 0.85rem;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            
+            .health-indicator {{
+                background: white;
+                border-radius: 12px;
+                padding: 20px 25px;
+                display: flex;
+                align-items: center;
+                gap: 20px;
+                margin-top: 25px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            
+            .health-score {{
+                width: 80px;
+                height: 80px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.5rem;
+                font-weight: 800;
+                color: white;
+            }}
+            
+            .health-score.excellent {{ background: linear-gradient(135deg, #059669, #10b981); }}
+            .health-score.good {{ background: linear-gradient(135deg, #2563eb, #3b82f6); }}
+            .health-score.attention {{ background: linear-gradient(135deg, #d97706, #f59e0b); }}
+            .health-score.concern {{ background: linear-gradient(135deg, #dc2626, #ef4444); }}
+            
+            .health-details h4 {{
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #0f172a;
+                margin-bottom: 5px;
+            }}
+            
+            .health-details p {{
+                font-size: 0.9rem;
+                color: #64748b;
+            }}
+            
+            /* Sections */
+            .section {{
+                margin-bottom: 45px;
+                page-break-inside: avoid;
+            }}
+            
+            .section-header {{
+                display: flex;
+                align-items: flex-start;
+                gap: 15px;
+                margin-bottom: 25px;
+                padding-bottom: 15px;
+                border-bottom: 2px solid #e2e8f0;
+            }}
+            
+            .section-icon {{
+                font-size: 1.8rem;
+                line-height: 1;
+            }}
+            
+            .section-title {{
+                font-size: 1.4rem;
+                font-weight: 700;
+                color: #0f172a;
+            }}
+            
+            .section-subtitle {{
+                font-size: 0.9rem;
+                color: #64748b;
+                margin-top: 3px;
+            }}
+            
+            /* Summary Boxes */
+            .summary-box {{
+                display: flex;
+                gap: 20px;
+                margin-bottom: 25px;
+            }}
+            
+            .summary-item {{
+                background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+                border-radius: 12px;
+                padding: 20px 30px;
+                flex: 1;
+                text-align: center;
+                border: 1px solid #bfdbfe;
+            }}
+            
+            .summary-value {{
+                font-size: 2.2rem;
+                font-weight: 700;
+                color: #1e40af;
+            }}
+            
+            .summary-label {{
+                font-size: 0.85rem;
+                color: #3b82f6;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-top: 5px;
+            }}
+            
+            /* Data Tables */
+            .data-table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 0.9rem;
+                margin-top: 15px;
+            }}
+            
+            .data-table th {{
+                background: #0f172a;
+                color: white;
+                padding: 14px 16px;
+                text-align: left;
+                font-weight: 600;
+                font-size: 0.8rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            
+            .data-table td {{
+                padding: 14px 16px;
+                border-bottom: 1px solid #e2e8f0;
+            }}
+            
+            .data-table tr:nth-child(even) {{
+                background: #f8fafc;
+            }}
+            
+            .data-table.compact td {{
+                padding: 10px 16px;
+            }}
+            
+            /* Status Badges */
+            .status-badge {{
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.75rem;
+                font-weight: 600;
+                text-transform: uppercase;
+            }}
+            
+            .status-badge.pa {{
+                background: #fef3c7;
+                color: #92400e;
+            }}
+            
+            .status-badge.pf {{
+                background: #dbeafe;
+                color: #1e40af;
+            }}
+            
+            .pipeline-badge {{
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.75rem;
+                font-weight: 600;
+            }}
+            
+            .pipeline-badge.commit {{
+                background: #dcfce7;
+                color: #166534;
+            }}
+            
+            .pipeline-badge.expect {{
+                background: #dbeafe;
+                color: #1e40af;
+            }}
+            
+            .pipeline-badge.opportunity {{
+                background: #f3e8ff;
+                color: #7c3aed;
+            }}
+            
+            /* Quality Section */
+            .quality-summary {{
+                display: flex;
+                gap: 25px;
+                margin-bottom: 25px;
+            }}
+            
+            .quality-card {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border: 2px solid #86efac;
+                border-radius: 16px;
+                padding: 25px;
+                text-align: center;
+                min-width: 180px;
+            }}
+            
+            .quality-card.success {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border-color: #86efac;
+            }}
+            
+            .quality-card.warning {{
+                background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+                border-color: #fcd34d;
+            }}
+            
+            .quality-card.danger {{
+                background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%);
+                border-color: #fca5a5;
+            }}
+            
+            .quality-badge {{
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.7rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                background: white;
+                margin-bottom: 10px;
+            }}
+            
+            .quality-card.success .quality-badge {{ color: #166534; }}
+            .quality-card.warning .quality-badge {{ color: #92400e; }}
+            .quality-card.danger .quality-badge {{ color: #991b1b; }}
+            
+            .quality-rate {{
+                font-size: 2.5rem;
+                font-weight: 800;
+            }}
+            
+            .quality-card.success .quality-rate {{ color: #166534; }}
+            .quality-card.warning .quality-rate {{ color: #92400e; }}
+            .quality-card.danger .quality-rate {{ color: #991b1b; }}
+            
+            .quality-label {{
+                font-size: 0.85rem;
+                color: #64748b;
+                margin-top: 5px;
+            }}
+            
+            .quality-detail {{
+                font-size: 0.8rem;
+                color: #94a3b8;
+                margin-top: 8px;
+            }}
+            
+            .quality-metrics {{
+                flex: 1;
+                display: flex;
+                gap: 15px;
+            }}
+            
+            .quality-metric {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 20px;
+                text-align: center;
+                flex: 1;
+            }}
+            
+            .quality-metric .metric-val {{
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: #0f172a;
+            }}
+            
+            .quality-metric .metric-lbl {{
+                font-size: 0.75rem;
+                color: #64748b;
+                text-transform: uppercase;
+                margin-top: 5px;
+            }}
+            
+            /* Success Banner */
+            .success-banner {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border: 2px solid #86efac;
+                border-radius: 16px;
+                padding: 30px;
+                display: flex;
+                align-items: center;
+                gap: 20px;
+            }}
+            
+            .success-icon {{
+                font-size: 3rem;
+            }}
+            
+            .success-title {{
+                font-size: 1.3rem;
+                font-weight: 700;
+                color: #166534;
+            }}
+            
+            .success-detail {{
+                font-size: 0.95rem;
+                color: #15803d;
+                margin-top: 5px;
+            }}
+            
+            /* Aging Grid */
+            .aging-grid {{
+                display: flex;
+                gap: 15px;
+                margin-bottom: 20px;
+            }}
+            
+            .aging-item {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 12px 20px;
+                flex: 1;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }}
+            
+            .aging-bucket {{
+                font-size: 0.8rem;
+                color: #64748b;
+            }}
+            
+            .aging-amount {{
+                font-weight: 700;
+            }}
+            
+            /* Overdue Rows */
+            .overdue-90 td {{
+                background: #fef2f2 !important;
+            }}
+            
+            .overdue-30 td {{
+                background: #fffbeb !important;
+            }}
+            
+            /* Charts */
+            .chart-container {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 20px;
+                margin: 20px 0;
+                text-align: center;
+            }}
+            
+            .chart-container img {{
+                max-width: 100%;
+                height: auto;
+                border-radius: 8px;
+            }}
+            
+            /* Two Column Layout */
+            .two-col {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 30px;
+            }}
+            
+            /* No Data */
+            .no-data {{
+                color: #94a3b8;
+                font-style: italic;
+                padding: 20px;
+                text-align: center;
+                background: #f8fafc;
+                border-radius: 8px;
+            }}
+            
+            /* Footer */
+            .footer {{
+                margin-top: 60px;
+                padding: 30px 50px;
+                background: #0f172a;
+                color: white;
+                text-align: center;
+            }}
+            
+            .footer-main {{
+                font-size: 1.1rem;
+                font-weight: 600;
+                margin-bottom: 10px;
+            }}
+            
+            .footer-sub {{
+                font-size: 0.9rem;
+                opacity: 0.7;
+            }}
+            
+            @media print {{
+                body {{
+                    padding: 0;
+                }}
+                .cover {{
+                    -webkit-print-color-adjust: exact;
+                    print-color-adjust: exact;
+                }}
+                .section {{
+                    page-break-inside: avoid;
+                }}
+                .chart-container {{
+                    page-break-inside: avoid;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="cover">
+            <div class="cover-content">
+                <div class="logo-area">
+                    <div class="logo-text">Calyx Containers</div>
+                </div>
+                <h1>Account Review</h1>
+                <div class="customer-name">{customer_name}</div>
+                <div class="cover-meta">
+                    <div class="cover-meta-item">
+                        <span>📅</span>
+                        <span>{generated_date}</span>
+                    </div>
+                    <div class="cover-meta-item">
+                        <span>👤</span>
+                        <span>Account Manager: {rep_name}</span>
+                    </div>
+                    <div class="cover-meta-item">
+                        <span>📊</span>
+                        <span>{report_quarter} Review</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <!-- Executive Summary -->
+            <div class="exec-summary">
+                <div class="exec-title">📊 Executive Summary</div>
+                <div class="exec-grid">
+                    <div class="exec-card">
+                        <div class="exec-value green">${total_revenue:,.0f}</div>
+                        <div class="exec-label">Lifetime Purchases</div>
+                    </div>
+                    <div class="exec-card">
+                        <div class="exec-value blue">{total_invoices}</div>
+                        <div class="exec-label">Total Orders</div>
+                    </div>
+                    <div class="exec-card">
+                        <div class="exec-value">${pending_value:,.0f}</div>
+                        <div class="exec-label">In Progress</div>
+                    </div>
+                    <div class="exec-card">
+                        <div class="exec-value {'green' if ot_rate >= 90 else 'amber' if ot_rate >= 70 else ''}">{ot_rate:.0f}%</div>
+                        <div class="exec-label">On-Time Rate</div>
+                    </div>
+                </div>
+                <div class="health-indicator">
+                    <div class="health-score {health_class}">{health_score}</div>
+                    <div class="health-details">
+                        <h4>Account Health: {health_label}</h4>
+                        <p>{'All metrics looking strong!' if not health_factors else ' • '.join(health_factors)}</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Orders in Progress -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">📦</div>
+                    <div>
+                        <div class="section-title">Orders in Progress</div>
+                        <div class="section-subtitle">Active orders currently being processed</div>
+                    </div>
+                </div>
+                <div class="summary-box">
+                    <div class="summary-item">
+                        <div class="summary-value">{pending_count}</div>
+                        <div class="summary-label">Active Orders</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">${pending_value:,.0f}</div>
+                        <div class="summary-label">Total Value</div>
+                    </div>
+                </div>
+                {pending_orders_html if pending_orders_html else '<p class="no-data">No orders currently in progress</p>'}
+            </div>
+            
+            <!-- Account Balance -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">💳</div>
+                    <div>
+                        <div class="section-title">Account Balance</div>
+                        <div class="section-subtitle">Outstanding invoices and aging analysis</div>
+                    </div>
+                </div>
+                <div class="summary-box">
+                    <div class="summary-item">
+                        <div class="summary-value">{open_invoice_count}</div>
+                        <div class="summary-label">Open Invoices</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">${open_invoice_value:,.0f}</div>
+                        <div class="summary-label">Balance Due</div>
+                    </div>
+                </div>
+                {aging_summary_html}
+                {open_invoices_html if open_invoices_html else '<p class="no-data">No outstanding invoices — account is current!</p>'}
+            </div>
+            
+            <!-- Purchase History -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">💰</div>
+                    <div>
+                        <div class="section-title">Purchase History</div>
+                        <div class="section-subtitle">Historical purchasing trends and patterns</div>
+                    </div>
+                </div>
+                <div class="summary-box">
+                    <div class="summary-item">
+                        <div class="summary-value">${total_revenue:,.0f}</div>
+                        <div class="summary-label">Lifetime Value</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">${avg_invoice:,.0f}</div>
+                        <div class="summary-label">Avg Order</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">{avg_cadence:.0f}</div>
+                        <div class="summary-label">Days Between Orders</div>
+                    </div>
+                </div>
+                {yearly_html}
+                {charts_html.get('revenue', '')}
+            </div>
+            
+            <!-- Delivery Performance -->
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">⏱️</div>
+                    <div>
+                        <div class="section-title">Delivery Performance</div>
+                        <div class="section-subtitle">On-time delivery metrics and trends</div>
+                    </div>
+                </div>
+                <div class="summary-box">
+                    <div class="summary-item">
+                        <div class="summary-value">{ot_rate:.1f}%</div>
+                        <div class="summary-label">On-Time Rate</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">{avg_variance:+.1f}</div>
+                        <div class="summary-label">Avg Days Variance</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">{completed_count}</div>
+                        <div class="summary-label">Orders Measured</div>
+                    </div>
+                </div>
+                {charts_html.get('ontime', '')}
+            </div>
+            
+            <!-- Upcoming Orders -->
+            {f'''
+            <div class="section">
+                <div class="section-header">
+                    <div class="section-icon">🎯</div>
+                    <div>
+                        <div class="section-title">Upcoming Orders</div>
+                        <div class="section-subtitle">Pipeline and forecasted business</div>
+                    </div>
+                </div>
+                <div class="summary-box">
+                    <div class="summary-item">
+                        <div class="summary-value">${pipeline_value:,.0f}</div>
+                        <div class="summary-label">Pipeline Value</div>
+                    </div>
+                    <div class="summary-item">
+                        <div class="summary-value">{pipeline_count}</div>
+                        <div class="summary-label">Planned Orders</div>
+                    </div>
+                </div>
+                {pipeline_html}
+            </div>
+            ''' if pipeline_html else ''}
+            
+            {line_item_html}
+            
+            {ncr_html}
+        </div>
+        
+        <div class="footer">
+            <div class="footer-main">Thank you for your partnership!</div>
+            <div class="footer-sub">Calyx Containers • {generated_date} • Questions? Contact {rep_name}</div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
     
     # ===== Generate NCR Analysis HTML =====
     ncr_html = ""
@@ -1045,16 +2213,19 @@ def generate_combined_qbr_html(customers_data, rep_name):
     customers_data is a list of tuples: (customer_name, customer_orders, customer_invoices, customer_deals)
     """
     generated_date = datetime.now().strftime('%B %d, %Y')
+    report_quarter = f"Q{((datetime.now().month - 1) // 3) + 1} {datetime.now().year}"
+    num_customers = len(customers_data)
+    customer_names = [c[0] for c in customers_data]
     
-    # Start with the common HTML header and styles
+    # Start with professional header and styles
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Account Summaries - {rep_name}</title>
+        <title>Portfolio Review - {rep_name}</title>
         <style>
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
             
             * {{
                 margin: 0;
@@ -1067,26 +2238,148 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 background: #ffffff;
                 color: #1e293b;
                 line-height: 1.6;
-                padding: 40px;
+                padding: 0;
             }}
             
-            .header {{
-                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #0891b2 100%);
+            /* Cover Page */
+            .portfolio-cover {{
+                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #164e63 100%);
                 color: white;
-                padding: 40px;
-                border-radius: 16px;
+                padding: 60px 50px;
+                position: relative;
+                overflow: hidden;
+                page-break-after: always;
+            }}
+            
+            .portfolio-cover::before {{
+                content: '';
+                position: absolute;
+                top: -50%;
+                right: -20%;
+                width: 60%;
+                height: 200%;
+                background: linear-gradient(45deg, transparent, rgba(255,255,255,0.03), transparent);
+                transform: rotate(15deg);
+            }}
+            
+            .portfolio-cover .logo-text {{
+                font-size: 1.1rem;
+                font-weight: 600;
+                letter-spacing: 2px;
+                text-transform: uppercase;
+                opacity: 0.9;
                 margin-bottom: 40px;
             }}
             
-            .header h1 {{
+            .portfolio-cover h1 {{
+                font-size: 3rem;
+                font-weight: 800;
+                margin-bottom: 10px;
+                letter-spacing: -1px;
+            }}
+            
+            .portfolio-cover .subtitle {{
+                font-size: 1.5rem;
+                font-weight: 300;
+                color: #67e8f9;
+                margin-bottom: 40px;
+            }}
+            
+            .portfolio-meta {{
+                display: flex;
+                gap: 40px;
+                font-size: 0.95rem;
+                opacity: 0.85;
+                margin-bottom: 50px;
+            }}
+            
+            .portfolio-stats {{
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 20px;
+                margin-top: 40px;
+            }}
+            
+            .portfolio-stat {{
+                background: rgba(255,255,255,0.1);
+                border-radius: 12px;
+                padding: 25px;
+                text-align: center;
+            }}
+            
+            .portfolio-stat-value {{
                 font-size: 2.5rem;
+                font-weight: 800;
+                color: #67e8f9;
+            }}
+            
+            .portfolio-stat-label {{
+                font-size: 0.85rem;
+                opacity: 0.8;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-top: 8px;
+            }}
+            
+            .account-list {{
+                background: rgba(255,255,255,0.05);
+                border-radius: 12px;
+                padding: 25px;
+                margin-top: 40px;
+            }}
+            
+            .account-list-title {{
+                font-size: 0.85rem;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+                opacity: 0.7;
+                margin-bottom: 15px;
+            }}
+            
+            .account-list-items {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+            }}
+            
+            .account-tag {{
+                background: rgba(103, 232, 249, 0.2);
+                border: 1px solid rgba(103, 232, 249, 0.3);
+                color: #67e8f9;
+                padding: 6px 14px;
+                border-radius: 20px;
+                font-size: 0.85rem;
+                font-weight: 500;
+            }}
+            
+            /* Customer Section Divider */
+            .customer-section {{
+                page-break-before: always;
+            }}
+            
+            .customer-header {{
+                background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%);
+                color: white;
+                padding: 40px 50px;
+                margin-bottom: 0;
+            }}
+            
+            .customer-header h2 {{
+                font-size: 2rem;
                 font-weight: 700;
                 margin-bottom: 8px;
             }}
             
-            .header .subtitle {{
-                font-size: 1rem;
-                opacity: 0.9;
+            .customer-header .customer-meta {{
+                display: flex;
+                gap: 30px;
+                font-size: 0.9rem;
+                opacity: 0.8;
+            }}
+            
+            /* Rest of styles inherited from individual report */
+            .main-content {{
+                padding: 40px 50px;
             }}
             
             .section {{
@@ -1094,70 +2387,81 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 page-break-inside: avoid;
             }}
             
-            .section-title {{
-                font-size: 1.4rem;
-                font-weight: 600;
-                color: #1e40af;
-                border-bottom: 3px solid #3b82f6;
-                padding-bottom: 10px;
-                margin-bottom: 20px;
-            }}
-            
-            .metric-row {{
+            .section-header {{
                 display: flex;
-                gap: 20px;
+                align-items: flex-start;
+                gap: 15px;
                 margin-bottom: 20px;
-                flex-wrap: wrap;
+                padding-bottom: 12px;
+                border-bottom: 2px solid #e2e8f0;
             }}
             
-            .metric-card {{
-                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
-                border: 1px solid #e2e8f0;
-                border-radius: 12px;
-                padding: 20px 30px;
-                min-width: 180px;
-                flex: 1;
+            .section-icon {{
+                font-size: 1.5rem;
+                line-height: 1;
             }}
             
-            .metric-label {{
+            .section-title {{
+                font-size: 1.25rem;
+                font-weight: 700;
+                color: #0f172a;
+            }}
+            
+            .section-subtitle {{
                 font-size: 0.85rem;
                 color: #64748b;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-                margin-bottom: 5px;
+                margin-top: 3px;
             }}
             
-            .metric-value {{
+            .summary-box {{
+                display: flex;
+                gap: 15px;
+                margin-bottom: 20px;
+            }}
+            
+            .summary-item {{
+                background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+                border-radius: 10px;
+                padding: 16px 24px;
+                flex: 1;
+                text-align: center;
+                border: 1px solid #bfdbfe;
+            }}
+            
+            .summary-value {{
                 font-size: 1.8rem;
                 font-weight: 700;
-                color: #1e293b;
+                color: #1e40af;
             }}
             
-            .metric-value.success {{
-                color: #059669;
-            }}
-            
-            .metric-value.warning {{
-                color: #d97706;
+            .summary-label {{
+                font-size: 0.8rem;
+                color: #3b82f6;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-top: 4px;
             }}
             
             .data-table {{
                 width: 100%;
                 border-collapse: collapse;
-                margin-top: 15px;
-                font-size: 0.9rem;
+                font-size: 0.85rem;
+                margin-top: 12px;
             }}
             
             .data-table th {{
-                background: #1e40af;
+                background: #0f172a;
                 color: white;
-                padding: 12px 16px;
+                padding: 12px 14px;
                 text-align: left;
                 font-weight: 600;
+                font-size: 0.75rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
             }}
             
             .data-table td {{
-                padding: 12px 16px;
+                padding: 12px 14px;
                 border-bottom: 1px solid #e2e8f0;
             }}
             
@@ -1165,16 +2469,12 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 background: #f8fafc;
             }}
             
-            .data-table tr:hover {{
-                background: #eff6ff;
-            }}
-            
             .chart-container {{
                 background: #f8fafc;
                 border: 1px solid #e2e8f0;
-                border-radius: 12px;
+                border-radius: 10px;
                 padding: 15px;
-                margin: 20px 0;
+                margin: 15px 0;
                 text-align: center;
             }}
             
@@ -1184,47 +2484,191 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 border-radius: 8px;
             }}
             
-            .customer-divider {{
-                page-break-before: always;
-                margin-top: 60px;
-                padding-top: 40px;
+            /* Status badges */
+            .status-badge {{
+                display: inline-block;
+                padding: 3px 10px;
+                border-radius: 15px;
+                font-size: 0.7rem;
+                font-weight: 600;
+                text-transform: uppercase;
             }}
             
-            .footer {{
-                margin-top: 60px;
-                padding-top: 20px;
-                border-top: 1px solid #e2e8f0;
+            .status-badge.pa {{
+                background: #fef3c7;
+                color: #92400e;
+            }}
+            
+            .status-badge.pf {{
+                background: #dbeafe;
+                color: #1e40af;
+            }}
+            
+            /* Quality styling */
+            .quality-summary {{
+                display: flex;
+                gap: 20px;
+                margin-bottom: 20px;
+            }}
+            
+            .quality-card {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border: 2px solid #86efac;
+                border-radius: 12px;
+                padding: 20px;
                 text-align: center;
-                color: #64748b;
+                min-width: 160px;
+            }}
+            
+            .quality-card.success {{ background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-color: #86efac; }}
+            .quality-card.warning {{ background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%); border-color: #fcd34d; }}
+            .quality-card.danger {{ background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%); border-color: #fca5a5; }}
+            
+            .quality-badge {{
+                display: inline-block;
+                padding: 3px 10px;
+                border-radius: 15px;
+                font-size: 0.65rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                background: white;
+                margin-bottom: 8px;
+            }}
+            
+            .quality-rate {{ font-size: 2rem; font-weight: 800; }}
+            .quality-card.success .quality-rate {{ color: #166534; }}
+            .quality-card.warning .quality-rate {{ color: #92400e; }}
+            .quality-card.danger .quality-rate {{ color: #991b1b; }}
+            
+            .quality-label {{ font-size: 0.8rem; color: #64748b; margin-top: 4px; }}
+            .quality-detail {{ font-size: 0.75rem; color: #94a3b8; margin-top: 6px; }}
+            
+            .quality-metrics {{ flex: 1; display: flex; gap: 12px; }}
+            .quality-metric {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; text-align: center; flex: 1; }}
+            .quality-metric .metric-val {{ font-size: 1.3rem; font-weight: 700; color: #0f172a; }}
+            .quality-metric .metric-lbl {{ font-size: 0.7rem; color: #64748b; text-transform: uppercase; margin-top: 4px; }}
+            
+            .success-banner {{
+                background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+                border: 2px solid #86efac;
+                border-radius: 12px;
+                padding: 25px;
+                display: flex;
+                align-items: center;
+                gap: 15px;
+            }}
+            
+            .success-icon {{ font-size: 2.5rem; }}
+            .success-title {{ font-size: 1.2rem; font-weight: 700; color: #166534; }}
+            .success-detail {{ font-size: 0.9rem; color: #15803d; margin-top: 4px; }}
+            
+            .no-data {{
+                color: #94a3b8;
+                font-style: italic;
+                padding: 15px;
+                text-align: center;
+                background: #f8fafc;
+                border-radius: 8px;
+            }}
+            
+            /* Product table styling */
+            .product-table td:nth-child(2) {{
+                text-align: right;
+                font-weight: 600;
+                color: #059669;
+            }}
+            
+            /* Footer */
+            .portfolio-footer {{
+                margin-top: 40px;
+                padding: 25px 50px;
+                background: #0f172a;
+                color: white;
+                text-align: center;
+            }}
+            
+            .footer-main {{
+                font-size: 1rem;
+                font-weight: 600;
+                margin-bottom: 8px;
+            }}
+            
+            .footer-sub {{
                 font-size: 0.85rem;
+                opacity: 0.7;
             }}
             
             @media print {{
-                body {{
-                    padding: 20px;
-                }}
-                .header {{
+                body {{ padding: 0; }}
+                .portfolio-cover, .customer-header {{
                     -webkit-print-color-adjust: exact;
                     print-color-adjust: exact;
                 }}
-                .section {{
-                    page-break-inside: avoid;
-                }}
-                .chart-container {{
-                    page-break-inside: avoid;
-                }}
-                .customer-divider {{
-                    page-break-before: always;
-                }}
+                .section {{ page-break-inside: avoid; }}
+                .chart-container {{ page-break-inside: avoid; }}
+                .customer-section {{ page-break-before: always; }}
             }}
         </style>
     </head>
     <body>
     """
     
+    # Calculate portfolio-level stats
+    total_portfolio_revenue = 0
+    total_portfolio_orders = 0
+    total_pipeline_value = 0
+    
+    for customer_data in customers_data:
+        customer_invoices = customer_data[2]
+        customer_deals = customer_data[3]
+        if not customer_invoices.empty and 'Amount' in customer_invoices.columns:
+            total_portfolio_revenue += customer_invoices['Amount'].sum()
+            total_portfolio_orders += len(customer_invoices)
+        if not customer_deals.empty and 'Amount' in customer_deals.columns:
+            open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+            if 'Close Status' in customer_deals.columns:
+                open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)]
+                total_pipeline_value += open_deals['Amount'].sum()
+    
+    # Portfolio Cover Page
+    html += f"""
+        <div class="portfolio-cover">
+            <div class="logo-text">Calyx Containers</div>
+            <h1>Portfolio Review</h1>
+            <div class="subtitle">{report_quarter} Account Summary</div>
+            
+            <div class="portfolio-meta">
+                <span>📅 {generated_date}</span>
+                <span>👤 Account Manager: {rep_name}</span>
+                <span>📊 {num_customers} Accounts</span>
+            </div>
+            
+            <div class="portfolio-stats">
+                <div class="portfolio-stat">
+                    <div class="portfolio-stat-value">${total_portfolio_revenue:,.0f}</div>
+                    <div class="portfolio-stat-label">Portfolio Revenue</div>
+                </div>
+                <div class="portfolio-stat">
+                    <div class="portfolio-stat-value">{total_portfolio_orders}</div>
+                    <div class="portfolio-stat-label">Total Orders</div>
+                </div>
+                <div class="portfolio-stat">
+                    <div class="portfolio-stat-value">${total_pipeline_value:,.0f}</div>
+                    <div class="portfolio-stat-label">Pipeline Value</div>
+                </div>
+            </div>
+            
+            <div class="account-list">
+                <div class="account-list-title">Included Accounts</div>
+                <div class="account-list-items">
+                    {''.join([f'<span class="account-tag">{name}</span>' for name in customer_names])}
+                </div>
+            </div>
+        </div>
+    """
+    
     # Generate content for each customer
     for idx, customer_data in enumerate(customers_data):
-        # Unpack with support for extended tuple (name, orders, invoices, deals, line_items, ncrs)
         customer_name = customer_data[0]
         customer_orders = customer_data[1]
         customer_invoices = customer_data[2]
@@ -1232,28 +2676,41 @@ def generate_combined_qbr_html(customers_data, rep_name):
         customer_line_items = customer_data[4] if len(customer_data) > 4 else None
         customer_ncrs = customer_data[5] if len(customer_data) > 5 else None
         
-        # Add page break divider for customers after the first
-        if idx > 0:
-            html += '<div class="customer-divider"></div>'
-        
-        # Generate this customer's content by calling the single-customer function
+        # Generate this customer's individual report content
         single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
         
-        # Extract just the body content (between <body> and </body>)
-        body_match = re.search(r'<body>(.*?)</body>', single_html, re.DOTALL)
-        if body_match:
-            body_content = body_match.group(1)
-            # Remove the footer from individual reports (we'll add one at the end)
-            body_content = re.sub(r'<div class="footer">.*?</div>', '', body_content, flags=re.DOTALL)
-            html += body_content
+        # Extract just the main content (skip cover and footer)
+        # Find the main-content div and extract its contents
+        main_match = re.search(r'<div class="main-content">(.*?)</div>\s*<div class="footer">', single_html, re.DOTALL)
+        
+        if main_match:
+            main_content = main_match.group(1)
+            
+            # Add customer section with header
+            customer_revenue = customer_invoices['Amount'].sum() if not customer_invoices.empty and 'Amount' in customer_invoices.columns else 0
+            customer_order_count = len(customer_invoices) if not customer_invoices.empty else 0
+            
+            html += f"""
+            <div class="customer-section">
+                <div class="customer-header">
+                    <h2>{customer_name}</h2>
+                    <div class="customer-meta">
+                        <span>💰 ${customer_revenue:,.0f} Lifetime Value</span>
+                        <span>📦 {customer_order_count} Orders</span>
+                        <span>#{idx + 1} of {num_customers}</span>
+                    </div>
+                </div>
+                <div class="main-content">
+                    {main_content}
+                </div>
+            </div>
+            """
     
     # Add combined footer
-    customer_names = ", ".join([c[0] for c in customers_data])
     html += f"""
-        <div class="footer">
-            <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
-            <p style="margin-top: 5px;">Accounts: {customer_names}</p>
-            <p style="margin-top: 5px;">Thank you for your partnership!</p>
+        <div class="portfolio-footer">
+            <div class="footer-main">Thank you for your partnership!</div>
+            <div class="footer-sub">Calyx Containers • {generated_date} • Questions? Contact {rep_name}</div>
         </div>
     </body>
     </html>
@@ -1264,8 +2721,8 @@ def generate_combined_qbr_html(customers_data, rep_name):
 
 def generate_combined_summary_html(customers_data, rep_name):
     """
-    Generate a combined summary HTML report that uses the same format as individual reports.
-    Just aggregates the data from all selected customers.
+    Generate a combined summary HTML report that aggregates data from all selected customers
+    into a single unified view.
     """
     customer_names = [c[0] for c in customers_data]
     num_customers = len(customers_data)
@@ -1279,33 +2736,40 @@ def generate_combined_summary_html(customers_data, rep_name):
     all_line_items = pd.DataFrame()
     all_ncrs = pd.DataFrame()
     if len(customers_data) > 0 and len(customers_data[0]) > 4:
-        all_line_items = pd.concat([data[4] for data in customers_data if len(data) > 4 and not data[4].empty], ignore_index=True) if any(len(data) > 4 and not data[4].empty for data in customers_data) else pd.DataFrame()
+        all_line_items = pd.concat([data[4] for data in customers_data if len(data) > 4 and data[4] is not None and not data[4].empty], ignore_index=True) if any(len(data) > 4 and data[4] is not None and not data[4].empty for data in customers_data) else pd.DataFrame()
     if len(customers_data) > 0 and len(customers_data[0]) > 5:
-        all_ncrs = pd.concat([data[5] for data in customers_data if len(data) > 5 and not data[5].empty], ignore_index=True) if any(len(data) > 5 and not data[5].empty for data in customers_data) else pd.DataFrame()
+        all_ncrs = pd.concat([data[5] for data in customers_data if len(data) > 5 and data[5] is not None and not data[5].empty], ignore_index=True) if any(len(data) > 5 and data[5] is not None and not data[5].empty for data in customers_data) else pd.DataFrame()
     
-    # Use the same report generator with a combined customer name
-    combined_name = f"Combined Summary ({num_customers} Customers)"
+    # Generate the combined report using unified data
+    combined_name = f"Portfolio Summary ({num_customers} Accounts)"
     
-    # Generate report using same format as individual reports
+    # Generate the base report
     html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals, all_line_items, all_ncrs)
     
-    # Add a customer list section after the header
+    # Build customer tags
+    customer_tags = ''.join([f'<span style="background: white; border: 1px solid #bfdbfe; color: #1e40af; padding: 5px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 500;">{name}</span>' for name in customer_names])
+    
+    # Add a customer list banner after the cover
     customer_list_html = f"""
         <div style="
-            background: #f0fdf4;
-            border: 1px solid #bbf7d0;
-            border-radius: 8px;
-            padding: 15px 20px;
-            margin-bottom: 30px;
+            background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+            border: 2px solid #93c5fd;
+            border-radius: 12px;
+            padding: 20px 30px;
+            margin: 0 50px 30px 50px;
         ">
-            <div style="font-weight: 600; color: #059669; margin-bottom: 8px;">Included Accounts ({num_customers}):</div>
-            <div style="color: #1e293b;">{', '.join(customer_names)}</div>
+            <div style="font-weight: 700; color: #1e40af; margin-bottom: 10px; font-size: 1rem;">
+                📊 Accounts Included in This Summary ({num_customers})
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                {customer_tags}
+            </div>
         </div>
     """
     
-    # Insert customer list after the header div
-    html = html.replace('</div>\n        \n        <div class="section">', 
-                        f'</div>\n        \n        {customer_list_html}\n        <div class="section">', 1)
+    # Insert customer list after the cover div closes
+    html = html.replace('<div class="main-content">', 
+                        f'{customer_list_html}\n        <div class="main-content">', 1)
     
     return html
 
@@ -2897,6 +4361,10 @@ def create_unified_product_view(df):
     - 4mL Concentrate Jar (complete): $500
     
     This is for customer-facing summaries.
+    
+    Creates two new columns:
+    - 'Unified Category': Size-specific (e.g., "Drams (25D)", "Concentrates (4mL)")
+    - 'Parent Category': Rolled up (e.g., "Drams", "Concentrates")
     """
     if df.empty:
         return df
@@ -2946,6 +4414,27 @@ def create_unified_product_view(df):
         return cat
     
     df['Unified Category'] = df.apply(get_unified_category, axis=1)
+    
+    # Create Parent Category (rolled up - for summary views)
+    # This groups all Drams together, all Concentrates together, etc.
+    def get_parent_category(unified_cat):
+        if pd.isna(unified_cat):
+            return 'Other'
+        
+        unified = str(unified_cat)
+        
+        # Roll up Drams (25D, 45D, 15D, 145D) → Drams
+        if unified.startswith('Drams'):
+            return 'Drams'
+        
+        # Roll up Concentrates (4mL, 7mL) → Concentrates
+        if unified.startswith('Concentrates'):
+            return 'Concentrates'
+        
+        # Everything else stays as-is
+        return unified
+    
+    df['Parent Category'] = df['Unified Category'].apply(get_parent_category)
     
     return df
 
@@ -3038,35 +4527,36 @@ def render_line_item_analysis_section(line_items_df, customer_name):
     analysis_tabs = st.tabs(["📊 Product Categories", "🔍 Category Breakdown", "📈 Purchase Patterns"])
     
     # =========================================================================
-    # TAB 1: Product Categories Overview (Customer-Friendly Unified View)
+    # TAB 1: Product Categories Overview (Parent Categories with Expandable Sub-categories)
     # =========================================================================
     with analysis_tabs[0]:
         st.markdown("#### Product Categories")
-        st.caption("Your purchases organized by product type (components rolled up)")
+        st.caption("Your purchases organized by product type (click to expand sub-categories)")
         
-        # Group by Unified Category for customer-friendly view
-        category_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
+        # Group by Parent Category for rolled-up view
+        parent_col = 'Parent Category' if 'Parent Category' in product_df.columns else 'Unified Category'
+        unified_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
         
-        category_summary = product_df.groupby(category_col).agg({
+        parent_summary = product_df.groupby(parent_col).agg({
             'Amount': 'sum',
             'Quantity': 'sum',
             'Document Number': 'nunique'
         }).reset_index()
-        category_summary.columns = ['Category', 'Revenue', 'Units', 'Orders']
-        category_summary = category_summary.sort_values('Revenue', ascending=False)
+        parent_summary.columns = ['Category', 'Revenue', 'Units', 'Orders']
+        parent_summary = parent_summary.sort_values('Revenue', ascending=False)
         
         # Calculate percentages (of product revenue, not including fees)
-        category_summary['% of Revenue'] = (category_summary['Revenue'] / product_revenue * 100).round(1) if product_revenue > 0 else 0
+        parent_summary['% of Revenue'] = (parent_summary['Revenue'] / product_revenue * 100).round(1) if product_revenue > 0 else 0
         
-        if len(category_summary) > 0:
-            # Two columns: chart and summary
+        if len(parent_summary) > 0:
+            # Two columns: chart and summary with expandable sub-categories
             chart_col, summary_col = st.columns([1, 1])
             
             with chart_col:
-                # Donut chart
+                # Donut chart using Parent Categories
                 fig = go.Figure(data=[go.Pie(
-                    labels=category_summary['Category'],
-                    values=category_summary['Revenue'],
+                    labels=parent_summary['Category'],
+                    values=parent_summary['Revenue'],
                     hole=0.45,
                     textinfo='label+percent',
                     textposition='outside',
@@ -3082,22 +4572,31 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                 st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_category_pie")
             
             with summary_col:
-                # Category cards
-                st.markdown("**Revenue Breakdown**")
-                for _, row in category_summary.iterrows():
+                # Parent category cards with expandable sub-categories
+                st.markdown("**Revenue Breakdown** *(click to expand)*")
+                
+                for _, row in parent_summary.iterrows():
+                    parent_cat = row['Category']
                     revenue_str = f"${row['Revenue']:,.0f}"
                     units_str = f"{row['Units']:,.0f} units"
                     pct_str = f"{row['% of Revenue']:.1f}%"
+                    
+                    # Check if this parent category has sub-categories
+                    parent_cat_df = product_df[product_df[parent_col] == parent_cat]
+                    sub_categories = parent_cat_df[unified_col].unique()
+                    has_sub_cats = len(sub_categories) > 1 or (len(sub_categories) == 1 and sub_categories[0] != parent_cat)
+                    
+                    # Main category card
                     st.markdown(f"""
                         <div style="
                             background: linear-gradient(90deg, #1e293b 0%, #0f172a 100%);
                             padding: 12px 16px;
                             border-radius: 8px;
-                            margin-bottom: 8px;
+                            margin-bottom: 4px;
                             border-left: 4px solid #3b82f6;
                         ">
                             <div style="display: flex; justify-content: space-between; align-items: center;">
-                                <span style="color: #f1f5f9; font-weight: 600;">{row['Category']}</span>
+                                <span style="color: #f1f5f9; font-weight: 600;">{parent_cat}</span>
                                 <span style="color: #10b981; font-weight: 700;">{revenue_str}</span>
                             </div>
                             <div style="color: #94a3b8; font-size: 0.85rem; margin-top: 4px;">
@@ -3105,10 +4604,49 @@ def render_line_item_analysis_section(line_items_df, customer_name):
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
+                    
+                    # Expandable sub-categories if they exist
+                    if has_sub_cats:
+                        with st.expander(f"↳ View {parent_cat} breakdown", expanded=False):
+                            # Get sub-category breakdown
+                            subcat_breakdown = parent_cat_df.groupby(unified_col).agg({
+                                'Amount': 'sum',
+                                'Quantity': 'sum',
+                                'Document Number': 'nunique'
+                            }).reset_index()
+                            subcat_breakdown.columns = ['Sub-Category', 'Revenue', 'Units', 'Orders']
+                            subcat_breakdown = subcat_breakdown.sort_values('Revenue', ascending=False)
+                            subcat_breakdown['% of Parent'] = (subcat_breakdown['Revenue'] / row['Revenue'] * 100).round(1) if row['Revenue'] > 0 else 0
+                            
+                            for _, sub_row in subcat_breakdown.iterrows():
+                                sub_name = sub_row['Sub-Category']
+                                # Clean up the sub-category name (remove parent prefix for cleaner display)
+                                display_name = sub_name.replace(f"{parent_cat} ", "").replace(f"{parent_cat}", sub_name)
+                                if display_name == parent_cat:
+                                    display_name = sub_name
+                                
+                                st.markdown(f"""
+                                    <div style="
+                                        background: #0f172a;
+                                        padding: 8px 12px;
+                                        border-radius: 6px;
+                                        margin-bottom: 4px;
+                                        margin-left: 12px;
+                                        border-left: 2px solid #475569;
+                                    ">
+                                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                                            <span style="color: #cbd5e1; font-size: 0.9rem;">{display_name}</span>
+                                            <span style="color: #10b981; font-weight: 600;">${sub_row['Revenue']:,.0f}</span>
+                                        </div>
+                                        <div style="color: #64748b; font-size: 0.8rem;">
+                                            {sub_row['Units']:,.0f} units • {sub_row['% of Parent']:.1f}% of {parent_cat}
+                                        </div>
+                                    </div>
+                                """, unsafe_allow_html=True)
             
             # Detailed table
             with st.expander("📋 View Category Details Table"):
-                display_df = category_summary.copy()
+                display_df = parent_summary.copy()
                 display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
                 display_df['Units'] = display_df['Units'].apply(lambda x: f"{x:,.0f}")
                 display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
@@ -3121,12 +4659,12 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         st.markdown("#### Category Breakdown")
         st.caption("Drill down into each product category to see components and sizes")
         
-        # Get categories ordered by revenue (using Unified Category)
-        category_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
-        categories_ordered = category_summary['Category'].tolist()
+        # Get categories ordered by revenue (using Parent Category for drill-down)
+        parent_col = 'Parent Category' if 'Parent Category' in product_df.columns else 'Unified Category'
+        categories_ordered = parent_summary['Category'].tolist()
         
         for category in categories_ordered:
-            cat_df = product_df[product_df[category_col] == category]
+            cat_df = product_df[product_df[parent_col] == category]
             cat_revenue = cat_df['Amount'].sum()
             cat_units = cat_df['Quantity'].sum()
             
@@ -3590,8 +5128,8 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
                 hide_index=True
             )
     
-    # NCR Details Expander
-    with st.expander("📋 View NCR Details"):
+    # NCR Details Expander with filtering
+    with st.expander("📋 View NCR Details (click ❌ to exclude)"):
         # Select columns to display - include source, product type, and resolution info
         display_cols = []
         for col in ['NC Number', 'NCR Source', 'Product Type Affected', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
@@ -3599,7 +5137,69 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
             if col in customer_ncrs.columns:
                 display_cols.append(col)
         
-        if display_cols:
+        if display_cols and 'NC Number' in customer_ncrs.columns:
+            # Get list of all NCR numbers for filtering
+            all_ncr_numbers = customer_ncrs['NC Number'].dropna().unique().tolist()
+            
+            # Create multiselect for NCRs to INCLUDE (deselect to exclude)
+            st.markdown("**Select NCRs to include in analysis:**")
+            selected_ncrs = st.multiselect(
+                "NCRs to include",
+                options=all_ncr_numbers,
+                default=all_ncr_numbers,
+                key=f"{key_prefix}_ncr_filter",
+                label_visibility="collapsed"
+            )
+            
+            # Show count of excluded NCRs
+            excluded_count = len(all_ncr_numbers) - len(selected_ncrs)
+            if excluded_count > 0:
+                st.markdown(f"""
+                    <div style="
+                        background: #7f1d1d;
+                        padding: 8px 12px;
+                        border-radius: 6px;
+                        margin-bottom: 10px;
+                        color: #fecaca;
+                        font-size: 0.85rem;
+                    ">
+                        ❌ {excluded_count} NCR(s) excluded from display
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Filter the dataframe
+            filtered_ncrs = customer_ncrs[customer_ncrs['NC Number'].isin(selected_ncrs)].copy()
+            
+            if not filtered_ncrs.empty:
+                display_df = filtered_ncrs[display_cols].copy()
+                
+                # Format quantity
+                if 'Total Quantity Affected' in display_df.columns:
+                    display_df['Total Quantity Affected'] = display_df['Total Quantity Affected'].apply(
+                        lambda x: f"{x:,.0f}" if pd.notna(x) and x > 0 else "-"
+                    )
+                
+                # Format dates
+                if 'Date Submitted' in display_df.columns:
+                    display_df['Date Submitted'] = pd.to_datetime(
+                        display_df['Date Submitted'], errors='coerce'
+                    ).dt.strftime('%Y-%m-%d').fillna('')
+                
+                if 'Close Date' in display_df.columns:
+                    display_df['Close Date'] = pd.to_datetime(
+                        display_df['Close Date'], errors='coerce'
+                    ).dt.strftime('%Y-%m-%d').fillna('')
+                
+                # Format resolution days
+                if 'Resolution Days' in display_df.columns:
+                    display_df['Resolution Days'] = display_df['Resolution Days'].apply(
+                        lambda x: f"{x:.0f} days" if pd.notna(x) else "-"
+                    )
+                
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("All NCRs have been excluded.")
+        elif display_cols:
             display_df = customer_ncrs[display_cols].copy()
             
             # Format quantity
