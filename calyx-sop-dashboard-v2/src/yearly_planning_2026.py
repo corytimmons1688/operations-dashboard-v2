@@ -5809,17 +5809,39 @@ def render_yearly_planning_2026():
     # Customer selector (filtered by rep) - MULTI-SELECT with NO default
     customer_list = get_customers_for_rep(selected_rep, sales_orders_df, invoices_df)
     
+    # Add "Company Overview" option when "All Reps" is selected (for leadership)
+    COMPANY_OVERVIEW_OPTION = "📊 Company Overview (All Data)"
+    show_company_overview = selected_rep == "All Reps"
+    
     with col2:
         if not customer_list:
             st.warning(f"No customers found for {selected_rep}")
             return
         
-        selected_customers = st.multiselect(
-            f"CUSTOMERS ({len(customer_list)} accounts)", 
-            customer_list,
-            placeholder="Select customers...",
-            key="qbr_customer_selector"
-        )
+        # Add Company Overview as first option if All Reps selected
+        if show_company_overview:
+            display_list = [COMPANY_OVERVIEW_OPTION] + customer_list
+            selected_customers = st.multiselect(
+                f"CUSTOMERS ({len(customer_list)} accounts)", 
+                display_list,
+                placeholder="Select customers or Company Overview...",
+                key="qbr_customer_selector"
+            )
+        else:
+            selected_customers = st.multiselect(
+                f"CUSTOMERS ({len(customer_list)} accounts)", 
+                customer_list,
+                placeholder="Select customers...",
+                key="qbr_customer_selector"
+            )
+    
+    # Check if Company Overview is selected
+    is_company_overview = COMPANY_OVERVIEW_OPTION in selected_customers
+    
+    # If Company Overview selected, remove it from the list and use all customers
+    if is_company_overview:
+        selected_customers = customer_list  # Use ALL customers
+        selected_rep_display = "Leadership"  # Display name for reports
     
     # =========================================================================
     # PDF CONFIGURATION SECTION
@@ -6004,20 +6026,37 @@ def render_yearly_planning_2026():
         'quality_ncr': True
     })
     
+    # Set the rep display name (use "Leadership" for Company Overview, otherwise selected rep)
+    if not is_company_overview:
+        selected_rep_display = selected_rep
+    
     # Empty state - show helpful message
     if not selected_customers:
         st.markdown("---")
-        st.markdown("""
-            <div style="
-                text-align: center;
-                padding: 3rem;
-                color: #64748b;
-            ">
-                <h3 style="color: #94a3b8; margin-bottom: 1rem;">👆 Select one or more customers above</h3>
-                <p>Choose customers from the dropdown to view their QBR data and generate reports.</p>
-                <p style="margin-top: 0.5rem; font-size: 0.9rem;">You can select multiple customers to compare or generate a combined report.</p>
-            </div>
-        """, unsafe_allow_html=True)
+        if show_company_overview:
+            st.markdown("""
+                <div style="
+                    text-align: center;
+                    padding: 3rem;
+                    color: #64748b;
+                ">
+                    <h3 style="color: #94a3b8; margin-bottom: 1rem;">👆 Select customers or Company Overview above</h3>
+                    <p>Choose individual customers to view their QBR data, or select <strong style="color: #a78bfa;">📊 Company Overview</strong> for a company-wide health report.</p>
+                    <p style="margin-top: 0.5rem; font-size: 0.9rem;">Company Overview aggregates all data across all customers and reps.</p>
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+                <div style="
+                    text-align: center;
+                    padding: 3rem;
+                    color: #64748b;
+                ">
+                    <h3 style="color: #94a3b8; margin-bottom: 1rem;">👆 Select one or more customers above</h3>
+                    <p>Choose customers from the dropdown to view their QBR data and generate reports.</p>
+                    <p style="margin-top: 0.5rem; font-size: 0.9rem;">You can select multiple customers to compare or generate a combined report.</p>
+                </div>
+            """, unsafe_allow_html=True)
         return
     
     # =========================================================================
@@ -6259,23 +6298,58 @@ def render_yearly_planning_2026():
     
     # Download buttons section
     date_info = f" | 📅 {date_label}" if date_label != "All Time" else ""
-    st.markdown(f"""
-        <div style="
-            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
-            padding: 1rem 1.5rem;
-            border-radius: 10px;
-            border-left: 4px solid #10b981;
-            margin-bottom: 1rem;
-        ">
-            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">📥 Download Reports{date_info}</h3>
-        </div>
-    """, unsafe_allow_html=True)
+    
+    # Special header for Company Overview mode
+    if is_company_overview:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 50%, #8b5cf6 100%);
+                padding: 1rem 1.5rem;
+                border-radius: 10px;
+                margin-bottom: 1rem;
+            ">
+                <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">🏢 Company Health Report{date_info}</h3>
+                <p style="color: rgba(255,255,255,0.8); margin: 0.25rem 0 0 0; font-size: 0.85rem;">
+                    Aggregated data across {len(selected_customers)} customers
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+                padding: 1rem 1.5rem;
+                border-radius: 10px;
+                border-left: 4px solid #10b981;
+                margin-bottom: 1rem;
+            ">
+                <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">📥 Download Reports{date_info}</h3>
+            </div>
+        """, unsafe_allow_html=True)
     
     # Create download buttons
-    if len(selected_customers) == 1:
+    if is_company_overview:
+        # Company Overview mode - single combined report
+        num_customers = len(selected_customers)
+        
+        # Generate company-wide report
+        company_summary_html = generate_combined_summary_html(all_customers_data, "Calyx Containers", date_label, pdf_config)
+        
+        col_spacer1, col_btn, col_spacer2 = st.columns([1.5, 2, 1.5])
+        with col_btn:
+            st.download_button(
+                label=f"🏢 Download Company Health Report ({num_customers} accounts)",
+                data=company_summary_html,
+                file_name=f"Company_Health_Report_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True,
+                key="download_company_overview"
+            )
+            st.caption("Complete company-wide metrics aggregated across all accounts")
+    elif len(selected_customers) == 1:
         # Single customer - just one download button
         customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
-        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
+        html_report = generate_qbr_html(customer_name, selected_rep_display, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
         with col_btn:
@@ -6292,8 +6366,8 @@ def render_yearly_planning_2026():
         num_customers = len(selected_customers)
         
         # Generate reports with pdf_config
-        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep, date_label, pdf_config)
-        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep, date_label, pdf_config)
+        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep_display, date_label, pdf_config)
+        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep_display, date_label, pdf_config)
         
         # Two main download buttons side by side
         col1, col2 = st.columns(2)
@@ -6302,7 +6376,7 @@ def render_yearly_planning_2026():
             st.download_button(
                 label=f"📊 Combined Summary ({num_customers} customers)",
                 data=combined_summary_html,
-                file_name=f"Combined_Summary_{selected_rep.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                file_name=f"Combined_Summary_{selected_rep_display.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
                 mime="text/html",
                 use_container_width=True,
                 key="download_combined_summary"
@@ -6313,7 +6387,7 @@ def render_yearly_planning_2026():
             st.download_button(
                 label=f"📑 All Individual Reports ({num_customers})",
                 data=all_reports_html,
-                file_name=f"All_Reports_{selected_rep.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                file_name=f"All_Reports_{selected_rep_display.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
                 mime="text/html",
                 use_container_width=True,
                 key="download_all_reports"
@@ -6324,7 +6398,7 @@ def render_yearly_planning_2026():
         with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
             for idx, (customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs) in enumerate(all_customers_data):
-                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
+                html_report = generate_qbr_html(customer_name, selected_rep_display, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
                 with cols[idx % 3]:
                     st.download_button(
                         label=f"📄 {customer_name[:20]}{'...' if len(customer_name) > 20 else ''}",
@@ -6347,7 +6421,49 @@ def render_yearly_planning_2026():
     date_filter_text = f" &nbsp;|&nbsp; 📅 {date_label}" if date_label != "All Time" else ""
     
     # Display customer QBR sections
-    if len(all_customers_data) == 1:
+    if is_company_overview:
+        # Company Overview mode - show combined view with special header
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 50%, #a78bfa 100%);
+                padding: 1.5rem 2rem;
+                border-radius: 12px;
+                margin-bottom: 1rem;
+            ">
+                <h1 style="color: white; margin: 0; font-size: 2rem;">🏢 Company Health Overview</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                    Calyx Containers &nbsp;|&nbsp; {len(all_customers_data)} Active Accounts{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Aggregate all data for company overview
+        all_orders = pd.concat([data[1] for data in all_customers_data if data[1] is not None and not data[1].empty], ignore_index=True) if any(data[1] is not None and not data[1].empty for data in all_customers_data) else pd.DataFrame()
+        all_invoices = pd.concat([data[2] for data in all_customers_data if data[2] is not None and not data[2].empty], ignore_index=True) if any(data[2] is not None and not data[2].empty for data in all_customers_data) else pd.DataFrame()
+        all_deals = pd.concat([data[3] for data in all_customers_data if data[3] is not None and not data[3].empty], ignore_index=True) if any(data[3] is not None and not data[3].empty for data in all_customers_data) else pd.DataFrame()
+        all_line_items = pd.concat([data[4] for data in all_customers_data if len(data) > 4 and data[4] is not None and not data[4].empty], ignore_index=True) if any(len(data) > 4 and data[4] is not None and not data[4].empty for data in all_customers_data) else pd.DataFrame()
+        all_ncrs = pd.concat([data[5] for data in all_customers_data if len(data) > 5 and data[5] is not None and not data[5].empty], ignore_index=True) if any(len(data) > 5 and data[5] is not None and not data[5].empty for data in all_customers_data) else pd.DataFrame()
+        
+        # Render all sections with aggregated data
+        render_pending_orders_section(all_orders)
+        st.markdown("---")
+        render_open_invoices_section(all_invoices)
+        st.markdown("---")
+        render_revenue_section(all_invoices)
+        st.markdown("---")
+        render_on_time_section(all_orders)
+        st.markdown("---")
+        render_order_cadence_section(all_orders)
+        st.markdown("---")
+        render_order_type_mix_section(all_orders)
+        st.markdown("---")
+        render_pipeline_section(all_deals, "Company")
+        st.markdown("---")
+        render_line_item_analysis_section(all_line_items, "Company")
+        st.markdown("---")
+        render_ncr_section(all_ncrs, all_orders, "Company")
+        
+    elif len(all_customers_data) == 1:
         # Single customer - display directly
         selected_customer, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
         
@@ -6360,7 +6476,7 @@ def render_yearly_planning_2026():
             ">
                 <h1 style="color: white; margin: 0; font-size: 2rem;">📋 {selected_customer}</h1>
                 <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                    Sales Rep: {selected_rep}{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                    Sales Rep: {selected_rep_display}{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
                 </p>
             </div>
         """, unsafe_allow_html=True)
