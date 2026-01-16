@@ -3226,47 +3226,107 @@ def load_qbr_data():
             # Priority 3: Extract from Ticket name (format "NCR600 - Customer Name")
             
             def extract_customer_from_ticket(ticket_name):
-                """Extract customer name from ticket format 'NCR### - Customer Name'"""
-                if not ticket_name or ticket_name == '':
+                """Extract customer name from ticket formats:
+                - 'NCR ### - Customer Name' (with dash)
+                - 'NCR ### Customer Name' (no dash)
+                - Also extracts NCR number for reference
+                """
+                import re
+                if not ticket_name or ticket_name == '' or pd.isna(ticket_name):
                     return ''
-                # Try to split on ' - ' and take everything after
-                if ' - ' in ticket_name:
-                    parts = ticket_name.split(' - ', 1)
+                
+                ticket_str = str(ticket_name).strip()
+                
+                # Pattern 1: "NCR ### - Customer Name" (with dash)
+                if ' - ' in ticket_str:
+                    parts = ticket_str.split(' - ', 1)
                     if len(parts) > 1:
-                        return parts[1].strip()
+                        customer_part = parts[1].strip()
+                        # Remove any trailing issue description (after another dash or parenthetical)
+                        # e.g., "Acreage (OH) Smearing" -> "Acreage (OH)"
+                        return customer_part
+                
+                # Pattern 2: "NCR ### Customer Name" (no dash)
+                # Match NCR followed by number, then capture everything after
+                ncr_match = re.match(r'NCR\s*(\d+)\s+(.+)', ticket_str, re.IGNORECASE)
+                if ncr_match:
+                    customer_part = ncr_match.group(2).strip()
+                    return customer_part
+                
                 return ''
+            
+            def extract_ncr_number_from_ticket(ticket_name):
+                """Extract NCR number from ticket name"""
+                import re
+                if not ticket_name or ticket_name == '' or pd.isna(ticket_name):
+                    return None
+                
+                ticket_str = str(ticket_name).strip()
+                ncr_match = re.search(r'NCR\s*(\d+)', ticket_str, re.IGNORECASE)
+                if ncr_match:
+                    return ncr_match.group(1)
+                return None
             
             def match_customer(row, valid_customers):
                 """Match customer using priority logic with fuzzy matching"""
                 from difflib import get_close_matches
+                import re
+                
+                def normalize_for_matching(name):
+                    """Normalize customer name for better matching"""
+                    if not name:
+                        return ''
+                    name = str(name).strip()
+                    # Remove common state abbreviations at the end (NY, MA, OH, NJ, PA, IL, etc.)
+                    name = re.sub(r'\s+(NY|MA|OH|NJ|PA|IL|CA|CO|FL|TX|WA|OR|AZ|NV|MI|NC|SC|GA|VA|MD|CT|RI|NH|VT|ME|DE|WV|KY|TN|AL|MS|LA|AR|MO|IA|MN|WI|IN|OK|KS|NE|SD|ND|MT|WY|ID|UT|NM|HI|AK|DC)$', '', name, flags=re.IGNORECASE)
+                    # Remove parenthetical state codes like (OH), (NY)
+                    name = re.sub(r'\s*\([A-Z]{2}\)\s*', ' ', name)
+                    # Remove trailing description words
+                    name = re.sub(r'\s+(Smearing|Defect|Issue|Problem|Damage|Error).*$', '', name, flags=re.IGNORECASE)
+                    return name.strip()
+                
+                def try_match(name, customers, cutoff=0.7):
+                    """Try to match a name against valid customers"""
+                    if not name:
+                        return None
+                    # Exact match first
+                    if name in customers:
+                        return name
+                    # Normalized exact match
+                    normalized = normalize_for_matching(name)
+                    for cust in customers:
+                        if normalize_for_matching(cust) == normalized:
+                            return cust
+                    # Fuzzy match
+                    matches = get_close_matches(name, customers, n=1, cutoff=cutoff)
+                    if matches:
+                        return matches[0]
+                    # Fuzzy match on normalized
+                    if normalized != name:
+                        matches = get_close_matches(normalized, customers, n=1, cutoff=cutoff)
+                        if matches:
+                            return matches[0]
+                    return None
                 
                 # Priority 1: Company Name 2 (exact - same naming convention)
                 company_name_2 = row.get('Company Name 2', '')
-                if company_name_2 and company_name_2 != '':
+                if company_name_2 and company_name_2 != '' and not pd.isna(company_name_2):
                     return company_name_2
                 
                 # Priority 2: Company Name (try exact first, then fuzzy)
                 company_name = row.get('Company Name', '')
-                if company_name and company_name != '':
-                    # Try exact match first
-                    if company_name in valid_customers:
-                        return company_name
-                    # Fuzzy match
-                    matches = get_close_matches(company_name, valid_customers, n=1, cutoff=0.8)
-                    if matches:
-                        return matches[0]
+                if company_name and company_name != '' and not pd.isna(company_name):
+                    match = try_match(company_name, valid_customers, cutoff=0.8)
+                    if match:
+                        return match
                 
                 # Priority 3: Extract from Ticket name and fuzzy match
                 ticket_name = row.get('Ticket name', '')
                 extracted = extract_customer_from_ticket(ticket_name)
                 if extracted:
-                    # Try exact match first
-                    if extracted in valid_customers:
-                        return extracted
-                    # Fuzzy match
-                    matches = get_close_matches(extracted, valid_customers, n=1, cutoff=0.7)
-                    if matches:
-                        return matches[0]
+                    match = try_match(extracted, valid_customers, cutoff=0.6)
+                    if match:
+                        return match
                 
                 return ''  # No match found
             
@@ -3354,7 +3414,13 @@ def load_qbr_data():
                 return 'Defective Product'
             
             # Map HubSpot columns to standardized NCR columns
-            hb_ncr_df['NC Number'] = hb_ncr_df.get('Ticket ID', '')
+            # Extract NCR number from ticket name (e.g., "NCR 988 Acreage NY" → "NCR-988")
+            if 'Ticket name' in hb_ncr_df.columns:
+                hb_ncr_df['NC Number'] = hb_ncr_df['Ticket name'].apply(
+                    lambda x: f"NCR-{extract_ncr_number_from_ticket(x)}" if extract_ncr_number_from_ticket(x) else str(x)[:30]
+                )
+            else:
+                hb_ncr_df['NC Number'] = hb_ncr_df.get('Ticket ID', '').apply(lambda x: f"HB-{x}" if x else '')
             hb_ncr_df['Date Submitted'] = hb_ncr_df.get('Create date', pd.NaT)
             hb_ncr_df['Status'] = hb_ncr_df.get('Ticket status', '')
             hb_ncr_df['Defect Summary'] = hb_ncr_df.get('Ticket description', '')
@@ -5141,13 +5207,75 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
         """, unsafe_allow_html=True)
         return
     
-    # Calculate NCR metrics
-    ncr_count = len(customer_ncrs)
+    # ===== NCR FILTER - MOVED TO TOP =====
+    # Get list of all NCR numbers for filtering
+    all_ncr_numbers = []
+    if 'NC Number' in customer_ncrs.columns:
+        all_ncr_numbers = customer_ncrs['NC Number'].dropna().unique().tolist()
+    
+    # NCR Filter expander at the top
+    with st.expander("🔧 Filter NCRs (exclude specific NCRs from analysis)", expanded=False):
+        if all_ncr_numbers:
+            st.markdown("**Deselect NCRs to exclude them from ALL metrics and charts below:**")
+            selected_ncrs = st.multiselect(
+                "NCRs to include",
+                options=all_ncr_numbers,
+                default=all_ncr_numbers,
+                key=f"{key_prefix}_ncr_filter",
+                label_visibility="collapsed"
+            )
+            
+            # Show count of excluded NCRs
+            excluded_count = len(all_ncr_numbers) - len(selected_ncrs)
+            if excluded_count > 0:
+                st.markdown(f"""
+                    <div style="
+                        background: #7f1d1d;
+                        padding: 8px 12px;
+                        border-radius: 6px;
+                        margin-top: 10px;
+                        color: #fecaca;
+                        font-size: 0.85rem;
+                    ">
+                        ⚠️ {excluded_count} NCR(s) excluded — metrics below reflect filtered data
+                    </div>
+                """, unsafe_allow_html=True)
+        else:
+            selected_ncrs = []
+    
+    # Apply filter to NCR data - this filtered data is used for ALL metrics below
+    if all_ncr_numbers and 'NC Number' in customer_ncrs.columns:
+        filtered_ncrs = customer_ncrs[customer_ncrs['NC Number'].isin(selected_ncrs)].copy()
+    else:
+        filtered_ncrs = customer_ncrs.copy()
+    
+    # Check if all NCRs were filtered out
+    if filtered_ncrs.empty:
+        st.info("All NCRs have been excluded by the filter above. Deselect fewer NCRs to see metrics.")
+        return
+    
+    # Show filter status banner if filtering is active
+    if all_ncr_numbers and len(selected_ncrs) < len(all_ncr_numbers):
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #1e3a5f 0%, #164e63 100%);
+                padding: 10px 16px;
+                border-radius: 8px;
+                border-left: 4px solid #f59e0b;
+                margin-bottom: 1rem;
+            ">
+                <span style="color: #fcd34d; font-weight: 600;">📊 Filtered View:</span>
+                <span style="color: #e2e8f0;"> Showing {len(selected_ncrs)} of {len(all_ncr_numbers)} NCRs</span>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    # ===== CALCULATE METRICS USING FILTERED DATA =====
+    ncr_count = len(filtered_ncrs)
     
     # Get unique Sales Orders with NCRs
     ncr_so_numbers = set()
-    if 'Sales Order' in customer_ncrs.columns:
-        ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
+    if 'Sales Order' in filtered_ncrs.columns:
+        ncr_so_numbers = set(filtered_ncrs['Sales Order'].dropna().unique())
         ncr_so_numbers = {str(so).strip() for so in ncr_so_numbers if str(so).strip()}
     
     # Calculate orders affected
@@ -5156,20 +5284,20 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     
     # Total Quantity Affected
     total_qty_affected = 0
-    if 'Total Quantity Affected' in customer_ncrs.columns:
-        total_qty_affected = customer_ncrs['Total Quantity Affected'].sum()
+    if 'Total Quantity Affected' in filtered_ncrs.columns:
+        total_qty_affected = filtered_ncrs['Total Quantity Affected'].sum()
     
     # Source breakdown
     netsuite_count = 0
     hubspot_count = 0
-    if 'NCR Source' in customer_ncrs.columns:
-        netsuite_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'NetSuite'])
-        hubspot_count = len(customer_ncrs[customer_ncrs['NCR Source'] == 'HubSpot'])
+    if 'NCR Source' in filtered_ncrs.columns:
+        netsuite_count = len(filtered_ncrs[filtered_ncrs['NCR Source'] == 'NetSuite'])
+        hubspot_count = len(filtered_ncrs[filtered_ncrs['NCR Source'] == 'HubSpot'])
     
     # Resolution time metrics (HubSpot data has this)
     avg_resolution = None
-    if 'Resolution Days' in customer_ncrs.columns:
-        resolution_data = customer_ncrs['Resolution Days'].dropna()
+    if 'Resolution Days' in filtered_ncrs.columns:
+        resolution_data = filtered_ncrs['Resolution Days'].dropna()
         if len(resolution_data) > 0:
             avg_resolution = resolution_data.mean()
     
@@ -5194,8 +5322,8 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     
     with col4:
         # Get most common issue type
-        if 'Issue Type' in customer_ncrs.columns:
-            issue_counts = customer_ncrs['Issue Type'].value_counts()
+        if 'Issue Type' in filtered_ncrs.columns:
+            issue_counts = filtered_ncrs['Issue Type'].value_counts()
             top_issue = issue_counts.index[0] if len(issue_counts) > 0 else "N/A"
             top_count = issue_counts.iloc[0] if len(issue_counts) > 0 else 0
             st.metric("Top Issue Type", top_issue, f"{top_count} occurrences")
@@ -5267,13 +5395,13 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
         
         with source_cols[3]:
             # Closed vs Open
-            if 'Close Date' in customer_ncrs.columns or 'Status' in customer_ncrs.columns:
+            if 'Close Date' in filtered_ncrs.columns or 'Status' in filtered_ncrs.columns:
                 closed_count = 0
-                if 'Close Date' in customer_ncrs.columns:
-                    closed_count = customer_ncrs['Close Date'].notna().sum()
-                elif 'Status' in customer_ncrs.columns:
+                if 'Close Date' in filtered_ncrs.columns:
+                    closed_count = filtered_ncrs['Close Date'].notna().sum()
+                elif 'Status' in filtered_ncrs.columns:
                     closed_statuses = ['Closed', 'Resolved', 'Complete', 'Done']
-                    closed_count = customer_ncrs['Status'].isin(closed_statuses).sum()
+                    closed_count = filtered_ncrs['Status'].isin(closed_statuses).sum()
                 
                 open_count = ncr_count - closed_count
                 st.markdown(f"""
@@ -5290,12 +5418,12 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
                 """, unsafe_allow_html=True)
     
     # Issue Type Breakdown
-    if 'Issue Type' in customer_ncrs.columns:
+    if 'Issue Type' in filtered_ncrs.columns:
         st.markdown("**Issue Type Breakdown:**")
         
-        issue_summary = customer_ncrs.groupby('Issue Type').agg({
-            'NC Number': 'count' if 'NC Number' in customer_ncrs.columns else 'size',
-            'Total Quantity Affected': 'sum' if 'Total Quantity Affected' in customer_ncrs.columns else lambda x: 0
+        issue_summary = filtered_ncrs.groupby('Issue Type').agg({
+            'NC Number': 'count' if 'NC Number' in filtered_ncrs.columns else 'size',
+            'Total Quantity Affected': 'sum' if 'Total Quantity Affected' in filtered_ncrs.columns else lambda x: 0
         }).reset_index()
         
         # Rename columns safely
@@ -5349,79 +5477,17 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
                 hide_index=True
             )
     
-    # NCR Details Expander with filtering
-    with st.expander("📋 View NCR Details (click ❌ to exclude)"):
+    # NCR Details Expander - now just shows the filtered data (filtering is done at top)
+    with st.expander("📋 View NCR Details"):
         # Select columns to display - include source, product type, and resolution info
         display_cols = []
         for col in ['NC Number', 'NCR Source', 'Product Type Affected', 'Sales Order', 'Issue Type', 'Priority', 'Status', 
                     'Defect Summary', 'Total Quantity Affected', 'Date Submitted', 'Close Date', 'Resolution Days']:
-            if col in customer_ncrs.columns:
+            if col in filtered_ncrs.columns:
                 display_cols.append(col)
         
-        if display_cols and 'NC Number' in customer_ncrs.columns:
-            # Get list of all NCR numbers for filtering
-            all_ncr_numbers = customer_ncrs['NC Number'].dropna().unique().tolist()
-            
-            # Create multiselect for NCRs to INCLUDE (deselect to exclude)
-            st.markdown("**Select NCRs to include in analysis:**")
-            selected_ncrs = st.multiselect(
-                "NCRs to include",
-                options=all_ncr_numbers,
-                default=all_ncr_numbers,
-                key=f"{key_prefix}_ncr_filter",
-                label_visibility="collapsed"
-            )
-            
-            # Show count of excluded NCRs
-            excluded_count = len(all_ncr_numbers) - len(selected_ncrs)
-            if excluded_count > 0:
-                st.markdown(f"""
-                    <div style="
-                        background: #7f1d1d;
-                        padding: 8px 12px;
-                        border-radius: 6px;
-                        margin-bottom: 10px;
-                        color: #fecaca;
-                        font-size: 0.85rem;
-                    ">
-                        ❌ {excluded_count} NCR(s) excluded from display
-                    </div>
-                """, unsafe_allow_html=True)
-            
-            # Filter the dataframe
-            filtered_ncrs = customer_ncrs[customer_ncrs['NC Number'].isin(selected_ncrs)].copy()
-            
-            if not filtered_ncrs.empty:
-                display_df = filtered_ncrs[display_cols].copy()
-                
-                # Format quantity
-                if 'Total Quantity Affected' in display_df.columns:
-                    display_df['Total Quantity Affected'] = display_df['Total Quantity Affected'].apply(
-                        lambda x: f"{x:,.0f}" if pd.notna(x) and x > 0 else "-"
-                    )
-                
-                # Format dates
-                if 'Date Submitted' in display_df.columns:
-                    display_df['Date Submitted'] = pd.to_datetime(
-                        display_df['Date Submitted'], errors='coerce'
-                    ).dt.strftime('%Y-%m-%d').fillna('')
-                
-                if 'Close Date' in display_df.columns:
-                    display_df['Close Date'] = pd.to_datetime(
-                        display_df['Close Date'], errors='coerce'
-                    ).dt.strftime('%Y-%m-%d').fillna('')
-                
-                # Format resolution days
-                if 'Resolution Days' in display_df.columns:
-                    display_df['Resolution Days'] = display_df['Resolution Days'].apply(
-                        lambda x: f"{x:.0f} days" if pd.notna(x) else "-"
-                    )
-                
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-            else:
-                st.info("All NCRs have been excluded.")
-        elif display_cols:
-            display_df = customer_ncrs[display_cols].copy()
+        if display_cols:
+            display_df = filtered_ncrs[display_cols].copy()
             
             # Format quantity
             if 'Total Quantity Affected' in display_df.columns:
