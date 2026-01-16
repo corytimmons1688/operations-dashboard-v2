@@ -3285,6 +3285,38 @@ def load_qbr_data():
                     name = re.sub(r'\s+(Smearing|Defect|Issue|Problem|Damage|Error).*$', '', name, flags=re.IGNORECASE)
                     return name.strip()
                 
+                def extract_base_company(company_name):
+                    """Extract base company name from various formats:
+                    - 'Parent : Child' format -> 'Parent'
+                    - 'Acreage Holdings:  New York (NY)' -> 'Acreage Holdings'
+                    - 'Acreage Holdings - Massachusetts (MA)' -> 'Acreage Holdings'
+                    """
+                    if not company_name or pd.isna(company_name):
+                        return ''
+                    name = str(company_name).strip()
+                    
+                    # Pattern 1: 'Parent : Child' - take the first part (HubSpot Company Name 2 format)
+                    if ' : ' in name:
+                        return name.split(' : ')[0].strip()
+                    
+                    # Pattern 2: 'Company:  Location (STATE)' - take before first colon
+                    if ':' in name:
+                        base = name.split(':')[0].strip()
+                        # Only use if it looks like a company name (not a URL)
+                        if '.' not in base and len(base) > 3:
+                            return base
+                    
+                    # Pattern 3: 'Company - Location (STATE)' - take before dash if state follows
+                    if ' - ' in name:
+                        parts = name.split(' - ')
+                        if len(parts) >= 2:
+                            # Check if second part looks like a state/location
+                            second = parts[1].strip()
+                            if re.search(r'(Massachusetts|New York|Ohio|Pennsylvania|Illinois|New Jersey|Connecticut|Michigan|Florida|California|Colorado|Texas|Washington|Oregon|Arizona|Nevada|North Carolina|South Carolina|Georgia|Virginia|Maryland|NY|MA|OH|PA|IL|NJ|CT|MI|FL|CA|CO|TX|WA|OR|AZ|NV|NC|SC|GA|VA|MD)', second, re.IGNORECASE):
+                                return parts[0].strip()
+                    
+                    return name
+                
                 def try_match(name, customers, cutoff=0.7):
                     """Try to match a name against valid customers"""
                     if not name:
@@ -3308,15 +3340,27 @@ def load_qbr_data():
                             return matches[0]
                     return None
                 
-                # Priority 1: Company Name 2 (exact - same naming convention)
+                # Priority 1: Company Name 2 - extract base and match
                 company_name_2 = row.get('Company Name 2', '')
                 if company_name_2 and company_name_2 != '' and not pd.isna(company_name_2):
-                    return company_name_2
+                    # Extract base company name (before " : " if present)
+                    base_name = extract_base_company(company_name_2)
+                    if base_name:
+                        match = try_match(base_name, valid_customers, cutoff=0.8)
+                        if match:
+                            return match
                 
                 # Priority 2: Company Name (try exact first, then fuzzy)
                 company_name = row.get('Company Name', '')
                 if company_name and company_name != '' and not pd.isna(company_name):
-                    match = try_match(company_name, valid_customers, cutoff=0.8)
+                    # Also extract base company from Company Name if it has " : " format
+                    base_name = extract_base_company(company_name)
+                    match = try_match(base_name if base_name else company_name, valid_customers, cutoff=0.7)
+                    if match:
+                        return match
+                    # Try the raw company name with state stripped
+                    normalized = normalize_for_matching(company_name)
+                    match = try_match(normalized, valid_customers, cutoff=0.6)
                     if match:
                         return match
                 
@@ -3324,7 +3368,7 @@ def load_qbr_data():
                 ticket_name = row.get('Ticket name', '')
                 extracted = extract_customer_from_ticket(ticket_name)
                 if extracted:
-                    match = try_match(extracted, valid_customers, cutoff=0.6)
+                    match = try_match(extracted, valid_customers, cutoff=0.5)
                     if match:
                         return match
                 
