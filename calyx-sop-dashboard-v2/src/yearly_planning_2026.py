@@ -270,11 +270,19 @@ def create_pipeline_chart(customer_deals):
     return fig
 
 
-def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items=None, customer_ncrs=None):
+def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items=None, customer_ncrs=None, date_label="All Time"):
     """Generate a professional, customer-facing HTML report for PDF export"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
-    report_quarter = f"Q{((datetime.now().month - 1) // 3) + 1} {datetime.now().year}"
+    # Use date_label for period display, fallback to current quarter if All Time
+    if date_label == "All Time":
+        period_display = f"Q{((datetime.now().month - 1) // 3) + 1} {datetime.now().year} Review"
+        purchases_label = "Lifetime Purchases"
+        orders_label = "Total Orders"
+    else:
+        period_display = date_label
+        purchases_label = f"Purchases ({date_label})"
+        orders_label = f"Orders ({date_label})"
     
     # ===== Generate Charts =====
     charts_html = {}
@@ -1379,7 +1387,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     </div>
                     <div class="cover-meta-item">
                         <span>📊</span>
-                        <span>{report_quarter} Review</span>
+                        <span>{period_display}</span>
                     </div>
                 </div>
             </div>
@@ -1392,11 +1400,11 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 <div class="exec-grid">
                     <div class="exec-card">
                         <div class="exec-value green">${total_revenue:,.0f}</div>
-                        <div class="exec-label">Lifetime Purchases</div>
+                        <div class="exec-label">{purchases_label}</div>
                     </div>
                     <div class="exec-card">
                         <div class="exec-value blue">{total_invoices}</div>
-                        <div class="exec-label">Total Orders</div>
+                        <div class="exec-label">{orders_label}</div>
                     </div>
                     <div class="exec-card">
                         <div class="exec-value">${pending_value:,.0f}</div>
@@ -2141,11 +2149,11 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             <div class="section-title">💰 Purchase History</div>
             <div class="metric-row">
                 <div class="metric-card">
-                    <div class="metric-label">Lifetime Purchases</div>
+                    <div class="metric-label">{purchases_label}</div>
                     <div class="metric-value success">${total_revenue:,.0f}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Total Orders</div>
+                    <div class="metric-label">{orders_label}</div>
                     <div class="metric-value">{total_invoices}</div>
                 </div>
                 <div class="metric-card">
@@ -2213,13 +2221,21 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     return html
 
 
-def generate_combined_qbr_html(customers_data, rep_name):
+def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time"):
     """
     Generate a combined HTML report for multiple customers.
     customers_data is a list of tuples: (customer_name, customer_orders, customer_invoices, customer_deals)
     """
     generated_date = datetime.now().strftime('%B %d, %Y')
-    report_quarter = f"Q{((datetime.now().month - 1) // 3) + 1} {datetime.now().year}"
+    # Use date_label for period display and labels
+    if date_label == "All Time":
+        period_display = f"Q{((datetime.now().month - 1) // 3) + 1} {datetime.now().year} Review"
+        revenue_label = "Portfolio Revenue"
+        orders_label = "Total Orders"
+    else:
+        period_display = date_label
+        revenue_label = f"Revenue ({date_label})"
+        orders_label = f"Orders ({date_label})"
     num_customers = len(customers_data)
     customer_names = [c[0] for c in customers_data]
     
@@ -2732,7 +2748,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
         <div class="portfolio-cover">
             <div class="logo-text">Calyx Containers</div>
             <h1>Portfolio Review</h1>
-            <div class="subtitle">{report_quarter} Account Summary</div>
+            <div class="subtitle">{period_display} Account Summary</div>
             
             <div class="portfolio-meta">
                 <span>📅 {generated_date}</span>
@@ -2743,11 +2759,11 @@ def generate_combined_qbr_html(customers_data, rep_name):
             <div class="portfolio-stats">
                 <div class="portfolio-stat">
                     <div class="portfolio-stat-value">${total_portfolio_revenue:,.0f}</div>
-                    <div class="portfolio-stat-label">Portfolio Revenue</div>
+                    <div class="portfolio-stat-label">{revenue_label}</div>
                 </div>
                 <div class="portfolio-stat">
                     <div class="portfolio-stat-value">{total_portfolio_orders}</div>
-                    <div class="portfolio-stat-label">Total Orders</div>
+                    <div class="portfolio-stat-label">{orders_label}</div>
                 </div>
                 <div class="portfolio-stat">
                     <div class="portfolio-stat-value">${total_pipeline_value:,.0f}</div>
@@ -2774,12 +2790,15 @@ def generate_combined_qbr_html(customers_data, rep_name):
         customer_ncrs = customer_data[5] if len(customer_data) > 5 else None
         
         # Generate this customer's individual report content
-        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
+        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label)
         
         # Extract just the main-content section (between main-content div and footer)
         # Find where main-content starts
         main_start = single_html.find('<div class="main-content">')
         footer_start = single_html.find('<div class="footer">')
+        
+        # Label for value depends on date filter
+        value_label = "Period Value" if date_label != "All Time" else "Lifetime Value"
         
         if main_start != -1 and footer_start != -1:
             # Get everything from main-content to just before footer
@@ -2794,7 +2813,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 <div class="customer-header">
                     <h2>{customer_name}</h2>
                     <div class="customer-meta">
-                        <span>💰 ${customer_revenue:,.0f} Lifetime Value</span>
+                        <span>💰 ${customer_revenue:,.0f} {value_label}</span>
                         <span>📦 {customer_order_count} Orders</span>
                         <span>#{idx + 1} of {num_customers}</span>
                     </div>
@@ -2816,7 +2835,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
     return html
 
 
-def generate_combined_summary_html(customers_data, rep_name):
+def generate_combined_summary_html(customers_data, rep_name, date_label="All Time"):
     """
     Generate a combined summary HTML report that aggregates data from all selected customers
     into a single unified view.
@@ -2841,7 +2860,7 @@ def generate_combined_summary_html(customers_data, rep_name):
     combined_name = f"Portfolio Summary ({num_customers} Accounts)"
     
     # Generate the base report
-    html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals, all_line_items, all_ncrs)
+    html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals, all_line_items, all_ncrs, date_label)
     
     # Build customer tags
     customer_tags = ''.join([f'<span style="background: white; border: 1px solid #bfdbfe; color: #1e40af; padding: 5px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 500;">{name}</span>' for name in customer_names])
@@ -5931,7 +5950,7 @@ def render_yearly_planning_2026():
     if len(selected_customers) == 1:
         # Single customer - just one download button
         customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
-        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
+        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
         with col_btn:
@@ -5948,8 +5967,8 @@ def render_yearly_planning_2026():
         num_customers = len(selected_customers)
         
         # Generate reports
-        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep)
-        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep)
+        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep, date_label)
+        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep, date_label)
         
         # Two main download buttons side by side
         col1, col2 = st.columns(2)
@@ -5980,7 +5999,7 @@ def render_yearly_planning_2026():
         with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
             for idx, (customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs) in enumerate(all_customers_data):
-                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs)
+                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label)
                 with cols[idx % 3]:
                     st.download_button(
                         label=f"📄 {customer_name[:20]}{'...' if len(customer_name) > 20 else ''}",
