@@ -771,10 +771,21 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             </table>
             """
     
-    # Pipeline
+    # Forecasted Orders (internally called Pipeline)
     pipeline_html = ""
     pipeline_value = 0
     pipeline_count = 0
+    
+    # Helper to convert internal status to customer-friendly
+    def get_customer_friendly_status(status):
+        status_map = {
+            'Commit': 'Confirmed',
+            'Expect': 'Expected',
+            'Best Case': 'Planned',
+            'Opportunity': 'Potential'
+        }
+        return status_map.get(status, status)
+    
     if not customer_deals.empty:
         open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
         open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)]
@@ -786,18 +797,19 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             for _, deal in open_deals.sort_values('Amount', ascending=False).iterrows():
                 close_date = deal['Close Date'].strftime('%b %d, %Y') if pd.notna(deal['Close Date']) else 'TBD'
                 status = deal['Close Status']
+                friendly_status = get_customer_friendly_status(status)
                 status_class = "commit" if status == "Commit" else "expect" if status == "Expect" else "opportunity"
                 deal_rows += f"""
                 <tr>
                     <td style="font-weight: 500;">{deal['Deal Name']}</td>
                     <td style="text-align: right; color: #059669; font-weight: 600;">${deal['Amount']:,.0f}</td>
-                    <td><span class="pipeline-badge {status_class}">{status}</span></td>
+                    <td><span class="pipeline-badge {status_class}">{friendly_status}</span></td>
                     <td>{close_date}</td>
                 </tr>"""
             
             pipeline_html = f"""
             <table class="data-table">
-                <thead><tr><th>Order Description</th><th style="text-align: right;">Value</th><th>Stage</th><th>Expected</th></tr></thead>
+                <thead><tr><th>Order Description</th><th style="text-align: right;">Value</th><th>Status</th><th>Expected Date</th></tr></thead>
                 <tbody>{deal_rows}</tbody>
             </table>
             """
@@ -1537,20 +1549,20 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 {charts_html.get('ontime', '')}
             </div>
             
-            <!-- Upcoming Orders -->
+            <!-- Forecasted Orders -->
             {f'''
             <div class="section">
                 <div class="section-header">
                     <div class="section-icon">🎯</div>
                     <div>
-                        <div class="section-title">Upcoming Orders</div>
-                        <div class="section-subtitle">Pipeline and forecasted business</div>
+                        <div class="section-title">Forecasted Orders</div>
+                        <div class="section-subtitle">Upcoming orders in your forecast</div>
                     </div>
                 </div>
                 <div class="summary-box">
                     <div class="summary-item">
                         <div class="summary-value">${pipeline_value:,.0f}</div>
-                        <div class="summary-label">Pipeline Value</div>
+                        <div class="summary-label">Forecasted Value</div>
                     </div>
                     <div class="summary-item">
                         <div class="summary-value">{pipeline_count}</div>
@@ -2407,6 +2419,97 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 opacity: 0.8;
             }}
             
+            /* Executive Summary styles */
+            .exec-summary {{
+                background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+                border-radius: 16px;
+                padding: 35px;
+                margin-bottom: 40px;
+                border: 1px solid #e2e8f0;
+            }}
+            
+            .exec-title {{
+                font-size: 1.3rem;
+                font-weight: 700;
+                color: #0f172a;
+                margin-bottom: 25px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            
+            .exec-grid {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 25px;
+            }}
+            
+            .exec-card {{
+                background: white;
+                border-radius: 12px;
+                padding: 20px;
+                text-align: center;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            
+            .exec-value {{
+                font-size: 2rem;
+                font-weight: 700;
+                color: #0f172a;
+                margin-bottom: 5px;
+            }}
+            
+            .exec-value.green {{ color: #059669; }}
+            .exec-value.blue {{ color: #2563eb; }}
+            .exec-value.amber {{ color: #d97706; }}
+            
+            .exec-label {{
+                font-size: 0.85rem;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            
+            .health-indicator {{
+                background: white;
+                border-radius: 12px;
+                padding: 20px 25px;
+                display: flex;
+                align-items: center;
+                gap: 20px;
+                margin-top: 25px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            }}
+            
+            .health-score {{
+                width: 80px;
+                height: 80px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.5rem;
+                font-weight: 800;
+                color: white;
+            }}
+            
+            .health-score.excellent {{ background: linear-gradient(135deg, #059669, #10b981); }}
+            .health-score.good {{ background: linear-gradient(135deg, #2563eb, #3b82f6); }}
+            .health-score.attention {{ background: linear-gradient(135deg, #d97706, #f59e0b); }}
+            .health-score.concern {{ background: linear-gradient(135deg, #dc2626, #ef4444); }}
+            
+            .health-details h4 {{
+                font-size: 1.1rem;
+                font-weight: 600;
+                color: #0f172a;
+                margin-bottom: 5px;
+            }}
+            
+            .health-details p {{
+                font-size: 0.9rem;
+                color: #64748b;
+            }}
+            
             /* Rest of styles inherited from individual report */
             .main-content {{
                 padding: 40px 50px;
@@ -2684,7 +2787,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 </div>
                 <div class="portfolio-stat">
                     <div class="portfolio-stat-value">${total_pipeline_value:,.0f}</div>
-                    <div class="portfolio-stat-label">Pipeline Value</div>
+                    <div class="portfolio-stat-label">Forecasted Orders</div>
                 </div>
             </div>
             
@@ -3861,20 +3964,33 @@ def render_order_type_mix_section(customer_orders):
 
 
 def render_pipeline_section(customer_deals, customer_name):
-    """Section 7: Active HubSpot Pipeline"""
-    st.markdown("### 🎯 Active Pipeline")
+    """Section 7: Forecasted Orders (formerly Pipeline)"""
+    st.markdown("### 🎯 Forecasted Orders")
     
     if customer_deals.empty:
-        st.info(f"No HubSpot deals found for '{customer_name}'.")
+        st.info(f"No forecasted orders found for '{customer_name}'.")
         return
+    
+    # Helper to convert internal status to customer-friendly
+    def get_customer_friendly_status(status):
+        status_map = {
+            'Commit': 'Confirmed',
+            'Expect': 'Expected',
+            'Best Case': 'Planned',
+            'Opportunity': 'Potential'
+        }
+        return status_map.get(status, status)
     
     # Filter to open deals
     open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
     open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)].copy()
     
     if open_deals.empty:
-        st.info("No open pipeline deals found for this customer.")
+        st.info("No forecasted orders found for this customer.")
         return
+    
+    # Add customer-friendly status column
+    open_deals['Status'] = open_deals['Close Status'].apply(get_customer_friendly_status)
     
     # Toggle for Raw vs Probability-Adjusted
     # Use customer name to create unique key for multi-select support
@@ -3895,9 +4011,9 @@ def render_pipeline_section(customer_deals, customer_name):
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(f"Total Pipeline ({amount_mode})", f"${total_pipeline:,.0f}")
+        st.metric(f"Total Forecast ({amount_mode})", f"${total_pipeline:,.0f}")
     with col2:
-        st.metric("Open Deals", deal_count)
+        st.metric("Planned Orders", deal_count)
     with col3:
         if use_probability:
             raw_total = open_deals['Amount'].sum()
@@ -3906,23 +4022,23 @@ def render_pipeline_section(customer_deals, customer_name):
             prob_total = open_deals['Probability Rev'].sum()
             st.metric("Prob-Adjusted (Reference)", f"${prob_total:,.0f}")
     
-    # Breakdown by Close Status
-    status_summary = open_deals.groupby('Close Status').agg({
+    # Breakdown by Status (using friendly names)
+    status_summary = open_deals.groupby('Status').agg({
         amount_col: 'sum',
         'Record ID': 'count'
     }).round(0)
     status_summary.columns = ['Value', 'Count']
     
-    # Order by pipeline stage
-    stage_order = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+    # Order by stage (mapping back from friendly names)
+    stage_order = ['Confirmed', 'Expected', 'Planned', 'Potential']
     status_summary = status_summary.reindex([s for s in stage_order if s in status_summary.index])
     
     status_summary['Value'] = status_summary['Value'].apply(lambda x: f"${x:,.0f}")
     st.dataframe(status_summary, use_container_width=True)
     
     # Deal details
-    with st.expander("📋 View Deal Details"):
-        display_cols = ['Deal Name', 'Close Status', 'Deal Type', 'Amount', 'Probability Rev', 'Close Date', 'Pending Approval Date']
+    with st.expander("📋 View Order Details"):
+        display_cols = ['Deal Name', 'Status', 'Deal Type', 'Amount', 'Probability Rev', 'Close Date', 'Pending Approval Date']
         display_cols = [c for c in display_cols if c in open_deals.columns]
         display_df = open_deals[display_cols].copy()
         
@@ -3930,17 +4046,27 @@ def render_pipeline_section(customer_deals, customer_name):
         if display_df.columns.duplicated().any():
             display_df = display_df.loc[:, ~display_df.columns.duplicated()]
         
-        if 'Amount' in display_df.columns:
-            display_df['Amount'] = display_df['Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
-        if 'Probability Rev' in display_df.columns:
-            display_df['Probability Rev'] = display_df['Probability Rev'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
+        # Rename columns for customer-facing display
+        rename_cols = {
+            'Deal Name': 'Order Description',
+            'Deal Type': 'Type',
+            'Amount': 'Forecast Value',
+            'Probability Rev': 'Adjusted Value'
+        }
+        display_df = display_df.rename(columns={k: v for k, v in rename_cols.items() if k in display_df.columns})
+        
+        if 'Forecast Value' in display_df.columns:
+            display_df['Forecast Value'] = display_df['Forecast Value'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
+        if 'Adjusted Value' in display_df.columns:
+            display_df['Adjusted Value'] = display_df['Adjusted Value'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
         
         # Rename Pending Approval Date to Projected Ship Date
         if 'Pending Approval Date' in display_df.columns:
             display_df = display_df.rename(columns={'Pending Approval Date': 'Projected Ship Date'})
             display_df['Projected Ship Date'] = pd.to_datetime(display_df['Projected Ship Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         if 'Close Date' in display_df.columns:
-            display_df['Close Date'] = pd.to_datetime(display_df['Close Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+            display_df = display_df.rename(columns={'Close Date': 'Expected Date'})
+            display_df['Expected Date'] = pd.to_datetime(display_df['Expected Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
         
         st.dataframe(display_df, use_container_width=True)
 
@@ -4147,8 +4273,13 @@ def categorize_product(item_name, item_description="", calyx_product_type=""):
     
     # =========================================================================
     # 6. DML LIDS (Universal 4mL/7mL/15D - needs pairing to categorize)
+    # -F suffix indicates it's specifically for 4mL/7mL concentrates
     # =========================================================================
     if 'DML' in name or re.search(r'PL-DML|CL-DML', name):
+        # Check for -F suffix which indicates concentrate lid (4mL or 7mL)
+        if name.endswith('-F') or re.search(r'-\d+-F$', name):
+            return ('Concentrates', 'Universal Lid (4mL/7mL)', 'lid')
+        # Otherwise mark for invoice-based pairing (could be 15D or concentrate)
         return ('DML (Universal)', 'Universal Lid', 'lid')
     
     # 15L patterns that aren't clearly dram-specific
@@ -6027,7 +6158,7 @@ def render_yearly_planning_2026():
                 deal_count = 0
             
             with col4:
-                st.metric("Total Pipeline", f"${total_pipeline:,.0f}", f"{deal_count} deals")
+                st.metric("Forecasted Orders", f"${total_pipeline:,.0f}", f"{deal_count} orders")
             
             st.markdown("---")
             
@@ -6062,7 +6193,7 @@ def render_yearly_planning_2026():
                     'Pending Orders': f"${cust_pending_val:,.0f}",
                     'Outstanding': f"${cust_outstanding:,.0f}",
                     'Total Revenue': f"${cust_revenue:,.0f}",
-                    'Pipeline': f"${cust_pipeline:,.0f}"
+                    'Forecast': f"${cust_pipeline:,.0f}"
                 })
             
             breakdown_df = pd.DataFrame(breakdown_data)
@@ -6083,7 +6214,7 @@ def render_yearly_planning_2026():
             render_revenue_section(all_invoices)
             
             st.markdown("---")
-            st.markdown("### 🎯 Combined Pipeline")
+            st.markdown("### 🎯 Combined Forecasted Orders")
             render_pipeline_section(all_deals, "All Selected Customers")
             
             # Combined Line Item Analysis
