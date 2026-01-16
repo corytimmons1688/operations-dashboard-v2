@@ -270,8 +270,20 @@ def create_pipeline_chart(customer_deals):
     return fig
 
 
-def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items=None, customer_ncrs=None, date_label="All Time"):
+def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items=None, customer_ncrs=None, date_label="All Time", pdf_config=None):
     """Generate a professional, customer-facing HTML report for PDF export"""
+    
+    # Default PDF config - all sections enabled
+    if pdf_config is None:
+        pdf_config = {
+            'exec_summary': True,
+            'orders_in_progress': True,
+            'open_invoices': True,
+            'purchase_history': True,
+            'product_mix': True,
+            'upcoming_business': True,
+            'quality_ncr': True
+        }
     
     generated_date = datetime.now().strftime('%B %d, %Y')
     # Use date_label for period display, fallback to current quarter if All Time
@@ -1394,6 +1406,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         
         <div class="main-content">
+            {f'''
             <!-- Executive Summary -->
             <div class="exec-summary">
                 <div class="exec-title">📊 Executive Summary</div>
@@ -1423,7 +1436,9 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     </div>
                 </div>
             </div>
+            ''' if pdf_config.get('exec_summary', True) else ''}
             
+            {f'''
             <!-- Orders in Progress -->
             <div class="section">
                 <div class="section-header">
@@ -1445,7 +1460,9 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 </div>
                 {pending_orders_html if pending_orders_html else '<p class="no-data">No orders currently in progress</p>'}
             </div>
+            ''' if pdf_config.get('orders_in_progress', True) else ''}
             
+            {f'''
             <!-- Account Balance -->
             <div class="section">
                 <div class="section-header">
@@ -1467,7 +1484,9 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 </div>
                 {open_invoices_html if open_invoices_html else '<p class="no-data">No outstanding invoices — account is current!</p>'}
             </div>
+            ''' if pdf_config.get('open_invoices', True) else ''}
             
+            {f'''
             <!-- Purchase History -->
             <div class="section">
                 <div class="section-header">
@@ -1520,9 +1539,10 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 </div>
                 {charts_html.get('ontime', '')}
             </div>
+            ''' if pdf_config.get('purchase_history', True) else ''}
             
-            <!-- Upcoming Business -->
             {f'''
+            <!-- Upcoming Business -->
             <div class="section">
                 <div class="section-header">
                     <div class="section-icon">🎯</div>
@@ -1543,11 +1563,11 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 </div>
                 {pipeline_html}
             </div>
-            ''' if pipeline_html else ''}
+            ''' if pdf_config.get('upcoming_business', True) and pipeline_html else ''}
             
-            {line_item_html}
+            {line_item_html if pdf_config.get('product_mix', True) else ''}
             
-            {ncr_html}
+            {ncr_html if pdf_config.get('quality_ncr', True) else ''}
         </div>
         
         <div class="footer">
@@ -2221,11 +2241,23 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     return html
 
 
-def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time"):
+def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time", pdf_config=None):
     """
     Generate a combined HTML report for multiple customers.
     customers_data is a list of tuples: (customer_name, customer_orders, customer_invoices, customer_deals)
     """
+    # Default PDF config
+    if pdf_config is None:
+        pdf_config = {
+            'exec_summary': True,
+            'orders_in_progress': True,
+            'open_invoices': True,
+            'purchase_history': True,
+            'product_mix': True,
+            'upcoming_business': True,
+            'quality_ncr': True
+        }
+    
     generated_date = datetime.now().strftime('%B %d, %Y')
     # Use date_label for period display and labels
     if date_label == "All Time":
@@ -2790,7 +2822,7 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time"):
         customer_ncrs = customer_data[5] if len(customer_data) > 5 else None
         
         # Generate this customer's individual report content
-        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label)
+        single_html = generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
         
         # Extract just the main-content section (between main-content div and footer)
         # Find where main-content starts
@@ -2835,7 +2867,7 @@ def generate_combined_qbr_html(customers_data, rep_name, date_label="All Time"):
     return html
 
 
-def generate_combined_summary_html(customers_data, rep_name, date_label="All Time"):
+def generate_combined_summary_html(customers_data, rep_name, date_label="All Time", pdf_config=None):
     """
     Generate a combined summary HTML report that aggregates data from all selected customers
     into a single unified view.
@@ -2859,8 +2891,8 @@ def generate_combined_summary_html(customers_data, rep_name, date_label="All Tim
     # Generate the combined report using unified data
     combined_name = f"Portfolio Summary ({num_customers} Accounts)"
     
-    # Generate the base report
-    html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals, all_line_items, all_ncrs, date_label)
+    # Generate the base report with pdf_config
+    html = generate_qbr_html(combined_name, rep_name, all_orders, all_invoices, all_deals, all_line_items, all_ncrs, date_label, pdf_config)
     
     # Build customer tags
     customer_tags = ''.join([f'<span style="background: white; border: 1px solid #bfdbfe; color: #1e40af; padding: 5px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 500;">{name}</span>' for name in customer_names])
@@ -5789,6 +5821,189 @@ def render_yearly_planning_2026():
             key="qbr_customer_selector"
         )
     
+    # =========================================================================
+    # PDF CONFIGURATION SECTION
+    # =========================================================================
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #8b5cf6;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">⚙️ PDF Report Configuration</h3>
+            <p style="color: #94a3b8; margin: 0.25rem 0 0 0; font-size: 0.85rem;">
+                Hey <span style="color: #a78bfa; font-weight: 600;">{selected_rep}</span> — customize which sections appear in your exported PDFs
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    with st.expander("📋 Configure PDF Sections (click to expand)", expanded=False):
+        st.markdown("""
+            <div style="
+                background: #1e293b;
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-bottom: 1rem;
+                border-left: 3px solid #8b5cf6;
+            ">
+                <p style="color: #e2e8f0; margin: 0; font-size: 0.9rem;">
+                    ✨ <strong>Select which sections to include in your PDF exports.</strong><br>
+                    <span style="color: #94a3b8;">These settings only affect downloaded reports — the dashboard view remains unchanged.</span>
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Initialize session state for PDF config if not exists
+        if 'pdf_config' not in st.session_state:
+            st.session_state.pdf_config = {
+                'exec_summary': True,
+                'orders_in_progress': True,
+                'open_invoices': True,
+                'purchase_history': True,
+                'product_mix': True,
+                'upcoming_business': True,
+                'quality_ncr': True
+            }
+        
+        # Create two columns for the checkboxes
+        cfg_col1, cfg_col2 = st.columns(2)
+        
+        with cfg_col1:
+            st.markdown("##### 📊 Account Overview")
+            
+            st.session_state.pdf_config['exec_summary'] = st.checkbox(
+                "**Executive Summary**",
+                value=st.session_state.pdf_config['exec_summary'],
+                help="Account health score, lifetime value, total orders, on-time rate",
+                key="pdf_cfg_exec_summary"
+            )
+            st.caption("Account health score & key performance metrics")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['orders_in_progress'] = st.checkbox(
+                "**Orders in Progress**",
+                value=st.session_state.pdf_config['orders_in_progress'],
+                help="Pending sales orders currently being processed",
+                key="pdf_cfg_orders_in_progress"
+            )
+            st.caption("Pending orders & their current status")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['open_invoices'] = st.checkbox(
+                "**Open Invoices**",
+                value=st.session_state.pdf_config['open_invoices'],
+                help="Outstanding invoices and balance due",
+                key="pdf_cfg_open_invoices"
+            )
+            st.caption("Outstanding invoices & amounts due")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['purchase_history'] = st.checkbox(
+                "**Purchase History**",
+                value=st.session_state.pdf_config['purchase_history'],
+                help="Historical revenue trends and yearly breakdown",
+                key="pdf_cfg_purchase_history"
+            )
+            st.caption("Revenue trends & yearly breakdown")
+        
+        with cfg_col2:
+            st.markdown("##### 📦 Business Details")
+            
+            st.session_state.pdf_config['product_mix'] = st.checkbox(
+                "**Product Mix Analysis**",
+                value=st.session_state.pdf_config['product_mix'],
+                help="Breakdown of purchases by product category (Drams, Concentrates, etc.)",
+                key="pdf_cfg_product_mix"
+            )
+            st.caption("Category breakdown (Drams, Concentrates, etc.)")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['upcoming_business'] = st.checkbox(
+                "**Upcoming Business**",
+                value=st.session_state.pdf_config['upcoming_business'],
+                help="Pipeline deals and projected opportunities",
+                key="pdf_cfg_upcoming_business"
+            )
+            st.caption("Pipeline deals & projected opportunities")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['quality_ncr'] = st.checkbox(
+                "**Quality & NCR Analysis**",
+                value=st.session_state.pdf_config['quality_ncr'],
+                help="Non-conformance reports and quality metrics",
+                key="pdf_cfg_quality_ncr"
+            )
+            st.caption("Non-conformance reports & quality metrics")
+        
+        # Show summary of what's included
+        enabled_count = sum(st.session_state.pdf_config.values())
+        total_count = len(st.session_state.pdf_config)
+        
+        if enabled_count == total_count:
+            status_color = "#10b981"
+            status_text = "All sections enabled"
+            status_icon = "✅"
+        elif enabled_count == 0:
+            status_color = "#ef4444"
+            status_text = "No sections selected — PDFs will be empty!"
+            status_icon = "⚠️"
+        else:
+            status_color = "#f59e0b"
+            status_text = f"{enabled_count} of {total_count} sections enabled"
+            status_icon = "📝"
+        
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-top: 1rem;
+                border: 1px solid {status_color};
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            ">
+                <span style="font-size: 1.2rem;">{status_icon}</span>
+                <span style="color: {status_color}; font-weight: 600;">{status_text}</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Quick action buttons
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        with btn_col1:
+            if st.button("✅ Select All", key="pdf_cfg_select_all", use_container_width=True):
+                for key in st.session_state.pdf_config:
+                    st.session_state.pdf_config[key] = True
+                st.rerun()
+        with btn_col2:
+            if st.button("❌ Clear All", key="pdf_cfg_clear_all", use_container_width=True):
+                for key in st.session_state.pdf_config:
+                    st.session_state.pdf_config[key] = False
+                st.rerun()
+        with btn_col3:
+            if st.button("🔄 Reset Default", key="pdf_cfg_reset", use_container_width=True):
+                for key in st.session_state.pdf_config:
+                    st.session_state.pdf_config[key] = True
+                st.rerun()
+    
+    # Get PDF config for passing to functions
+    pdf_config = st.session_state.get('pdf_config', {
+        'exec_summary': True,
+        'orders_in_progress': True,
+        'open_invoices': True,
+        'purchase_history': True,
+        'product_mix': True,
+        'upcoming_business': True,
+        'quality_ncr': True
+    })
+    
     # Empty state - show helpful message
     if not selected_customers:
         st.markdown("---")
@@ -6042,6 +6257,189 @@ def render_yearly_planning_2026():
         
         all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs))
     
+    # =========================================================================
+    # PDF CONFIGURATION SECTION
+    # =========================================================================
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #8b5cf6;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">⚙️ PDF Report Configuration</h3>
+            <p style="color: #94a3b8; margin: 0.25rem 0 0 0; font-size: 0.85rem;">
+                Hey <span style="color: #a78bfa; font-weight: 600;">{selected_rep}</span> — customize which sections appear in your exported PDFs
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    with st.expander("📋 Configure PDF Sections (click to expand)", expanded=False):
+        st.markdown("""
+            <div style="
+                background: #1e293b;
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-bottom: 1rem;
+                border-left: 3px solid #8b5cf6;
+            ">
+                <p style="color: #e2e8f0; margin: 0; font-size: 0.9rem;">
+                    ✨ <strong>Select which sections to include in your PDF exports.</strong><br>
+                    <span style="color: #94a3b8;">These settings only affect downloaded reports — the dashboard view remains unchanged.</span>
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Initialize session state for PDF config if not exists
+        if 'pdf_config' not in st.session_state:
+            st.session_state.pdf_config = {
+                'exec_summary': True,
+                'orders_in_progress': True,
+                'open_invoices': True,
+                'purchase_history': True,
+                'product_mix': True,
+                'upcoming_business': True,
+                'quality_ncr': True
+            }
+        
+        # Create two columns for the checkboxes
+        cfg_col1, cfg_col2 = st.columns(2)
+        
+        with cfg_col1:
+            st.markdown("##### 📊 Account Overview")
+            
+            st.session_state.pdf_config['exec_summary'] = st.checkbox(
+                "**Executive Summary**",
+                value=st.session_state.pdf_config['exec_summary'],
+                help="Account health score, lifetime value, total orders, on-time rate",
+                key="pdf_cfg_exec_summary"
+            )
+            st.caption("Account health score & key performance metrics")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['orders_in_progress'] = st.checkbox(
+                "**Orders in Progress**",
+                value=st.session_state.pdf_config['orders_in_progress'],
+                help="Pending sales orders currently being processed",
+                key="pdf_cfg_orders_in_progress"
+            )
+            st.caption("Pending orders & their current status")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['open_invoices'] = st.checkbox(
+                "**Open Invoices**",
+                value=st.session_state.pdf_config['open_invoices'],
+                help="Outstanding invoices and balance due",
+                key="pdf_cfg_open_invoices"
+            )
+            st.caption("Outstanding invoices & amounts due")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['purchase_history'] = st.checkbox(
+                "**Purchase History**",
+                value=st.session_state.pdf_config['purchase_history'],
+                help="Historical revenue trends and yearly breakdown",
+                key="pdf_cfg_purchase_history"
+            )
+            st.caption("Revenue trends & yearly breakdown")
+        
+        with cfg_col2:
+            st.markdown("##### 📦 Business Details")
+            
+            st.session_state.pdf_config['product_mix'] = st.checkbox(
+                "**Product Mix Analysis**",
+                value=st.session_state.pdf_config['product_mix'],
+                help="Breakdown of purchases by product category (Drams, Concentrates, etc.)",
+                key="pdf_cfg_product_mix"
+            )
+            st.caption("Category breakdown (Drams, Concentrates, etc.)")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['upcoming_business'] = st.checkbox(
+                "**Upcoming Business**",
+                value=st.session_state.pdf_config['upcoming_business'],
+                help="Pipeline deals and projected opportunities",
+                key="pdf_cfg_upcoming_business"
+            )
+            st.caption("Pipeline deals & projected opportunities")
+            
+            st.markdown("")
+            
+            st.session_state.pdf_config['quality_ncr'] = st.checkbox(
+                "**Quality & NCR Analysis**",
+                value=st.session_state.pdf_config['quality_ncr'],
+                help="Non-conformance reports and quality metrics",
+                key="pdf_cfg_quality_ncr"
+            )
+            st.caption("Non-conformance reports & quality metrics")
+        
+        # Show summary of what's included
+        enabled_count = sum(st.session_state.pdf_config.values())
+        total_count = len(st.session_state.pdf_config)
+        
+        if enabled_count == total_count:
+            status_color = "#10b981"
+            status_text = "All sections enabled"
+            status_icon = "✅"
+        elif enabled_count == 0:
+            status_color = "#ef4444"
+            status_text = "No sections selected — PDFs will be empty!"
+            status_icon = "⚠️"
+        else:
+            status_color = "#f59e0b"
+            status_text = f"{enabled_count} of {total_count} sections enabled"
+            status_icon = "📝"
+        
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+                padding: 12px 16px;
+                border-radius: 8px;
+                margin-top: 1rem;
+                border: 1px solid {status_color};
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            ">
+                <span style="font-size: 1.2rem;">{status_icon}</span>
+                <span style="color: {status_color}; font-weight: 600;">{status_text}</span>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Quick action buttons
+        btn_col1, btn_col2, btn_col3 = st.columns(3)
+        with btn_col1:
+            if st.button("✅ Select All", key="pdf_cfg_select_all", use_container_width=True):
+                for key in st.session_state.pdf_config:
+                    st.session_state.pdf_config[key] = True
+                st.rerun()
+        with btn_col2:
+            if st.button("❌ Clear All", key="pdf_cfg_clear_all", use_container_width=True):
+                for key in st.session_state.pdf_config:
+                    st.session_state.pdf_config[key] = False
+                st.rerun()
+        with btn_col3:
+            if st.button("🔄 Reset Default", key="pdf_cfg_reset", use_container_width=True):
+                for key in st.session_state.pdf_config:
+                    st.session_state.pdf_config[key] = True
+                st.rerun()
+    
+    # Get PDF config for passing to functions
+    pdf_config = st.session_state.get('pdf_config', {
+        'exec_summary': True,
+        'orders_in_progress': True,
+        'open_invoices': True,
+        'purchase_history': True,
+        'product_mix': True,
+        'upcoming_business': True,
+        'quality_ncr': True
+    })
+    
     # Download buttons section
     date_info = f" | 📅 {date_label}" if date_label != "All Time" else ""
     st.markdown(f"""
@@ -6060,7 +6458,7 @@ def render_yearly_planning_2026():
     if len(selected_customers) == 1:
         # Single customer - just one download button
         customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs = all_customers_data[0]
-        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label)
+        html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([2, 1, 2])
         with col_btn:
@@ -6076,9 +6474,9 @@ def render_yearly_planning_2026():
         # Multiple customers - show combined summary + all reports + individual buttons
         num_customers = len(selected_customers)
         
-        # Generate reports
-        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep, date_label)
-        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep, date_label)
+        # Generate reports with pdf_config
+        combined_summary_html = generate_combined_summary_html(all_customers_data, selected_rep, date_label, pdf_config)
+        all_reports_html = generate_combined_qbr_html(all_customers_data, selected_rep, date_label, pdf_config)
         
         # Two main download buttons side by side
         col1, col2 = st.columns(2)
@@ -6109,7 +6507,7 @@ def render_yearly_planning_2026():
         with st.expander(f"📄 Download Individual Customer Reports"):
             cols = st.columns(min(3, num_customers))
             for idx, (customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs) in enumerate(all_customers_data):
-                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label)
+                html_report = generate_qbr_html(customer_name, selected_rep, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs, date_label, pdf_config)
                 with cols[idx % 3]:
                     st.download_button(
                         label=f"📄 {customer_name[:20]}{'...' if len(customer_name) > 20 else ''}",
