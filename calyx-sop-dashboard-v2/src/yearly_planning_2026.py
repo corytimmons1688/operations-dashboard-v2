@@ -4029,6 +4029,10 @@ def categorize_product(item_name, item_description="", calyx_product_type=""):
     if re.search(r'DIE\s*CUT\s*SAMPLE|SAMPLE\s*CHARGE|CREATIVE$|TESTIMONIAL', all_text):
         return ('Fees & Adjustments', 'Sample/Creative', None)
     
+    # Tooling fees (check BEFORE label categorization - "Tooling Fee - Labels" is a fee, not a label)
+    if re.search(r'TOOLING\s*FEE|TOOL\s*FEE|DIE\s*FEE|PLATE\s*FEE|SETUP\s*FEE', all_text):
+        return ('Fees & Adjustments', 'Tooling Fee', None)
+    
     # Other fees (catch-all for fee-like items)
     if re.search(r'MODULAR.*SERIAL', all_text):
         return ('Fees & Adjustments', 'Other Fee', None)
