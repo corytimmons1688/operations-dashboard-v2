@@ -447,14 +447,8 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     if customer_ncrs is not None and not customer_ncrs.empty:
         ncr_count = len(customer_ncrs)
         
-        # Get unique Sales Orders with NCRs
-        ncr_so_numbers = set()
-        if 'Sales Order' in customer_ncrs.columns:
-            ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
-            ncr_so_numbers = {str(so).strip() for so in ncr_so_numbers if str(so).strip()}
-        
-        orders_with_ncrs = len(ncr_so_numbers)
-        ncr_rate = (orders_with_ncrs / total_orders * 100) if total_orders > 0 else 0
+        # Calculate NCR rate as: Total NCRs / Total Orders (more intuitive metric)
+        ncr_rate = (ncr_count / total_orders * 100) if total_orders > 0 else 0
         
         # Total Quantity Affected
         total_qty_affected = 0
@@ -530,7 +524,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <div class="quality-badge">{rate_badge}</div>
                     <div class="quality-rate">{ncr_rate:.1f}%</div>
                     <div class="quality-label">NCR Rate</div>
-                    <div class="quality-detail">{orders_with_ncrs} of {total_orders} orders</div>
+                    <div class="quality-detail">{ncr_count} of {total_orders} orders</div>
                 </div>
                 <div class="quality-metrics">
                     <div class="quality-metric">
@@ -5383,12 +5377,9 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     # ===== TOTAL NCR METRICS (always based on ALL NCRs, not filtered) =====
     # These are the "headline" numbers that shouldn't change with filtering
     total_ncr_count = len(customer_ncrs)
-    total_ncr_so_numbers = set()
-    if 'Sales Order' in customer_ncrs.columns:
-        total_ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
-        total_ncr_so_numbers = {str(so).strip() for so in total_ncr_so_numbers if str(so).strip()}
-    total_orders_with_ncrs = len(total_ncr_so_numbers)
-    total_ncr_rate = (total_orders_with_ncrs / total_orders * 100) if total_orders > 0 else 0
+    
+    # Calculate NCR rate as: Total NCRs / Total Orders (more intuitive metric)
+    total_ncr_rate = (total_ncr_count / total_orders * 100) if total_orders > 0 else 0
     
     # Determine badge based on TOTAL NCR rate
     if total_ncr_rate < 2:
@@ -5433,7 +5424,7 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
                 ">{rate_badge}</div>
                 <div style="color: {badge_color}; font-size: 2rem; font-weight: 700;">{total_ncr_rate:.1f}%</div>
                 <div style="color: #94a3b8; font-size: 0.85rem;">NCR Rate</div>
-                <div style="color: #64748b; font-size: 0.75rem;">{total_orders_with_ncrs} of {total_orders} orders</div>
+                <div style="color: #64748b; font-size: 0.75rem;">{total_ncr_count} of {total_orders} orders</div>
             </div>
         """, unsafe_allow_html=True)
     
