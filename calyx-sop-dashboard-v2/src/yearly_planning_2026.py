@@ -330,16 +330,16 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         product_revenue = product_df['Amount'].sum() if not product_df.empty else 0
         
         # Build category breakdown table using Parent Category with sub-category details
+        # Note: We exclude unit counts as they can be misleading (components ≠ finished products)
         category_rows = ""
         parent_col = 'Parent Category' if 'Parent Category' in product_df.columns else 'Unified Category'
         unified_col = 'Unified Category' if 'Unified Category' in product_df.columns else 'Product Category'
         
         if not product_df.empty and parent_col in product_df.columns:
             category_summary = product_df.groupby(parent_col).agg({
-                'Amount': 'sum',
-                'Quantity': 'sum'
+                'Amount': 'sum'
             }).reset_index()
-            category_summary.columns = ['Category', 'Revenue', 'Units']
+            category_summary.columns = ['Category', 'Revenue']
             category_summary = category_summary.sort_values('Revenue', ascending=False)
             category_summary['% of Revenue'] = (category_summary['Revenue'] / product_revenue * 100).round(1) if product_revenue > 0 else 0
             
@@ -352,7 +352,6 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 <tr>
                     <td style="font-weight: 600;">{parent_cat}</td>
                     <td style="text-align: right; font-weight: 600; color: #059669;">${row['Revenue']:,.0f}</td>
-                    <td style="text-align: right;">{row['Units']:,.0f}</td>
                     <td style="width: 150px;">
                         <div style="background: #e2e8f0; border-radius: 4px; height: 20px; overflow: hidden;">
                             <div style="background: linear-gradient(90deg, #3b82f6, #1d4ed8); height: 100%; width: {bar_width}%;"></div>
@@ -368,10 +367,9 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     
                     if len(sub_categories) > 1 or (len(sub_categories) == 1 and sub_categories[0] != parent_cat):
                         subcat_breakdown = parent_cat_df.groupby(unified_col).agg({
-                            'Amount': 'sum',
-                            'Quantity': 'sum'
+                            'Amount': 'sum'
                         }).reset_index()
-                        subcat_breakdown.columns = ['Sub-Category', 'Revenue', 'Units']
+                        subcat_breakdown.columns = ['Sub-Category', 'Revenue']
                         subcat_breakdown = subcat_breakdown.sort_values('Revenue', ascending=False)
                         
                         for _, sub_row in subcat_breakdown.iterrows():
@@ -381,7 +379,6 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 <tr style="background: #f8fafc;">
                     <td style="padding-left: 30px; color: #64748b; font-size: 0.85rem;">↳ {sub_name}</td>
                     <td style="text-align: right; color: #64748b;">${sub_row['Revenue']:,.0f}</td>
-                    <td style="text-align: right; color: #64748b;">{sub_row['Units']:,.0f}</td>
                     <td></td>
                     <td style="text-align: right; color: #64748b; font-size: 0.85rem;">{sub_pct:.1f}%</td>
                 </tr>"""
@@ -413,7 +410,6 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <tr>
                         <th style="text-align: left;">Product Category</th>
                         <th style="text-align: right;">Revenue</th>
-                        <th style="text-align: right;">Units</th>
                         <th style="text-align: center;">Distribution</th>
                         <th style="text-align: right;">Share</th>
                     </tr>
@@ -745,12 +741,13 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     pipeline_count = 0
     
     # Helper to convert internal status to customer-friendly
+    # These terms are clearer for customers about where things stand
     def get_customer_friendly_status(status):
         status_map = {
-            'Commit': 'Confirmed',
-            'Expect': 'Expected',
-            'Best Case': 'Planned',
-            'Opportunity': 'Potential'
+            'Commit': 'Confirmed',      # Basically a done deal
+            'Expect': 'Likely',         # High confidence
+            'Best Case': 'Tentative',   # Medium confidence, still being finalized
+            'Opportunity': 'In Discussion'  # Early stage conversations
         }
         return status_map.get(status, status)
     
@@ -1516,24 +1513,24 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 {charts_html.get('ontime', '')}
             </div>
             
-            <!-- Forecasted Orders -->
+            <!-- Upcoming Business -->
             {f'''
             <div class="section">
                 <div class="section-header">
                     <div class="section-icon">🎯</div>
                     <div>
-                        <div class="section-title">Forecasted Orders</div>
-                        <div class="section-subtitle">Upcoming orders in your forecast</div>
+                        <div class="section-title">Upcoming Business</div>
+                        <div class="section-subtitle">Business opportunities in progress</div>
                     </div>
                 </div>
                 <div class="summary-box">
                     <div class="summary-item">
                         <div class="summary-value">${pipeline_value:,.0f}</div>
-                        <div class="summary-label">Forecasted Value</div>
+                        <div class="summary-label">Projected Value</div>
                     </div>
                     <div class="summary-item">
                         <div class="summary-value">{pipeline_count}</div>
-                        <div class="summary-label">Planned Orders</div>
+                        <div class="summary-label">Opportunities</div>
                     </div>
                 </div>
                 {pipeline_html}
@@ -1918,11 +1915,11 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             pipeline_html = f"""
             <div class="metric-row">
                 <div class="metric-card">
-                    <div class="metric-label">Upcoming Order Value</div>
+                    <div class="metric-label">Projected Value</div>
                     <div class="metric-value">${pipeline_value:,.0f}</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-label">Planned Orders</div>
+                    <div class="metric-label">Opportunities</div>
                     <div class="metric-value">{pipeline_count}</div>
                 </div>
             </div>
@@ -2754,7 +2751,7 @@ def generate_combined_qbr_html(customers_data, rep_name):
                 </div>
                 <div class="portfolio-stat">
                     <div class="portfolio-stat-value">${total_pipeline_value:,.0f}</div>
-                    <div class="portfolio-stat-label">Forecasted Orders</div>
+                    <div class="portfolio-stat-label">Upcoming Business</div>
                 </div>
             </div>
             
@@ -3931,20 +3928,20 @@ def render_order_type_mix_section(customer_orders):
 
 
 def render_pipeline_section(customer_deals, customer_name):
-    """Section 7: Forecasted Orders (formerly Pipeline)"""
-    st.markdown("### 🎯 Forecasted Orders")
+    """Section 7: Upcoming Business (formerly Pipeline)"""
+    st.markdown("### 🎯 Upcoming Business")
     
     if customer_deals.empty:
-        st.info(f"No forecasted orders found for '{customer_name}'.")
+        st.info(f"No upcoming business found for '{customer_name}'.")
         return
     
     # Helper to convert internal status to customer-friendly
     def get_customer_friendly_status(status):
         status_map = {
             'Commit': 'Confirmed',
-            'Expect': 'Expected',
-            'Best Case': 'Planned',
-            'Opportunity': 'Potential'
+            'Expect': 'Likely',
+            'Best Case': 'Tentative',
+            'Opportunity': 'In Discussion'
         }
         return status_map.get(status, status)
     
@@ -3953,7 +3950,7 @@ def render_pipeline_section(customer_deals, customer_name):
     open_deals = customer_deals[customer_deals['Close Status'].isin(open_statuses)].copy()
     
     if open_deals.empty:
-        st.info("No forecasted orders found for this customer.")
+        st.info("No upcoming business found for this customer.")
         return
     
     # Add customer-friendly status column
@@ -3964,7 +3961,7 @@ def render_pipeline_section(customer_deals, customer_name):
     safe_customer_key = customer_name.replace(' ', '_').replace('.', '_')[:30]
     amount_mode = st.radio(
         "Amount Display:",
-        ["Raw Forecast", "Probability-Adjusted"],
+        ["Raw Estimate", "Probability-Adjusted"],
         horizontal=True,
         key=f"pipeline_amount_mode_{safe_customer_key}"
     )
@@ -3978,9 +3975,9 @@ def render_pipeline_section(customer_deals, customer_name):
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric(f"Total Forecast ({amount_mode})", f"${total_pipeline:,.0f}")
+        st.metric(f"Projected Value ({amount_mode})", f"${total_pipeline:,.0f}")
     with col2:
-        st.metric("Planned Orders", deal_count)
+        st.metric("Opportunities", deal_count)
     with col3:
         if use_probability:
             raw_total = open_deals['Amount'].sum()
@@ -3997,7 +3994,7 @@ def render_pipeline_section(customer_deals, customer_name):
     status_summary.columns = ['Value', 'Count']
     
     # Order by stage (mapping back from friendly names)
-    stage_order = ['Confirmed', 'Expected', 'Planned', 'Potential']
+    stage_order = ['Confirmed', 'Likely', 'Tentative', 'In Discussion']
     status_summary = status_summary.reindex([s for s in stage_order if s in status_summary.index])
     
     status_summary['Value'] = status_summary['Value'].apply(lambda x: f"${x:,.0f}")
@@ -6128,7 +6125,7 @@ def render_yearly_planning_2026():
                 deal_count = 0
             
             with col4:
-                st.metric("Forecasted Orders", f"${total_pipeline:,.0f}", f"{deal_count} orders")
+                st.metric("Upcoming Business", f"${total_pipeline:,.0f}", f"{deal_count} opportunities")
             
             st.markdown("---")
             
@@ -6163,7 +6160,7 @@ def render_yearly_planning_2026():
                     'Pending Orders': f"${cust_pending_val:,.0f}",
                     'Outstanding': f"${cust_outstanding:,.0f}",
                     'Total Revenue': f"${cust_revenue:,.0f}",
-                    'Forecast': f"${cust_pipeline:,.0f}"
+                    'Upcoming': f"${cust_pipeline:,.0f}"
                 })
             
             breakdown_df = pd.DataFrame(breakdown_data)
@@ -6184,7 +6181,7 @@ def render_yearly_planning_2026():
             render_revenue_section(all_invoices)
             
             st.markdown("---")
-            st.markdown("### 🎯 Combined Forecasted Orders")
+            st.markdown("### 🎯 Combined Upcoming Business")
             render_pipeline_section(all_deals, "All Selected Customers")
             
             # Combined Line Item Analysis
