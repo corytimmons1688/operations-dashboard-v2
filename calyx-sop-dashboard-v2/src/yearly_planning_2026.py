@@ -499,23 +499,26 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             for _, row in issue_summary.iterrows():
                 issue_rows += f"<tr><td>{row['Issue Type']}</td><td style='text-align: center;'>{row['NCR Count']}</td><td style='text-align: right;'>{row['Qty Affected']:,.0f}</td><td style='text-align: right;'>{row['% of NCRs']:.1f}%</td></tr>"
         
-        # NCR rate styling
-        if ncr_rate < 5:
+        # NCR rate styling - positive/accountability-focused messaging
+        if ncr_rate < 2:
             rate_class = "success"
-            rate_badge = "Excellent"
+            rate_badge = "EXCELLENT"
+        elif ncr_rate < 5:
+            rate_class = "success"
+            rate_badge = "STRONG"
         elif ncr_rate < 10:
             rate_class = "warning"
-            rate_badge = "Moderate"
+            rate_badge = "TRACKING"
         else:
-            rate_class = "danger"
-            rate_badge = "Needs Attention"
+            rate_class = "warning"
+            rate_badge = "MONITORING"
         
         resolution_text = f"{avg_resolution:.1f} days" if avg_resolution is not None else "N/A"
         
         ncr_html = f"""
         <div class="section">
             <div class="section-header">
-                <div class="section-icon">⚠️</div>
+                <div class="section-icon">📋</div>
                 <div>
                     <div class="section-title">Quality Performance</div>
                     <div class="section-subtitle">Non-conformance tracking and resolution metrics</div>
@@ -806,32 +809,32 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     # Factor 1: Payment health
     if open_invoice_value > total_revenue * 0.1:
         health_score -= 15
-        health_factors.append("High outstanding balance")
+        health_factors.append("Outstanding balance to review")
     
     # Factor 2: Quality
     if customer_ncrs is not None and not customer_ncrs.empty:
         ncr_rate_calc = (len(customer_ncrs) / total_orders * 100) if total_orders > 0 else 0
         if ncr_rate_calc > 10:
             health_score -= 20
-            health_factors.append("Elevated NCR rate")
+            health_factors.append("Quality metrics under review")
         elif ncr_rate_calc > 5:
             health_score -= 10
     
     # Factor 3: On-time delivery
     if ot_rate < 70:
         health_score -= 15
-        health_factors.append("Delivery performance needs improvement")
+        health_factors.append("Delivery performance opportunity")
     elif ot_rate < 85:
         health_score -= 5
     
     # Factor 4: Engagement
     if days_since_last > avg_cadence * 2 and avg_cadence > 0:
         health_score -= 10
-        health_factors.append("Longer than usual since last order")
+        health_factors.append("Time for a check-in")
     
     health_score = max(0, min(100, health_score))
     health_class = "excellent" if health_score >= 90 else "good" if health_score >= 75 else "attention" if health_score >= 60 else "concern"
-    health_label = "Excellent" if health_score >= 90 else "Good" if health_score >= 75 else "Needs Attention" if health_score >= 60 else "Concern"
+    health_label = "Excellent" if health_score >= 90 else "Good" if health_score >= 75 else "Opportunity" if health_score >= 60 else "Review"
     
     # ===== Generate HTML =====
     html = f"""
@@ -5252,8 +5255,8 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     Shows quality issues for the customer - how many orders had NCRs, issue types, etc.
     Combines data from both NetSuite (Nov 2024+) and HubSpot (historical)
     """
-    st.markdown("### ⚠️ Quality & Non-Conformance")
-    st.caption("Non-conformance reports (NCRs) associated with this customer's orders")
+    st.markdown("### 📋 Quality Performance")
+    st.caption("Non-conformance tracking and resolution metrics")
     
     # Create unique key prefix from customer name for chart keys
     key_prefix = f"ncr_{customer_name.replace(' ', '_').replace('.', '').replace(',', '')[:30]}"
@@ -5377,27 +5380,72 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
         if len(resolution_data) > 0:
             avg_resolution = resolution_data.mean()
     
-    # Summary metrics row 1
+    # ===== TOTAL NCR METRICS (always based on ALL NCRs, not filtered) =====
+    # These are the "headline" numbers that shouldn't change with filtering
+    total_ncr_count = len(customer_ncrs)
+    total_ncr_so_numbers = set()
+    if 'Sales Order' in customer_ncrs.columns:
+        total_ncr_so_numbers = set(customer_ncrs['Sales Order'].dropna().unique())
+        total_ncr_so_numbers = {str(so).strip() for so in total_ncr_so_numbers if str(so).strip()}
+    total_orders_with_ncrs = len(total_ncr_so_numbers)
+    total_ncr_rate = (total_orders_with_ncrs / total_orders * 100) if total_orders > 0 else 0
+    
+    # Determine badge based on TOTAL NCR rate
+    if total_ncr_rate < 2:
+        rate_badge = "EXCELLENT"
+        badge_color = "#10b981"
+        badge_bg = "#064e3b"
+    elif total_ncr_rate < 5:
+        rate_badge = "STRONG"
+        badge_color = "#10b981"
+        badge_bg = "#064e3b"
+    elif total_ncr_rate < 10:
+        rate_badge = "TRACKING"
+        badge_color = "#f59e0b"
+        badge_bg = "#78350f"
+    else:
+        rate_badge = "MONITORING"
+        badge_color = "#f59e0b"
+        badge_bg = "#78350f"
+    
+    # Summary metrics row 1 - with styled badge card
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        # Color based on NCR rate
-        rate_color = "normal" if ncr_rate < 5 else "inverse"
-        st.metric(
-            "NCR Rate", 
-            f"{ncr_rate:.1f}%",
-            delta=f"{orders_with_ncrs} of {total_orders} orders",
-            delta_color=rate_color
-        )
+        # Styled NCR Rate card with badge
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, {badge_bg} 0%, #1e293b 100%);
+                padding: 16px;
+                border-radius: 12px;
+                border: 1px solid {badge_color}40;
+                text-align: center;
+            ">
+                <div style="
+                    background: {badge_color};
+                    color: white;
+                    padding: 4px 12px;
+                    border-radius: 20px;
+                    font-size: 0.7rem;
+                    font-weight: 700;
+                    display: inline-block;
+                    margin-bottom: 8px;
+                ">{rate_badge}</div>
+                <div style="color: {badge_color}; font-size: 2rem; font-weight: 700;">{total_ncr_rate:.1f}%</div>
+                <div style="color: #94a3b8; font-size: 0.85rem;">NCR Rate</div>
+                <div style="color: #64748b; font-size: 0.75rem;">{total_orders_with_ncrs} of {total_orders} orders</div>
+            </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        st.metric("Total NCRs", ncr_count)
+        st.metric("Total NCRs", total_ncr_count)
     
     with col3:
+        # Use filtered qty for this one (shows impact of selected NCRs)
         st.metric("Qty Affected", f"{total_qty_affected:,.0f}")
     
     with col4:
-        # Get most common issue type
+        # Get most common issue type from filtered data
         if 'Issue Type' in filtered_ncrs.columns:
             issue_counts = filtered_ncrs['Issue Type'].value_counts()
             top_issue = issue_counts.index[0] if len(issue_counts) > 0 else "N/A"
@@ -6223,84 +6271,99 @@ def render_yearly_planning_2026():
     all_customers_data = []
     all_reps_selected = (selected_rep == "All Reps")
     
-    for customer_name in selected_customers:
-        # Filter orders - don't filter by rep if "All Reps" selected
-        if not filtered_orders_df.empty and 'Corrected Customer Name' in filtered_orders_df.columns:
-            if all_reps_selected:
-                customer_orders = filtered_orders_df[
-                    filtered_orders_df['Corrected Customer Name'] == customer_name
-                ].copy()
-            else:
-                customer_orders = filtered_orders_df[
-                    (filtered_orders_df['Corrected Customer Name'] == customer_name) &
-                    (filtered_orders_df['Rep Master'] == selected_rep)
-                ].copy()
-        else:
-            customer_orders = pd.DataFrame()
-        
-        # Filter invoices - don't filter by rep if "All Reps" selected
-        if not filtered_invoices_df.empty and 'Corrected Customer' in filtered_invoices_df.columns:
-            if all_reps_selected:
-                customer_invoices = filtered_invoices_df[
-                    filtered_invoices_df['Corrected Customer'] == customer_name
-                ].copy()
-            else:
-                customer_invoices = filtered_invoices_df[
-                    (filtered_invoices_df['Corrected Customer'] == customer_name) &
-                    (filtered_invoices_df['Rep Master'] == selected_rep)
-                ].copy()
-        else:
-            customer_invoices = pd.DataFrame()
-        
-        customer_deals = get_customer_deals(customer_name, selected_rep, filtered_deals_df)
-        
-        # Invoice Line Items - don't filter by rep if "All Reps" selected
-        if not filtered_line_items_df.empty and 'Correct Customer' in filtered_line_items_df.columns:
-            if all_reps_selected:
-                customer_line_items = filtered_line_items_df[
-                    filtered_line_items_df['Correct Customer'] == customer_name
-                ].copy()
-            else:
-                customer_line_items = filtered_line_items_df[
-                    (filtered_line_items_df['Correct Customer'] == customer_name) &
-                    (filtered_line_items_df['Rep Master'] == selected_rep)
-                ].copy()
-        else:
-            customer_line_items = pd.DataFrame()
-        
-        # NCR Data - match using 'Matched Customer' column (works for both HubSpot and NetSuite sources)
-        # Secondary: Match by Sales Order numbers that belong to this customer
-        customer_ncrs = pd.DataFrame()
-        if not filtered_ncr_df.empty:
-            # Primary: Match on 'Matched Customer' column (standardized across both sources)
-            if 'Matched Customer' in filtered_ncr_df.columns:
-                customer_ncrs = filtered_ncr_df[
-                    filtered_ncr_df['Matched Customer'] == customer_name
-                ].copy()
+    # FAST PATH: For Company Overview, use ALL data directly instead of looping per-customer
+    if is_company_overview:
+        # Use all filtered data directly - no per-customer filtering needed
+        with st.spinner(f"Loading company-wide data ({len(selected_customers)} accounts)..."):
+            all_orders = filtered_orders_df.copy() if not filtered_orders_df.empty else pd.DataFrame()
+            all_invoices = filtered_invoices_df.copy() if not filtered_invoices_df.empty else pd.DataFrame()
+            all_deals = filtered_deals_df.copy() if not filtered_deals_df.empty else pd.DataFrame()
+            all_line_items = filtered_line_items_df.copy() if not filtered_line_items_df.empty else pd.DataFrame()
+            all_ncrs = filtered_ncr_df.copy() if not filtered_ncr_df.empty else pd.DataFrame()
             
-            # Fallback: Try 'Corrected Customer Name' for NetSuite NCRs
-            if customer_ncrs.empty and 'Corrected Customer Name' in filtered_ncr_df.columns:
-                customer_ncrs = filtered_ncr_df[
-                    filtered_ncr_df['Corrected Customer Name'] == customer_name
-                ].copy()
-            
-            # Secondary: If still no match, try matching via Sales Order
-            if customer_ncrs.empty and 'Sales Order' in filtered_ncr_df.columns and not customer_orders.empty and 'SO Number' in customer_orders.columns:
-                customer_so_numbers = customer_orders['SO Number'].dropna().unique()
-                # Clean SO numbers for matching
-                customer_so_numbers = [str(so).strip() for so in customer_so_numbers if str(so).strip()]
-                if customer_so_numbers:
-                    customer_ncrs = filtered_ncr_df[
-                        filtered_ncr_df['Sales Order'].isin(customer_so_numbers)
+            # Create a single "Company" entry for the data structure
+            all_customers_data = [("Calyx Containers (All Accounts)", all_orders, all_invoices, all_deals, all_line_items, all_ncrs)]
+    else:
+        # Normal path: Loop through selected customers
+        for customer_name in selected_customers:
+            # Filter orders - don't filter by rep if "All Reps" selected
+            if not filtered_orders_df.empty and 'Corrected Customer Name' in filtered_orders_df.columns:
+                if all_reps_selected:
+                    customer_orders = filtered_orders_df[
+                        filtered_orders_df['Corrected Customer Name'] == customer_name
                     ].copy()
-        
-        all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs))
+                else:
+                    customer_orders = filtered_orders_df[
+                        (filtered_orders_df['Corrected Customer Name'] == customer_name) &
+                        (filtered_orders_df['Rep Master'] == selected_rep)
+                    ].copy()
+            else:
+                customer_orders = pd.DataFrame()
+            
+            # Filter invoices - don't filter by rep if "All Reps" selected
+            if not filtered_invoices_df.empty and 'Corrected Customer' in filtered_invoices_df.columns:
+                if all_reps_selected:
+                    customer_invoices = filtered_invoices_df[
+                        filtered_invoices_df['Corrected Customer'] == customer_name
+                    ].copy()
+                else:
+                    customer_invoices = filtered_invoices_df[
+                        (filtered_invoices_df['Corrected Customer'] == customer_name) &
+                        (filtered_invoices_df['Rep Master'] == selected_rep)
+                    ].copy()
+            else:
+                customer_invoices = pd.DataFrame()
+            
+            customer_deals = get_customer_deals(customer_name, selected_rep, filtered_deals_df)
+            
+            # Invoice Line Items - don't filter by rep if "All Reps" selected
+            if not filtered_line_items_df.empty and 'Correct Customer' in filtered_line_items_df.columns:
+                if all_reps_selected:
+                    customer_line_items = filtered_line_items_df[
+                        filtered_line_items_df['Correct Customer'] == customer_name
+                    ].copy()
+                else:
+                    customer_line_items = filtered_line_items_df[
+                        (filtered_line_items_df['Correct Customer'] == customer_name) &
+                        (filtered_line_items_df['Rep Master'] == selected_rep)
+                    ].copy()
+            else:
+                customer_line_items = pd.DataFrame()
+            
+            # NCR Data - match using 'Matched Customer' column (works for both HubSpot and NetSuite sources)
+            # Secondary: Match by Sales Order numbers that belong to this customer
+            customer_ncrs = pd.DataFrame()
+            if not filtered_ncr_df.empty:
+                # Primary: Match on 'Matched Customer' column (standardized across both sources)
+                if 'Matched Customer' in filtered_ncr_df.columns:
+                    customer_ncrs = filtered_ncr_df[
+                        filtered_ncr_df['Matched Customer'] == customer_name
+                    ].copy()
+                
+                # Fallback: Try 'Corrected Customer Name' for NetSuite NCRs
+                if customer_ncrs.empty and 'Corrected Customer Name' in filtered_ncr_df.columns:
+                    customer_ncrs = filtered_ncr_df[
+                        filtered_ncr_df['Corrected Customer Name'] == customer_name
+                    ].copy()
+                
+                # Secondary: If still no match, try matching via Sales Order
+                if customer_ncrs.empty and 'Sales Order' in filtered_ncr_df.columns and not customer_orders.empty and 'SO Number' in customer_orders.columns:
+                    customer_so_numbers = customer_orders['SO Number'].dropna().unique()
+                    # Clean SO numbers for matching
+                    customer_so_numbers = [str(so).strip() for so in customer_so_numbers if str(so).strip()]
+                    if customer_so_numbers:
+                        customer_ncrs = filtered_ncr_df[
+                            filtered_ncr_df['Sales Order'].isin(customer_so_numbers)
+                        ].copy()
+            
+            all_customers_data.append((customer_name, customer_orders, customer_invoices, customer_deals, customer_line_items, customer_ncrs))
     
     # Download buttons section
     date_info = f" | 📅 {date_label}" if date_label != "All Time" else ""
     
     # Special header for Company Overview mode
     if is_company_overview:
+        actual_customer_count = len(customer_list)  # Use actual customer count, not the aggregated entry
         st.markdown(f"""
             <div style="
                 background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 50%, #8b5cf6 100%);
@@ -6310,7 +6373,7 @@ def render_yearly_planning_2026():
             ">
                 <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem;">🏢 Company Health Report{date_info}</h3>
                 <p style="color: rgba(255,255,255,0.8); margin: 0.25rem 0 0 0; font-size: 0.85rem;">
-                    Aggregated data across {len(selected_customers)} customers
+                    Aggregated data across {actual_customer_count} accounts
                 </p>
             </div>
         """, unsafe_allow_html=True)
@@ -6330,15 +6393,15 @@ def render_yearly_planning_2026():
     # Create download buttons
     if is_company_overview:
         # Company Overview mode - single combined report
-        num_customers = len(selected_customers)
+        actual_customer_count = len(customer_list)
         
-        # Generate company-wide report
+        # Generate company-wide report using the pre-aggregated data
         company_summary_html = generate_combined_summary_html(all_customers_data, "Calyx Containers", date_label, pdf_config)
         
         col_spacer1, col_btn, col_spacer2 = st.columns([1.5, 2, 1.5])
         with col_btn:
             st.download_button(
-                label=f"🏢 Download Company Health Report ({num_customers} accounts)",
+                label=f"🏢 Download Company Health Report ({actual_customer_count} accounts)",
                 data=company_summary_html,
                 file_name=f"Company_Health_Report_{datetime.now().strftime('%Y%m%d')}.html",
                 mime="text/html",
@@ -6423,6 +6486,12 @@ def render_yearly_planning_2026():
     # Display customer QBR sections
     if is_company_overview:
         # Company Overview mode - show combined view with special header
+        # Get the pre-aggregated data from the fast path
+        _, all_orders, all_invoices, all_deals, all_line_items, all_ncrs = all_customers_data[0]
+        
+        # Get actual customer count from the customer_list (not all_customers_data which has 1 aggregated entry)
+        actual_customer_count = len(customer_list)
+        
         st.markdown(f"""
             <div style="
                 background: linear-gradient(135deg, #4c1d95 0%, #7c3aed 50%, #a78bfa 100%);
@@ -6432,19 +6501,12 @@ def render_yearly_planning_2026():
             ">
                 <h1 style="color: white; margin: 0; font-size: 2rem;">🏢 Company Health Overview</h1>
                 <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
-                    Calyx Containers &nbsp;|&nbsp; {len(all_customers_data)} Active Accounts{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                    Calyx Containers &nbsp;|&nbsp; {actual_customer_count} Active Accounts{date_filter_text} &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
                 </p>
             </div>
         """, unsafe_allow_html=True)
         
-        # Aggregate all data for company overview
-        all_orders = pd.concat([data[1] for data in all_customers_data if data[1] is not None and not data[1].empty], ignore_index=True) if any(data[1] is not None and not data[1].empty for data in all_customers_data) else pd.DataFrame()
-        all_invoices = pd.concat([data[2] for data in all_customers_data if data[2] is not None and not data[2].empty], ignore_index=True) if any(data[2] is not None and not data[2].empty for data in all_customers_data) else pd.DataFrame()
-        all_deals = pd.concat([data[3] for data in all_customers_data if data[3] is not None and not data[3].empty], ignore_index=True) if any(data[3] is not None and not data[3].empty for data in all_customers_data) else pd.DataFrame()
-        all_line_items = pd.concat([data[4] for data in all_customers_data if len(data) > 4 and data[4] is not None and not data[4].empty], ignore_index=True) if any(len(data) > 4 and data[4] is not None and not data[4].empty for data in all_customers_data) else pd.DataFrame()
-        all_ncrs = pd.concat([data[5] for data in all_customers_data if len(data) > 5 and data[5] is not None and not data[5].empty], ignore_index=True) if any(len(data) > 5 and data[5] is not None and not data[5].empty for data in all_customers_data) else pd.DataFrame()
-        
-        # Render all sections with aggregated data
+        # Render all sections with pre-aggregated data (no need to re-aggregate)
         render_pending_orders_section(all_orders)
         st.markdown("---")
         render_open_invoices_section(all_invoices)
