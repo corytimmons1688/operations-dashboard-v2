@@ -618,41 +618,14 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
     open_invoice_count = len(open_invoices)
     open_invoice_value = open_invoices['Amount Remaining'].sum() if not open_invoices.empty and 'Amount Remaining' in open_invoices.columns else 0
     
-    # Open Invoices Detail Table with Aging
+    # Open Invoices Detail Table (simplified - no aging for customer-facing reports)
     open_invoices_html = ""
-    aging_summary_html = ""
     if not open_invoices.empty and 'Due Date' in open_invoices.columns:
-        today = pd.Timestamp.now()
         open_inv = open_invoices.copy()
-        open_inv['Days Overdue'] = (today - open_inv['Due Date']).dt.days
-        
-        # Aging buckets
-        def aging_bucket(days):
-            if days <= 0: return 'Current'
-            elif days <= 30: return '1-30 Days'
-            elif days <= 60: return '31-60 Days'
-            elif days <= 90: return '61-90 Days'
-            else: return '90+ Days'
-        
-        open_inv['Aging'] = open_inv['Days Overdue'].apply(aging_bucket)
-        
-        # Aging summary
-        aging_summary = open_inv.groupby('Aging')['Amount Remaining'].sum()
-        bucket_order = ['Current', '1-30 Days', '31-60 Days', '61-90 Days', '90+ Days']
-        
-        aging_items = ""
-        for bucket in bucket_order:
-            if bucket in aging_summary.index:
-                amt = aging_summary[bucket]
-                color = "#ef4444" if bucket == '90+ Days' else "#f59e0b" if '60' in bucket or '90' in bucket else "#64748b"
-                aging_items += f'<div class="aging-item"><span class="aging-bucket">{bucket}</span><span class="aging-amount" style="color: {color};">${amt:,.0f}</span></div>'
-        
-        if aging_items:
-            aging_summary_html = f'<div class="aging-grid">{aging_items}</div>'
         
         # Individual invoice details
         invoice_rows = ""
-        for _, inv in open_inv.sort_values('Days Overdue', ascending=False).head(10).iterrows():
+        for _, inv in open_inv.sort_values('Due Date', ascending=True).head(10).iterrows():
             doc_num = inv.get('Document Number', 'N/A')
             amount = inv.get('Amount Remaining', 0)
             due_date = inv.get('Due Date')
@@ -660,21 +633,16 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                 due_date = due_date.strftime('%b %d, %Y')
             else:
                 due_date = 'N/A'
-            days_over = inv.get('Days Overdue', 0)
-            aging = inv.get('Aging', 'N/A')
-            row_class = "overdue-90" if days_over > 90 else "overdue-30" if days_over > 30 else ""
             invoice_rows += f"""
-            <tr class="{row_class}">
+            <tr>
                 <td><strong>{doc_num}</strong></td>
                 <td style="text-align: right;">${amount:,.0f}</td>
                 <td>{due_date}</td>
-                <td style="text-align: center;">{days_over:.0f}</td>
-                <td>{aging}</td>
             </tr>"""
         
         open_invoices_html = f"""
         <table class="data-table">
-            <thead><tr><th>Invoice #</th><th style="text-align: right;">Amount</th><th>Due Date</th><th style="text-align: center;">Days</th><th>Aging</th></tr></thead>
+            <thead><tr><th>Invoice #</th><th style="text-align: right;">Amount Due</th><th>Due Date</th></tr></thead>
             <tbody>{invoice_rows}</tbody>
         </table>
         """
@@ -1479,7 +1447,7 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     <div class="section-icon">💳</div>
                     <div>
                         <div class="section-title">Account Balance</div>
-                        <div class="section-subtitle">Outstanding invoices and aging analysis</div>
+                        <div class="section-subtitle">Outstanding invoices</div>
                     </div>
                 </div>
                 <div class="summary-box">
@@ -1492,7 +1460,6 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                         <div class="summary-label">Balance Due</div>
                     </div>
                 </div>
-                {aging_summary_html}
                 {open_invoices_html if open_invoices_html else '<p class="no-data">No outstanding invoices — account is current!</p>'}
             </div>
             
@@ -4562,13 +4529,16 @@ def create_unified_product_view(df):
             size_match = re.search(r'(4mL|7mL)', str(subcat))
             if size_match:
                 return f"Concentrates ({size_match.group(1)})"
+            # Universal lids without clear size match
+            if 'lid' in str(subcat).lower() or 'universal' in str(subcat).lower():
+                return 'Concentrate Lids'
             return 'Concentrates'
         
         # For Calyx Jar
         if cat == 'Calyx Jar':
             return 'Calyx Jar'
         
-        # For accessories
+        # For accessories - keep unified as Dram Accessories (shows in sub-breakdown)
         if cat == 'Dram Accessories':
             return 'Dram Accessories'
         
@@ -4588,12 +4558,12 @@ def create_unified_product_view(df):
         
         unified = str(unified_cat)
         
-        # Roll up Drams (25D, 45D, 15D, 145D) → Drams
-        if unified.startswith('Drams'):
+        # Roll up Drams (25D, 45D, 15D, 145D) and Dram Accessories → Drams
+        if unified.startswith('Drams') or unified == 'Dram Accessories':
             return 'Drams'
         
-        # Roll up Concentrates (4mL, 7mL) → Concentrates
-        if unified.startswith('Concentrates'):
+        # Roll up Concentrates (4mL, 7mL) and Concentrate Lids → Concentrates
+        if unified.startswith('Concentrates') or unified == 'Concentrate Lids':
             return 'Concentrates'
         
         # Everything else stays as-is
