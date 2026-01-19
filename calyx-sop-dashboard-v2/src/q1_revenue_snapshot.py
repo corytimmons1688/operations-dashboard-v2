@@ -19,7 +19,7 @@ VERSION 8 CHANGES:
 - Calculations respect the toggle selection
 
 VERSION 7 CHANGES:
-- Sales Order categorization now uses pre-calculated "Updated Status" column (Column AF)
+- Sales Order categorization now uses pre-calculated "Updated Status" column (Column AG)
 - Removed complex Python logic for categorizing PA/PF statuses
 - Updated Status values from sheet: PA No Date, PA with Date, PF with Date (Ext), 
   PF with Date (Int), PF No Date (Int), PF No Date (Ext), PA Old (>2 Weeks)
@@ -1216,22 +1216,25 @@ def load_all_data():
         if len(col_names) > 12 and 'Projected Date' not in rename_dict.values():
             rename_dict[col_names[12]] = 'Projected Date'  # Column M
         
-        # NEW COLUMN POSITIONS after adding Calyx | External Order in column AC
+        # COLUMN POSITIONS - Updated after "Location (no hierarchy)" added at AC
         if len(col_names) > 28:
-            rename_dict[col_names[28]] = 'Calyx External Order'  # Column AC
+            rename_dict[col_names[28]] = 'Location No Hierarchy'  # Column AC - Location (no hierarchy)
         if len(col_names) > 29 and 'Pending Approval Date' not in rename_dict.values():
             rename_dict[col_names[29]] = 'Pending Approval Date'  # Column AD
         if len(col_names) > 30:
             rename_dict[col_names[30]] = 'Corrected Customer Name'  # Column AE
         if len(col_names) > 31:
-            rename_dict[col_names[31]] = 'Updated Status'  # Column AF - Pre-calculated SO status category
+            rename_dict[col_names[31]] = 'Rep Master'  # Column AF
+        if len(col_names) > 32:
+            rename_dict[col_names[32]] = 'Updated Status'  # Column AG - Pre-calculated SO status category
         
-        # Rep Master lookup - search for it by column name if not found by position
-        for idx, col in enumerate(col_names):
-            col_str = str(col).lower().strip()
-            if 'rep master' in col_str and 'Rep Master' not in rename_dict.values():
-                rename_dict[col_names[idx]] = 'Rep Master'
-                break
+        # Rep Master fallback - search by column name if not found by position
+        if 'Rep Master' not in rename_dict.values():
+            for idx, col in enumerate(col_names):
+                col_str = str(col).lower().strip()
+                if 'rep master' in col_str:
+                    rename_dict[col_names[idx]] = 'Rep Master'
+                    break
         
         # NEW: Map PI || CSM column (Column G based on screenshot)
         for idx, col in enumerate(col_names):
@@ -3233,7 +3236,7 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     """
     SINGLE SOURCE OF TRUTH for categorizing sales orders into forecast buckets.
     
-    SIMPLIFIED VERSION: Uses the pre-calculated "Updated Status" column (Column AF)
+    SIMPLIFIED VERSION: Uses the pre-calculated "Updated Status" column (Column AG)
     from the Google Sheet instead of calculating status categories in Python.
     
     Valid "Updated Status" values:
