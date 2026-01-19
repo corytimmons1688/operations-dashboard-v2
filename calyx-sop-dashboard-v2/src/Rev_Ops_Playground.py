@@ -6626,15 +6626,25 @@ def create_pipeline_comparison_chart(data, title="Pipeline Performance"):
     """Create horizontal bar chart for pipeline comparison"""
     fig = go.Figure()
     
+    # Sort by actual descending
+    data = data.sort_values('Actual', ascending=True)
+    
+    # Custom colors for each pipeline
+    pipeline_colors_ordered = [PIPELINE_COLORS.get(p, '#3b82f6') for p in data['Pipeline']]
+    
     fig.add_trace(go.Bar(
         name='Plan',
         y=data['Pipeline'],
         x=data['YTD_Plan'],
         orientation='h',
-        marker_color='#475569',
+        marker=dict(
+            color='rgba(148, 163, 184, 0.3)',
+            line=dict(color='rgba(148, 163, 184, 0.5)', width=1)
+        ),
         text=[f"${x:,.0f}" for x in data['YTD_Plan']],
         textposition='inside',
-        textfont={'color': '#f1f5f9'}
+        textfont=dict(color='#94a3b8', size=11),
+        hovertemplate='<b>%{y}</b><br>Plan: $%{x:,.0f}<extra></extra>'
     ))
     
     fig.add_trace(go.Bar(
@@ -6642,23 +6652,50 @@ def create_pipeline_comparison_chart(data, title="Pipeline Performance"):
         y=data['Pipeline'],
         x=data['Actual'],
         orientation='h',
-        marker_color=[PIPELINE_COLORS.get(p, '#3b82f6') for p in data['Pipeline']],
+        marker=dict(
+            color=pipeline_colors_ordered,
+            line=dict(color='rgba(255,255,255,0.1)', width=1)
+        ),
         text=[f"${x:,.0f}" for x in data['Actual']],
         textposition='inside',
-        textfont={'color': '#f1f5f9'}
+        textfont=dict(color='#ffffff', size=12, family='Inter, sans-serif'),
+        hovertemplate='<b>%{y}</b><br>Actual: $%{x:,.0f}<extra></extra>'
     ))
     
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16, color='#f1f5f9')),
-        barmode='group',
+        title=dict(text=title, font=dict(size=16, color='#f1f5f9')) if title else None,
+        barmode='overlay',
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': '#94a3b8'},
-        xaxis=dict(gridcolor='#334155', tickformat='$,.0f'),
-        yaxis=dict(gridcolor='#334155'),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-        height=350,
-        margin=dict(t=80, b=40, l=120, r=40)
+        font=dict(color='#94a3b8', family='Inter, sans-serif'),
+        xaxis=dict(
+            gridcolor='rgba(148, 163, 184, 0.1)',
+            tickformat='$,.0f',
+            tickfont=dict(size=10),
+            showline=False,
+            zeroline=False
+        ),
+        yaxis=dict(
+            gridcolor='rgba(148, 163, 184, 0.1)',
+            tickfont=dict(size=12, color='#e2e8f0'),
+            showline=False
+        ),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5,
+            font=dict(size=11),
+            bgcolor='rgba(0,0,0,0)'
+        ),
+        height=300,
+        margin=dict(t=40, b=40, l=100, r=40),
+        hoverlabel=dict(
+            bgcolor='#1e293b',
+            font_size=12,
+            font_family='Inter, sans-serif'
+        )
     )
     
     return fig
@@ -6668,37 +6705,77 @@ def create_category_comparison_chart(data, title="Category Performance"):
     """Create bar chart for category comparison"""
     fig = go.Figure()
     
+    # Sort by actual descending
+    data = data.sort_values('Actual', ascending=False)
+    
+    # Custom colors for each category
+    category_colors_ordered = [CATEGORY_COLORS.get(c, '#3b82f6') for c in data['Category']]
+    
     fig.add_trace(go.Bar(
         name='Plan',
         x=data['Category'],
         y=data['YTD_Plan'],
-        marker_color='#475569',
+        marker=dict(
+            color='rgba(148, 163, 184, 0.2)',
+            line=dict(color='rgba(148, 163, 184, 0.4)', width=1)
+        ),
         text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in data['YTD_Plan']],
         textposition='outside',
-        textfont={'color': '#94a3b8'}
+        textfont=dict(color='#64748b', size=10),
+        hovertemplate='<b>%{x}</b><br>Plan: $%{y:,.0f}<extra></extra>'
     ))
     
     fig.add_trace(go.Bar(
         name='Actual',
         x=data['Category'],
         y=data['Actual'],
-        marker_color=[CATEGORY_COLORS.get(c, '#3b82f6') for c in data['Category']],
+        marker=dict(
+            color=category_colors_ordered,
+            line=dict(color='rgba(255,255,255,0.1)', width=1)
+        ),
         text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in data['Actual']],
         textposition='outside',
-        textfont={'color': '#f1f5f9'}
+        textfont=dict(color='#e2e8f0', size=10, family='Inter, sans-serif'),
+        hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
     ))
     
     fig.update_layout(
-        title=dict(text=title, font=dict(size=16, color='#f1f5f9')),
+        title=dict(text=title, font=dict(size=16, color='#f1f5f9')) if title else None,
         barmode='group',
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': '#94a3b8'},
-        xaxis=dict(gridcolor='#334155', tickangle=-45),
-        yaxis=dict(gridcolor='#334155', tickformat='$,.0f'),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+        font=dict(color='#94a3b8', family='Inter, sans-serif'),
+        xaxis=dict(
+            gridcolor='rgba(148, 163, 184, 0.05)',
+            tickangle=-45,
+            tickfont=dict(size=11, color='#e2e8f0'),
+            showline=False
+        ),
+        yaxis=dict(
+            gridcolor='rgba(148, 163, 184, 0.1)',
+            tickformat='$,.0f',
+            tickfont=dict(size=10),
+            showline=False,
+            zeroline=False
+        ),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5,
+            font=dict(size=11),
+            bgcolor='rgba(0,0,0,0)'
+        ),
         height=400,
-        margin=dict(t=80, b=100, l=80, r=40)
+        margin=dict(t=60, b=100, l=80, r=40),
+        bargap=0.3,
+        bargroupgap=0.1,
+        hoverlabel=dict(
+            bgcolor='#1e293b',
+            font_size=12,
+            font_family='Inter, sans-serif'
+        )
     )
     
     return fig
@@ -6733,39 +6810,82 @@ def create_monthly_trend_line_chart(monthly_actuals, forecast_df, selected_pipel
         actual_by_month = filtered.groupby('Month_Num')['Actual'].sum().to_dict()
         actual_values = [actual_by_month.get(i, 0) for i in range(1, 13)]
     
+    # Cumulative values
+    plan_cumulative = np.cumsum(plan_values)
+    actual_cumulative = np.cumsum(actual_values)
+    
     fig = go.Figure()
     
+    # Plan area
     fig.add_trace(go.Scatter(
         x=MONTH_ABBREV,
-        y=plan_values,
-        mode='lines+markers',
-        name='Plan',
-        line=dict(color='#475569', width=2, dash='dash'),
-        marker=dict(size=8)
+        y=plan_cumulative,
+        mode='lines',
+        name='Plan (Cumulative)',
+        line=dict(color='rgba(148, 163, 184, 0.5)', width=2, dash='dash'),
+        fill='tozeroy',
+        fillcolor='rgba(148, 163, 184, 0.05)',
+        hovertemplate='<b>%{x}</b><br>Plan: $%{y:,.0f}<extra></extra>'
     ))
     
+    # Actual area
     fig.add_trace(go.Scatter(
         x=MONTH_ABBREV,
-        y=actual_values,
+        y=actual_cumulative,
         mode='lines+markers',
-        name='Actual',
+        name='Actual (Cumulative)',
         line=dict(color='#3b82f6', width=3),
-        marker=dict(size=10),
+        marker=dict(size=8, color='#3b82f6', line=dict(color='#ffffff', width=2)),
         fill='tozeroy',
-        fillcolor='rgba(59, 130, 246, 0.1)'
+        fillcolor='rgba(59, 130, 246, 0.1)',
+        hovertemplate='<b>%{x}</b><br>Actual: $%{y:,.0f}<extra></extra>'
+    ))
+    
+    # Monthly bars (optional - shows monthly values)
+    fig.add_trace(go.Bar(
+        x=MONTH_ABBREV,
+        y=actual_values,
+        name='Monthly Actual',
+        marker=dict(
+            color='rgba(59, 130, 246, 0.3)',
+            line=dict(color='rgba(59, 130, 246, 0.5)', width=1)
+        ),
+        hovertemplate='<b>%{x}</b><br>Monthly: $%{y:,.0f}<extra></extra>'
     ))
     
     fig.update_layout(
-        title=dict(text='Monthly Trend: Plan vs Actual', font=dict(size=16, color='#f1f5f9')),
         paper_bgcolor='rgba(0,0,0,0)',
         plot_bgcolor='rgba(0,0,0,0)',
-        font={'color': '#94a3b8'},
-        xaxis=dict(gridcolor='#334155'),
-        yaxis=dict(gridcolor='#334155', tickformat='$,.0f'),
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+        font=dict(color='#94a3b8', family='Inter, sans-serif'),
+        xaxis=dict(
+            gridcolor='rgba(148, 163, 184, 0.1)',
+            tickfont=dict(size=11, color='#e2e8f0'),
+            showline=False
+        ),
+        yaxis=dict(
+            gridcolor='rgba(148, 163, 184, 0.1)',
+            tickformat='$,.0f',
+            tickfont=dict(size=10),
+            showline=False,
+            zeroline=False
+        ),
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='center',
+            x=0.5,
+            font=dict(size=10),
+            bgcolor='rgba(0,0,0,0)'
+        ),
         height=350,
-        margin=dict(t=80, b=40, l=80, r=40),
-        hovermode='x unified'
+        margin=dict(t=60, b=40, l=80, r=40),
+        hovermode='x unified',
+        hoverlabel=dict(
+            bgcolor='#1e293b',
+            font_size=12,
+            font_family='Inter, sans-serif'
+        )
     )
     
     return fig
@@ -6778,26 +6898,327 @@ def create_monthly_trend_line_chart(monthly_actuals, forecast_df, selected_pipel
 def render_yearly_planning_2026():
     """Main entry point for the 2026 Annual Goal Tracker"""
     
-    st.title("🎯 2026 Annual Goal Tracker")
-    st.caption("Progress vs. Plan by Pipeline & Category")
-    
-    # Custom CSS
     st.markdown("""
         <style>
-        .progress-card {
-            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-            border: 1px solid #334155;
-            border-radius: 16px;
+        /* ===== GLOBAL STYLES ===== */
+        .stApp {
+            background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 50%, #16213e 100%);
+        }
+        
+        /* Hide default Streamlit elements */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        
+        /* ===== TYPOGRAPHY ===== */
+        h1, h2, h3, h4 {
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            letter-spacing: -0.5px;
+        }
+        
+        .main-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-size: 3rem;
+            font-weight: 800;
+            text-align: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .sub-header {
+            color: #a0aec0;
+            text-align: center;
+            font-size: 1.1rem;
+            margin-bottom: 2rem;
+        }
+        
+        /* ===== GLASS CARDS ===== */
+        .glass-card {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
             padding: 1.5rem;
             margin: 0.5rem 0;
+            transition: all 0.3s ease;
         }
-        .progress-card-header { color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; }
-        .progress-card-value { color: #f1f5f9; font-size: 2rem; font-weight: 700; }
-        .progress-card-subvalue { color: #64748b; font-size: 0.9rem; }
-        .positive { color: #10b981 !important; }
-        .negative { color: #ef4444 !important; }
-        .neutral { color: #f59e0b !important; }
+        
+        .glass-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+        
+        /* ===== METRIC CARDS ===== */
+        .metric-card {
+            background: linear-gradient(145deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 16px;
+            padding: 1.25rem 1.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+        
+        .metric-card.success::before {
+            background: linear-gradient(90deg, #10b981, #34d399);
+        }
+        
+        .metric-card.warning::before {
+            background: linear-gradient(90deg, #f59e0b, #fbbf24);
+        }
+        
+        .metric-card.danger::before {
+            background: linear-gradient(90deg, #ef4444, #f87171);
+        }
+        
+        .metric-label {
+            color: #94a3b8;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .metric-value {
+            color: #f8fafc;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
+            margin-bottom: 0.25rem;
+        }
+        
+        .metric-value.large {
+            font-size: 2.5rem;
+        }
+        
+        .metric-delta {
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .metric-delta.positive { color: #34d399; }
+        .metric-delta.negative { color: #f87171; }
+        .metric-delta.neutral { color: #94a3b8; }
+        
+        /* ===== PROGRESS BAR ===== */
+        .progress-container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin: 0.75rem 0;
+        }
+        
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        
+        .progress-title {
+            color: #e2e8f0;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        
+        .progress-value {
+            color: #94a3b8;
+            font-size: 0.9rem;
+        }
+        
+        .progress-bar-bg {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            height: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-bar-fill {
+            height: 100%;
+            border-radius: 8px;
+            transition: width 1s ease-out;
+            position: relative;
+        }
+        
+        .progress-bar-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .progress-bar-fill.excellent { background: linear-gradient(90deg, #10b981, #34d399); }
+        .progress-bar-fill.good { background: linear-gradient(90deg, #3b82f6, #60a5fa); }
+        .progress-bar-fill.warning { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+        .progress-bar-fill.danger { background: linear-gradient(90deg, #ef4444, #f87171); }
+        
+        /* ===== PIPELINE CARDS ===== */
+        .pipeline-card {
+            background: linear-gradient(145deg, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.8) 100%);
+            border: 1px solid rgba(148, 163, 184, 0.1);
+            border-radius: 16px;
+            padding: 1.25rem;
+            margin: 0.5rem 0;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .pipeline-card::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+        }
+        
+        .pipeline-card.retention::before { background: linear-gradient(180deg, #10b981, #059669); }
+        .pipeline-card.growth::before { background: linear-gradient(180deg, #3b82f6, #2563eb); }
+        .pipeline-card.acquisition::before { background: linear-gradient(180deg, #8b5cf6, #7c3aed); }
+        .pipeline-card.distributors::before { background: linear-gradient(180deg, #f59e0b, #d97706); }
+        .pipeline-card.ecom::before { background: linear-gradient(180deg, #06b6d4, #0891b2); }
+        
+        .pipeline-name {
+            color: #94a3b8;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            margin-bottom: 0.5rem;
+        }
+        
+        .pipeline-actual {
+            color: #f8fafc;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+        
+        .pipeline-plan {
+            color: #64748b;
+            font-size: 0.85rem;
+        }
+        
+        .pipeline-pct {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            font-size: 1.1rem;
+            font-weight: 700;
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+        }
+        
+        .pipeline-pct.excellent { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+        .pipeline-pct.good { background: rgba(59, 130, 246, 0.2); color: #60a5fa; }
+        .pipeline-pct.warning { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+        .pipeline-pct.danger { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+        
+        /* ===== SECTION HEADERS ===== */
+        .section-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 2rem 0 1rem 0;
+            padding-bottom: 0.75rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .section-icon {
+            font-size: 1.5rem;
+        }
+        
+        .section-title {
+            color: #f1f5f9;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0;
+        }
+        
+        /* ===== DATA TABLE ===== */
+        .styled-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            background: rgba(15, 23, 42, 0.5);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .styled-table th {
+            background: rgba(30, 41, 59, 0.8);
+            color: #94a3b8;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 1rem;
+            text-align: left;
+        }
+        
+        .styled-table td {
+            color: #e2e8f0;
+            padding: 0.875rem 1rem;
+            border-bottom: 1px solid rgba(148, 163, 184, 0.05);
+        }
+        
+        .styled-table tr:hover td {
+            background: rgba(255, 255, 255, 0.02);
+        }
+        
+        /* ===== CUSTOM STREAMLIT OVERRIDES ===== */
+        div[data-testid="stMetric"] {
+            background: transparent !important;
+        }
+        
+        .stSelectbox > div > div {
+            background: rgba(30, 41, 59, 0.8) !important;
+            border-color: rgba(148, 163, 184, 0.2) !important;
+        }
+        
+        .stRadio > div {
+            background: transparent !important;
+        }
+        
+        /* Expander styling */
+        .streamlit-expanderHeader {
+            background: rgba(30, 41, 59, 0.5) !important;
+            border-radius: 12px !important;
+        }
+        
         </style>
+    """, unsafe_allow_html=True)
+    
+    # Header
+    st.markdown("""
+        <div style="text-align: center; padding: 2rem 0;">
+            <div class="main-header">🎯 2026 Annual Goal Tracker</div>
+            <div class="sub-header">Real-time Progress vs. Plan by Pipeline & Category</div>
+        </div>
     """, unsafe_allow_html=True)
     
     # Load data
@@ -6864,7 +7285,12 @@ def render_yearly_planning_2026():
         total_actual_all = 0
     
     # Executive Summary
-    st.markdown("### 📈 Executive Summary")
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">📈</span>
+            <span class="section-title">Executive Summary</span>
+        </div>
+    """, unsafe_allow_html=True)
     
     if selected_year != 2026:
         st.info(f"📅 **Note:** Showing {selected_year} actuals data for comparison. Switch to 2026 in sidebar when 2026 data is available.")
@@ -6883,44 +7309,111 @@ def render_yearly_planning_2026():
     total_actual = total_actual_all
     total_variance = total_actual - total_plan
     attainment = (total_actual / total_plan * 100) if total_plan > 0 else 0
+    annual_attainment = (total_actual / total_annual * 100) if total_annual > 0 else 0
     
+    # Determine status classes
+    variance_class = "success" if total_variance >= 0 else "danger"
+    attainment_class = "excellent" if attainment >= 100 else "good" if attainment >= 80 else "warning" if attainment >= 60 else "danger"
+    
+    # Metric Cards Row
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("2026 Annual Goal", f"${total_annual:,.0f}", f"Through {MONTH_NAMES[through_month-1]}")
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">2026 Annual Goal</div>
+                <div class="metric-value large">${total_annual:,.0f}</div>
+                <div class="metric-delta neutral">Full Year Target</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
     with col2:
-        st.metric("YTD Plan", f"${total_plan:,.0f}", f"Months 1-{through_month}")
+        st.markdown(f"""
+            <div class="metric-card">
+                <div class="metric-label">YTD Plan (Jan 1 - {MONTH_NAMES[through_month-1]})</div>
+                <div class="metric-value">${total_plan:,.0f}</div>
+                <div class="metric-delta neutral">{through_month} month{'s' if through_month > 1 else ''} of plan</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
     with col3:
-        st.metric(f"YTD Actual ({selected_year})", f"${total_actual:,.0f}", f"{attainment:.1f}% of plan")
+        delta_class = "positive" if attainment >= 100 else "negative" if attainment < 80 else "neutral"
+        st.markdown(f"""
+            <div class="metric-card {attainment_class}">
+                <div class="metric-label">YTD Actual ({selected_year})</div>
+                <div class="metric-value">${total_actual:,.0f}</div>
+                <div class="metric-delta {delta_class}">{attainment:.1f}% of YTD plan</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
     with col4:
-        variance_color = "normal" if total_variance >= 0 else "inverse"
-        st.metric("Variance", f"${total_variance:,.0f}", f"{'Ahead' if total_variance >= 0 else 'Behind'} of plan", delta_color=variance_color)
+        delta_symbol = "+" if total_variance >= 0 else ""
+        delta_class = "positive" if total_variance >= 0 else "negative"
+        status_text = "Ahead of plan" if total_variance >= 0 else "Behind plan"
+        st.markdown(f"""
+            <div class="metric-card {variance_class}">
+                <div class="metric-label">Variance to Plan</div>
+                <div class="metric-value">{delta_symbol}${total_variance:,.0f}</div>
+                <div class="metric-delta {delta_class}">{status_text}</div>
+            </div>
+        """, unsafe_allow_html=True)
     
-    # Gauge
-    st.markdown("---")
-    gauge_col1, gauge_col2, gauge_col3 = st.columns([1, 2, 1])
+    # Big Progress Bar
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    with gauge_col2:
-        gauge = create_attainment_gauge(
-            total_actual, total_plan,
-            f"YTD Attainment ({MONTH_NAMES[through_month-1]})",
-            '#3b82f6' if attainment >= 80 else '#f59e0b' if attainment >= 60 else '#ef4444'
-        )
-        st.plotly_chart(gauge, use_container_width=True)
+    progress_class = "excellent" if attainment >= 100 else "good" if attainment >= 80 else "warning" if attainment >= 60 else "danger"
+    progress_width = min(attainment, 120)  # Cap at 120% for display
+    
+    st.markdown(f"""
+        <div class="progress-container">
+            <div class="progress-header">
+                <span class="progress-title">YTD Goal Attainment</span>
+                <span class="progress-value">${total_actual:,.0f} / ${total_plan:,.0f} ({attainment:.1f}%)</span>
+            </div>
+            <div class="progress-bar-bg">
+                <div class="progress-bar-fill {progress_class}" style="width: {progress_width}%;"></div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Annual Progress (smaller)
+    annual_progress_class = "excellent" if annual_attainment >= (through_month/12)*100 else "good" if annual_attainment >= (through_month/12)*80 else "warning"
+    annual_progress_width = min(annual_attainment, 100)
+    
+    st.markdown(f"""
+        <div class="progress-container" style="background: rgba(255,255,255,0.02);">
+            <div class="progress-header">
+                <span class="progress-title" style="font-size: 0.9rem;">Annual Goal Progress</span>
+                <span class="progress-value">${total_actual:,.0f} / ${total_annual:,.0f} ({annual_attainment:.1f}%)</span>
+            </div>
+            <div class="progress-bar-bg" style="height: 8px;">
+                <div class="progress-bar-fill {annual_progress_class}" style="width: {annual_progress_width}%;"></div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
     
     # Pipeline Breakdown
-    st.markdown("---")
-    st.markdown("### 🔄 Pipeline Breakdown")
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">🔄</span>
+            <span class="section-title">Pipeline Breakdown</span>
+        </div>
+    """, unsafe_allow_html=True)
     
     # Calculate pipeline coverage
     if not line_items_df.empty and 'Forecast Pipeline' in line_items_df.columns:
         year_filtered = line_items_df[line_items_df['Date'].dt.year == selected_year] if 'Date' in line_items_df.columns else line_items_df
-        pipeline_assigned_revenue = year_filtered[year_filtered['Forecast Pipeline'].notna()]['Amount'].sum()
+        pipeline_assigned_revenue = year_filtered[year_filtered['Forecast Pipeline'].notna() & (year_filtered['Forecast Pipeline'] != 'Unmapped')]['Amount'].sum()
         total_revenue = year_filtered['Amount'].sum()
         pipeline_coverage_pct = (pipeline_assigned_revenue / total_revenue * 100) if total_revenue > 0 else 0
         
         if pipeline_coverage_pct < 100:
-            st.warning(f"⚠️ Only {pipeline_coverage_pct:.1f}% of {selected_year} revenue (${pipeline_assigned_revenue:,.0f} / ${total_revenue:,.0f}) has HubSpot Pipeline assigned. Unmapped revenue is excluded from pipeline breakdown but included in totals.")
+            st.markdown(f"""
+                <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 1rem; margin-bottom: 1rem;">
+                    <span style="color: #fbbf24;">⚠️ {pipeline_coverage_pct:.1f}% of {selected_year} revenue</span>
+                    <span style="color: #94a3b8;"> (${pipeline_assigned_revenue:,.0f} / ${total_revenue:,.0f}) has HubSpot Pipeline assigned.</span>
+                </div>
+            """, unsafe_allow_html=True)
     
     pipeline_data = comparison[
         (comparison['Category'] == 'Total') & 
@@ -6930,33 +7423,52 @@ def render_yearly_planning_2026():
     ].copy()
     
     if not pipeline_data.empty:
-        col1, col2 = st.columns([2, 1])
+        # Create pipeline cards in a row
+        cols = st.columns(len(FORECAST_PIPELINES))
         
-        with col1:
-            pipeline_chart = create_pipeline_comparison_chart(pipeline_data, "Pipeline: Plan vs Actual")
-            st.plotly_chart(pipeline_chart, use_container_width=True)
-        
-        with col2:
-            st.markdown("**Pipeline Summary**")
-            for _, row in pipeline_data.iterrows():
-                pipeline = row['Pipeline']
-                plan = row['YTD_Plan']
-                actual = row['Actual']
-                att_pct = row['Attainment_Pct']
-                
-                status_class = 'positive' if att_pct >= 100 else 'neutral' if att_pct >= 80 else 'negative'
-                
+        for idx, pipeline in enumerate(FORECAST_PIPELINES):
+            row = pipeline_data[pipeline_data['Pipeline'] == pipeline]
+            
+            if not row.empty:
+                actual = row['Actual'].values[0]
+                plan = row['YTD_Plan'].values[0]
+                att_pct = row['Attainment_Pct'].values[0]
+            else:
+                actual = 0
+                plan_row = ytd_plan[(ytd_plan['Pipeline'] == pipeline) & (ytd_plan['Category'] == 'Total')]
+                plan = plan_row['YTD_Plan'].values[0] if not plan_row.empty else 0
+                att_pct = 0
+            
+            pct_class = "excellent" if att_pct >= 100 else "good" if att_pct >= 80 else "warning" if att_pct >= 60 else "danger"
+            pipeline_class = pipeline.lower().replace(' ', '-')
+            
+            with cols[idx]:
                 st.markdown(f"""
-                    <div class="progress-card">
-                        <div class="progress-card-header">{pipeline}</div>
-                        <div class="progress-card-value">${actual:,.0f}</div>
-                        <div class="progress-card-subvalue">Plan: ${plan:,.0f} | <span class="{status_class}">{att_pct:.1f}%</span></div>
+                    <div class="pipeline-card {pipeline_class}">
+                        <div class="pipeline-pct {pct_class}">{att_pct:.0f}%</div>
+                        <div class="pipeline-name">{pipeline}</div>
+                        <div class="pipeline-actual">${actual:,.0f}</div>
+                        <div class="pipeline-plan">Plan: ${plan:,.0f}</div>
+                        <div style="margin-top: 0.75rem;">
+                            <div class="progress-bar-bg" style="height: 6px;">
+                                <div class="progress-bar-fill {pct_class}" style="width: {min(att_pct, 100)}%;"></div>
+                            </div>
+                        </div>
                     </div>
                 """, unsafe_allow_html=True)
+        
+        # Pipeline Chart
+        st.markdown("<br>", unsafe_allow_html=True)
+        pipeline_chart = create_pipeline_comparison_chart(pipeline_data, "")
+        st.plotly_chart(pipeline_chart, use_container_width=True)
     
     # Category Breakdown
-    st.markdown("---")
-    st.markdown("### 📦 Category Breakdown")
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">📦</span>
+            <span class="section-title">Category Breakdown</span>
+        </div>
+    """, unsafe_allow_html=True)
     
     # For category breakdown, use ytd_actuals_total which includes ALL revenue
     # Merge with plan data for the 'Total' pipeline row
@@ -6981,31 +7493,60 @@ def render_yearly_planning_2026():
         0
     )
     
-    title_suffix = " (All Pipelines)"
-    
     if not category_data.empty:
-        category_chart = create_category_comparison_chart(category_data, f"Category: Plan vs Actual{title_suffix}")
+        category_chart = create_category_comparison_chart(category_data, "")
         st.plotly_chart(category_chart, use_container_width=True)
         
+        # Styled table
         with st.expander("📋 View Category Details"):
-            display_df = category_data[['Category', 'YTD_Plan', 'Actual', 'Variance', 'Attainment_Pct', 'Annual_Total']].copy()
-            display_df.columns = ['Category', 'YTD Plan', 'YTD Actual', 'Variance', 'Attainment %', 'Annual Goal']
-            display_df['YTD Plan'] = display_df['YTD Plan'].apply(lambda x: f"${x:,.0f}")
-            display_df['YTD Actual'] = display_df['YTD Actual'].apply(lambda x: f"${x:,.0f}")
-            display_df['Variance'] = display_df['Variance'].apply(lambda x: f"${x:,.0f}")
-            display_df['Attainment %'] = display_df['Attainment %'].apply(lambda x: f"{x:.1f}%")
-            display_df['Annual Goal'] = display_df['Annual Goal'].apply(lambda x: f"${x:,.0f}")
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            # Create HTML table
+            table_html = """
+            <table class="styled-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>YTD Plan</th>
+                        <th>YTD Actual</th>
+                        <th>Variance</th>
+                        <th>Attainment</th>
+                        <th>Annual Goal</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            for _, row in category_data.iterrows():
+                variance_color = "#34d399" if row['Variance'] >= 0 else "#f87171"
+                att_color = "#34d399" if row['Attainment_Pct'] >= 100 else "#fbbf24" if row['Attainment_Pct'] >= 80 else "#f87171"
+                
+                table_html += f"""
+                    <tr>
+                        <td><strong>{row['Category']}</strong></td>
+                        <td>${row['YTD_Plan']:,.0f}</td>
+                        <td>${row['Actual']:,.0f}</td>
+                        <td style="color: {variance_color};">${row['Variance']:+,.0f}</td>
+                        <td style="color: {att_color};">{row['Attainment_Pct']:.1f}%</td>
+                        <td>${row['Annual_Total']:,.0f}</td>
+                    </tr>
+                """
+            
+            table_html += "</tbody></table>"
+            st.markdown(table_html, unsafe_allow_html=True)
     
     # Monthly Trend
-    st.markdown("---")
-    st.markdown("### 📅 Monthly Trend")
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">📅</span>
+            <span class="section-title">Monthly Trend</span>
+        </div>
+    """, unsafe_allow_html=True)
     
-    trend_col1, trend_col2 = st.columns([3, 1])
+    trend_col1, trend_col2 = st.columns([4, 1])
     
     with trend_col2:
-        trend_pipeline = st.selectbox("Select Pipeline", ['Total'] + FORECAST_PIPELINES, key='trend_pipeline')
-        trend_category = st.selectbox("Select Category", ['Total'] + FORECAST_CATEGORIES, key='trend_category')
+        st.markdown("<br>", unsafe_allow_html=True)
+        trend_pipeline = st.selectbox("Pipeline", ['Total'] + FORECAST_PIPELINES, key='trend_pipeline')
+        trend_category = st.selectbox("Category", ['Total'] + FORECAST_CATEGORIES, key='trend_category')
     
     with trend_col1:
         trend_chart = create_monthly_trend_line_chart(monthly_actuals, forecast_df, trend_pipeline, trend_category)
@@ -7013,13 +7554,16 @@ def render_yearly_planning_2026():
             st.plotly_chart(trend_chart, use_container_width=True)
     
     # Pipeline Health
-    st.markdown("---")
-    st.markdown("### 💼 Pipeline Health")
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">💼</span>
+            <span class="section-title">Pipeline Health</span>
+        </div>
+    """, unsafe_allow_html=True)
     
     health_col1, health_col2 = st.columns(2)
     
     with health_col1:
-        st.markdown("**Pending Orders** (Not Yet Invoiced)")
         if not sales_orders_df.empty:
             if 'Status' in sales_orders_df.columns:
                 pending_orders = sales_orders_df[
@@ -7031,28 +7575,55 @@ def render_yearly_planning_2026():
             pending_total = pending_orders['Amount'].sum() if 'Amount' in pending_orders.columns else 0
             pending_count = len(pending_orders)
             
-            st.metric("Pending Value", f"${pending_total:,.0f}", f"{pending_count} orders")
+            st.markdown(f"""
+                <div class="glass-card">
+                    <div class="metric-label">Pending Orders (Not Yet Invoiced)</div>
+                    <div class="metric-value">${pending_total:,.0f}</div>
+                    <div class="metric-delta neutral">{pending_count:,} orders in queue</div>
+                </div>
+            """, unsafe_allow_html=True)
         else:
-            st.info("No pending order data available")
+            st.markdown("""
+                <div class="glass-card">
+                    <div class="metric-label">Pending Orders</div>
+                    <div class="metric-value neutral">No data</div>
+                </div>
+            """, unsafe_allow_html=True)
     
     with health_col2:
-        st.markdown("**Open HubSpot Deals**")
         if not deals_df.empty:
-            if 'Close Status' in deals_df.columns:
-                open_statuses = ['Opportunity', 'Expect', 'Commit', 'Best Case']
-                open_deals = deals_df[deals_df['Close Status'].isin(open_statuses)]
+            if 'Deal Stage' in deals_df.columns:
+                open_deals = deals_df[~deals_df['Deal Stage'].str.contains('Closed|Won|Lost', case=False, na=False)]
             else:
                 open_deals = deals_df
             
             pipeline_total = open_deals['Amount'].sum() if 'Amount' in open_deals.columns else 0
             deal_count = len(open_deals)
             
-            st.metric("Pipeline Value", f"${pipeline_total:,.0f}", f"{deal_count} deals")
+            st.markdown(f"""
+                <div class="glass-card">
+                    <div class="metric-label">Open HubSpot Deals</div>
+                    <div class="metric-value">${pipeline_total:,.0f}</div>
+                    <div class="metric-delta neutral">{deal_count:,} active deals</div>
+                </div>
+            """, unsafe_allow_html=True)
         else:
-            st.info("No HubSpot deal data available")
+            st.markdown("""
+                <div class="glass-card">
+                    <div class="metric-label">Open HubSpot Deals</div>
+                    <div class="metric-value neutral">No data</div>
+                </div>
+            """, unsafe_allow_html=True)
     
     # Data Quality Check
-    with st.expander("🔍 Data Quality Check", expanded=True):
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">🔍</span>
+            <span class="section-title">Data Quality Check</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    with st.expander("View Diagnostics", expanded=False):
         st.markdown("### 🔗 Invoice Line Item ↔ Invoices Join Diagnostics")
         
         # Check the join between Invoice Line Item and _NS_Invoices_Data
