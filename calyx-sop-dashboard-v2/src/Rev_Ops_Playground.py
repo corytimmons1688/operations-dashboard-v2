@@ -6764,6 +6764,10 @@ def render_yearly_planning_2026():
     # Sidebar
     st.sidebar.markdown("### 📊 Filters")
     
+    # Year selector - important for comparing against prior year data
+    selected_year = st.sidebar.selectbox("Actuals Year", [2026, 2025], index=0, 
+                                          help="Select year for actuals data. Use 2025 to test with historical data.")
+    
     period_option = st.sidebar.radio("Time Period", ["YTD (through today)", "Full Year", "Custom Month"], index=0)
     
     if period_option == "Custom Month":
@@ -6782,8 +6786,8 @@ def render_yearly_planning_2026():
     
     # Calculations
     ytd_plan = get_ytd_plan(forecast_df, through_month)
-    ytd_actuals = calculate_ytd_actuals(line_items_df, year=2026)
-    monthly_actuals = calculate_monthly_actuals(line_items_df, year=2026)
+    ytd_actuals = calculate_ytd_actuals(line_items_df, year=selected_year)
+    monthly_actuals = calculate_monthly_actuals(line_items_df, year=selected_year)
     
     if not ytd_actuals.empty:
         comparison = calculate_variance(ytd_actuals, ytd_plan)
@@ -6796,6 +6800,9 @@ def render_yearly_planning_2026():
     
     # Executive Summary
     st.markdown("### 📈 Executive Summary")
+    
+    if selected_year != 2026:
+        st.info(f"📅 **Note:** Showing {selected_year} actuals data for comparison. Switch to 2026 in sidebar when 2026 data is available.")
     
     total_row = comparison[(comparison['Pipeline'] == 'Total') & (comparison['Category'] == 'Total')]
     
@@ -6819,7 +6826,7 @@ def render_yearly_planning_2026():
     with col2:
         st.metric("YTD Plan", f"${total_plan:,.0f}", f"Months 1-{through_month}")
     with col3:
-        st.metric("YTD Actual", f"${total_actual:,.0f}", f"{attainment:.1f}% of plan")
+        st.metric(f"YTD Actual ({selected_year})", f"${total_actual:,.0f}", f"{attainment:.1f}% of plan")
     with col4:
         variance_color = "normal" if total_variance >= 0 else "inverse"
         st.metric("Variance", f"${total_variance:,.0f}", f"{'Ahead' if total_variance >= 0 else 'Behind'} of plan", delta_color=variance_color)
@@ -6959,22 +6966,73 @@ def render_yearly_planning_2026():
             st.info("No HubSpot deal data available")
     
     # Data Quality Check
-    with st.expander("🔍 Data Quality Check"):
+    with st.expander("🔍 Data Quality Check", expanded=True):
+        st.markdown("### Invoice Line Item Diagnostics")
+        
+        if not line_items_df.empty:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Line Items", f"{len(line_items_df):,}")
+            
+            with col2:
+                total_revenue = line_items_df['Amount'].sum() if 'Amount' in line_items_df.columns else 0
+                st.metric("Total Revenue (All Time)", f"${total_revenue:,.0f}")
+            
+            with col3:
+                if 'Date' in line_items_df.columns:
+                    valid_dates = line_items_df['Date'].dropna()
+                    if len(valid_dates) > 0:
+                        min_date = valid_dates.min()
+                        max_date = valid_dates.max()
+                        st.metric("Date Range", f"{min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}")
+                    else:
+                        st.metric("Date Range", "No valid dates")
+                else:
+                    st.metric("Date Range", "No Date column found")
+            
+            # Show year breakdown
+            st.markdown("**Revenue by Year:**")
+            if 'Date' in line_items_df.columns:
+                line_items_df['Year'] = line_items_df['Date'].dt.year
+                year_breakdown = line_items_df.groupby('Year')['Amount'].sum().reset_index()
+                year_breakdown.columns = ['Year', 'Revenue']
+                year_breakdown = year_breakdown.sort_values('Year', ascending=False)
+                year_breakdown['Revenue'] = year_breakdown['Revenue'].apply(lambda x: f"${x:,.0f}")
+                st.dataframe(year_breakdown, use_container_width=True, hide_index=True)
+                
+                # Show count of 2026 records specifically
+                records_2026 = line_items_df[line_items_df['Year'] == 2026]
+                records_2025 = line_items_df[line_items_df['Year'] == 2025]
+                st.info(f"📊 **2026 Records:** {len(records_2026):,} line items | **2025 Records:** {len(records_2025):,} line items")
+            else:
+                st.warning("⚠️ No 'Date' column found in Invoice Line Items")
+        else:
+            st.error("❌ Invoice Line Item data is empty!")
+        
+        st.markdown("---")
         st.markdown("**Pipeline Coverage in Actuals**")
         if not line_items_df.empty and 'Forecast Pipeline' in line_items_df.columns:
-            pipeline_coverage = line_items_df.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+            # Filter to selected year for pipeline coverage
+            year_filtered = line_items_df[line_items_df['Date'].dt.year == selected_year] if 'Date' in line_items_df.columns else line_items_df
+            
+            pipeline_coverage = year_filtered.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             pipeline_coverage.columns = ['Pipeline', 'Revenue']
+            pipeline_coverage = pipeline_coverage.sort_values('Revenue', ascending=False)
             pipeline_coverage['Revenue'] = pipeline_coverage['Revenue'].apply(lambda x: f"${x:,.0f}")
             st.dataframe(pipeline_coverage, use_container_width=True, hide_index=True)
             
-            unmapped = line_items_df[line_items_df['Forecast Pipeline'].isna()]['Amount'].sum()
+            unmapped = year_filtered[year_filtered['Forecast Pipeline'].isna()]['Amount'].sum()
             if unmapped > 0:
-                st.warning(f"⚠️ ${unmapped:,.0f} in revenue has no pipeline mapping")
+                st.warning(f"⚠️ ${unmapped:,.0f} in {selected_year} revenue has no pipeline mapping (invoices not linked to HubSpot deals)")
         
         st.markdown("**Category Coverage in Actuals**")
         if not line_items_df.empty and 'Forecast Category' in line_items_df.columns:
-            category_coverage = line_items_df.groupby('Forecast Category')['Amount'].sum().reset_index()
+            year_filtered = line_items_df[line_items_df['Date'].dt.year == selected_year] if 'Date' in line_items_df.columns else line_items_df
+            
+            category_coverage = year_filtered.groupby('Forecast Category')['Amount'].sum().reset_index()
             category_coverage.columns = ['Category', 'Revenue']
+            category_coverage = category_coverage.sort_values('Revenue', ascending=False)
             category_coverage['Revenue'] = category_coverage['Revenue'].apply(lambda x: f"${x:,.0f}")
             st.dataframe(category_coverage, use_container_width=True, hide_index=True)
 
