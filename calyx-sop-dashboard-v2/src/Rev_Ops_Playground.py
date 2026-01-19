@@ -6454,11 +6454,55 @@ def calculate_ytd_actuals(line_items_df, year=2026):
     if df.empty:
         return pd.DataFrame()
     
+    # Fill missing pipeline with 'Unmapped' so we don't lose revenue
+    if 'Forecast Pipeline' in df.columns:
+        df['Forecast Pipeline'] = df['Forecast Pipeline'].fillna('Unmapped')
+    else:
+        df['Forecast Pipeline'] = 'Unmapped'
+    
+    # Fill missing category with 'Other'
+    if 'Forecast Category' in df.columns:
+        df['Forecast Category'] = df['Forecast Category'].fillna('Other')
+    else:
+        df['Forecast Category'] = 'Other'
+    
     grouped = df.groupby(['Forecast Pipeline', 'Forecast Category']).agg({
         'Amount': 'sum'
     }).reset_index()
     
     grouped.columns = ['Pipeline', 'Category', 'Actual']
+    
+    return grouped
+
+
+def calculate_ytd_actuals_total(line_items_df, year=2026):
+    """Calculate total YTD actuals (ignoring pipeline, just by category)"""
+    if line_items_df.empty:
+        return pd.DataFrame()
+    
+    df = line_items_df.copy()
+    if 'Date' in df.columns:
+        df = df[df['Date'].dt.year == year]
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Fill missing category with 'Other'
+    if 'Forecast Category' in df.columns:
+        df['Forecast Category'] = df['Forecast Category'].fillna('Other')
+    else:
+        df['Forecast Category'] = 'Other'
+    
+    grouped = df.groupby('Forecast Category').agg({
+        'Amount': 'sum'
+    }).reset_index()
+    
+    grouped.columns = ['Category', 'Actual']
+    
+    # Add a 'Total' row
+    total_actual = grouped['Actual'].sum()
+    total_row = pd.DataFrame([{'Category': 'Total', 'Actual': total_actual}])
+    grouped = pd.concat([grouped, total_row], ignore_index=True)
     
     return grouped
 
@@ -6476,6 +6520,18 @@ def calculate_monthly_actuals(line_items_df, year=2026):
     
     if df.empty:
         return pd.DataFrame()
+    
+    # Fill missing pipeline with 'Unmapped'
+    if 'Forecast Pipeline' in df.columns:
+        df['Forecast Pipeline'] = df['Forecast Pipeline'].fillna('Unmapped')
+    else:
+        df['Forecast Pipeline'] = 'Unmapped'
+    
+    # Fill missing category with 'Other'
+    if 'Forecast Category' in df.columns:
+        df['Forecast Category'] = df['Forecast Category'].fillna('Other')
+    else:
+        df['Forecast Category'] = 'Other'
     
     grouped = df.groupby(['Forecast Pipeline', 'Forecast Category', 'Month', 'Month_Name']).agg({
         'Amount': 'sum'
@@ -6786,9 +6842,11 @@ def render_yearly_planning_2026():
     
     # Calculations
     ytd_plan = get_ytd_plan(forecast_df, through_month)
-    ytd_actuals = calculate_ytd_actuals(line_items_df, year=selected_year)
+    ytd_actuals = calculate_ytd_actuals(line_items_df, year=selected_year)  # By Pipeline & Category
+    ytd_actuals_total = calculate_ytd_actuals_total(line_items_df, year=selected_year)  # By Category only (for totals)
     monthly_actuals = calculate_monthly_actuals(line_items_df, year=selected_year)
     
+    # For pipeline comparison, merge with plan
     if not ytd_actuals.empty:
         comparison = calculate_variance(ytd_actuals, ytd_plan)
     else:
@@ -6798,26 +6856,33 @@ def render_yearly_planning_2026():
         comparison['Variance_Pct'] = -100
         comparison['Attainment_Pct'] = 0
     
+    # For category-only comparison (used for Executive Summary totals)
+    if not ytd_actuals_total.empty:
+        # Get total actual from category-based calculation (includes all revenue regardless of pipeline)
+        total_actual_all = ytd_actuals_total[ytd_actuals_total['Category'] == 'Total']['Actual'].values[0] if 'Total' in ytd_actuals_total['Category'].values else ytd_actuals_total['Actual'].sum()
+    else:
+        total_actual_all = 0
+    
     # Executive Summary
     st.markdown("### 📈 Executive Summary")
     
     if selected_year != 2026:
         st.info(f"📅 **Note:** Showing {selected_year} actuals data for comparison. Switch to 2026 in sidebar when 2026 data is available.")
     
-    total_row = comparison[(comparison['Pipeline'] == 'Total') & (comparison['Category'] == 'Total')]
+    # Get plan totals from forecast
+    total_plan_row = ytd_plan[(ytd_plan['Pipeline'] == 'Total') & (ytd_plan['Category'] == 'Total')]
     
-    if not total_row.empty:
-        total_plan = total_row['YTD_Plan'].values[0]
-        total_actual = total_row['Actual'].values[0]
-        total_annual = total_row['Annual_Total'].values[0]
-        total_variance = total_row['Variance'].values[0]
-        attainment = total_row['Attainment_Pct'].values[0]
+    if not total_plan_row.empty:
+        total_plan = total_plan_row['YTD_Plan'].values[0]
+        total_annual = total_plan_row['Annual_Total'].values[0]
     else:
-        total_plan = ytd_plan[ytd_plan['Pipeline'] == 'Total']['YTD_Plan'].sum()
-        total_actual = ytd_actuals['Actual'].sum() if not ytd_actuals.empty else 0
-        total_annual = ytd_plan[ytd_plan['Pipeline'] == 'Total']['Annual_Total'].sum()
-        total_variance = total_actual - total_plan
-        attainment = (total_actual / total_plan * 100) if total_plan > 0 else 0
+        total_plan = ytd_plan['YTD_Plan'].sum()
+        total_annual = ytd_plan['Annual_Total'].sum()
+    
+    # Use total_actual_all which includes ALL invoiced revenue (not just pipeline-mapped)
+    total_actual = total_actual_all
+    total_variance = total_actual - total_plan
+    attainment = (total_actual / total_plan * 100) if total_plan > 0 else 0
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -6847,9 +6912,20 @@ def render_yearly_planning_2026():
     st.markdown("---")
     st.markdown("### 🔄 Pipeline Breakdown")
     
+    # Calculate pipeline coverage
+    if not line_items_df.empty and 'Forecast Pipeline' in line_items_df.columns:
+        year_filtered = line_items_df[line_items_df['Date'].dt.year == selected_year] if 'Date' in line_items_df.columns else line_items_df
+        pipeline_assigned_revenue = year_filtered[year_filtered['Forecast Pipeline'].notna()]['Amount'].sum()
+        total_revenue = year_filtered['Amount'].sum()
+        pipeline_coverage_pct = (pipeline_assigned_revenue / total_revenue * 100) if total_revenue > 0 else 0
+        
+        if pipeline_coverage_pct < 100:
+            st.warning(f"⚠️ Only {pipeline_coverage_pct:.1f}% of {selected_year} revenue (${pipeline_assigned_revenue:,.0f} / ${total_revenue:,.0f}) has HubSpot Pipeline assigned. Unmapped revenue is excluded from pipeline breakdown but included in totals.")
+    
     pipeline_data = comparison[
         (comparison['Category'] == 'Total') & 
         (comparison['Pipeline'] != 'Total') &
+        (comparison['Pipeline'] != 'Unmapped') &
         (comparison['Pipeline'].isin(FORECAST_PIPELINES))
     ].copy()
     
@@ -6882,20 +6958,30 @@ def render_yearly_planning_2026():
     st.markdown("---")
     st.markdown("### 📦 Category Breakdown")
     
-    if selected_pipeline_filter != 'All Pipelines':
-        category_data = comparison[
-            (comparison['Pipeline'] == selected_pipeline_filter) & 
-            (comparison['Category'] != 'Total') &
-            (comparison['Category'].isin(FORECAST_CATEGORIES))
-        ].copy()
-        title_suffix = f" ({selected_pipeline_filter})"
+    # For category breakdown, use ytd_actuals_total which includes ALL revenue
+    # Merge with plan data for the 'Total' pipeline row
+    category_plan = ytd_plan[
+        (ytd_plan['Pipeline'] == 'Total') & 
+        (ytd_plan['Category'] != 'Total') &
+        (ytd_plan['Category'].isin(FORECAST_CATEGORIES))
+    ][['Category', 'YTD_Plan', 'Annual_Total']].copy()
+    
+    if not ytd_actuals_total.empty:
+        category_actuals = ytd_actuals_total[ytd_actuals_total['Category'] != 'Total'].copy()
+        category_data = category_plan.merge(category_actuals, on='Category', how='left')
+        category_data['Actual'] = category_data['Actual'].fillna(0)
     else:
-        category_data = comparison[
-            (comparison['Pipeline'] == 'Total') & 
-            (comparison['Category'] != 'Total') &
-            (comparison['Category'].isin(FORECAST_CATEGORIES))
-        ].copy()
-        title_suffix = " (All Pipelines)"
+        category_data = category_plan.copy()
+        category_data['Actual'] = 0
+    
+    category_data['Variance'] = category_data['Actual'] - category_data['YTD_Plan']
+    category_data['Attainment_Pct'] = np.where(
+        category_data['YTD_Plan'] > 0,
+        (category_data['Actual'] / category_data['YTD_Plan']) * 100,
+        0
+    )
+    
+    title_suffix = " (All Pipelines)"
     
     if not category_data.empty:
         category_chart = create_category_comparison_chart(category_data, f"Category: Plan vs Actual{title_suffix}")
