@@ -6967,6 +6967,95 @@ def render_yearly_planning_2026():
     
     # Data Quality Check
     with st.expander("🔍 Data Quality Check", expanded=True):
+        st.markdown("### 🔗 Invoice Line Item ↔ Invoices Join Diagnostics")
+        
+        # Check the join between Invoice Line Item and _NS_Invoices_Data
+        invoices_df = data['invoices']
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**Invoice Line Item**")
+            if not line_items_df.empty:
+                st.write(f"Total rows: {len(line_items_df):,}")
+                st.write(f"Columns: {list(line_items_df.columns)[:10]}...")
+                
+                # Check Document Number column
+                if 'Document Number' in line_items_df.columns:
+                    sample_doc_nums = line_items_df['Document Number'].dropna().head(5).tolist()
+                    st.write(f"Sample Document Numbers: {sample_doc_nums}")
+                else:
+                    st.error("❌ No 'Document Number' column found!")
+                    # Show all columns to find the right one
+                    st.write(f"Available columns: {list(line_items_df.columns)}")
+            else:
+                st.error("❌ Invoice Line Item is empty!")
+        
+        with col2:
+            st.markdown("**_NS_Invoices_Data**")
+            if not invoices_df.empty:
+                st.write(f"Total rows: {len(invoices_df):,}")
+                st.write(f"Columns: {list(invoices_df.columns)[:10]}...")
+                
+                # Check Document Number column
+                if 'Document Number' in invoices_df.columns:
+                    sample_doc_nums = invoices_df['Document Number'].dropna().head(5).tolist()
+                    st.write(f"Sample Document Numbers: {sample_doc_nums}")
+                else:
+                    st.error("❌ No 'Document Number' column found!")
+                    st.write(f"Available columns: {list(invoices_df.columns)}")
+                
+                # Check HubSpot Pipeline column
+                pipeline_col = None
+                for col in invoices_df.columns:
+                    if 'hubspot' in col.lower() and 'pipeline' in col.lower():
+                        pipeline_col = col
+                        break
+                if pipeline_col:
+                    st.write(f"✅ Found pipeline column: '{pipeline_col}'")
+                    sample_pipelines = invoices_df[pipeline_col].dropna().unique()[:5].tolist()
+                    st.write(f"Sample pipeline values: {sample_pipelines}")
+                else:
+                    st.error("❌ No HubSpot Pipeline column found!")
+            else:
+                st.error("❌ _NS_Invoices_Data is empty!")
+        
+        # Test the actual join
+        st.markdown("---")
+        st.markdown("### 🧪 Join Test Results")
+        
+        if not line_items_df.empty and not invoices_df.empty:
+            if 'Document Number' in line_items_df.columns and 'Document Number' in invoices_df.columns:
+                # Get unique doc numbers from each
+                line_item_docs = set(line_items_df['Document Number'].dropna().astype(str).str.strip().unique())
+                invoice_docs = set(invoices_df['Document Number'].dropna().astype(str).str.strip().unique())
+                
+                # Find overlap
+                matching_docs = line_item_docs.intersection(invoice_docs)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Line Item Doc #s", f"{len(line_item_docs):,}")
+                with col2:
+                    st.metric("Invoice Doc #s", f"{len(invoice_docs):,}")
+                with col3:
+                    st.metric("Matching Doc #s", f"{len(matching_docs):,}")
+                
+                if len(matching_docs) == 0:
+                    st.error("❌ NO MATCHING DOCUMENT NUMBERS! This is the problem.")
+                    st.write("**Sample Line Item Doc #s:**", list(line_item_docs)[:5])
+                    st.write("**Sample Invoice Doc #s:**", list(invoice_docs)[:5])
+                elif len(matching_docs) < len(line_item_docs) * 0.5:
+                    st.warning(f"⚠️ Only {len(matching_docs)/len(line_item_docs)*100:.1f}% of line items match to invoices")
+                else:
+                    st.success(f"✅ {len(matching_docs)/len(line_item_docs)*100:.1f}% of line items match to invoices")
+                
+                # Check Forecast Pipeline assignment
+                if 'Forecast Pipeline' in line_items_df.columns:
+                    pipeline_assigned = line_items_df['Forecast Pipeline'].notna().sum()
+                    st.metric("Line Items with Pipeline Assigned", f"{pipeline_assigned:,} / {len(line_items_df):,}")
+        
+        st.markdown("---")
         st.markdown("### Invoice Line Item Diagnostics")
         
         if not line_items_df.empty:
