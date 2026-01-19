@@ -931,7 +931,7 @@ def load_all_data():
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:Y", version=CACHE_VERSION)
     
     # Load sales orders data from NetSuite - EXTEND to include Columns through AF (Calyx | External Order, Pending Approval Date, Corrected Customer Name, Rep Master)
-    sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
+    sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AG", version=CACHE_VERSION)
     
     # Q4 Push planning status removed for Q1 dashboard
     q4_push_df = pd.DataFrame()  # Empty placeholder for compatibility
