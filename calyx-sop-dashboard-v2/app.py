@@ -7,9 +7,10 @@ Sections:
 - S&OP: Sales Rep View, Operations View, Scenario Planning, PO Forecast, Deliveries
 - Quality: NC Dashboard (Status, Aging, Cost, Customer, Pareto Analysis)
 - Revenue Snapshots: Q4, Q1, 2026 Yearly Planning
+- Revenue Operations Playground: QBR Generator & Ad-hoc Analysis
 
 Author: Xander @ Calyx Containers
-Version: 4.0.0 - Dark Mode Edition
+Version: 4.1.0 - Dark Mode Edition
 """
 
 import streamlit as st
@@ -71,6 +72,17 @@ try:
 except ImportError as e:
     YEARLY_MODULE_LOADED = False
     YEARLY_IMPORT_ERROR = str(e)
+
+# =============================================================================
+# REVENUE OPERATIONS PLAYGROUND MODULE IMPORT
+# =============================================================================
+REV_OPS_IMPORT_ERROR = None
+try:
+    from src.Rev_Ops_Playground import render_yearly_planning_2026 as render_rev_ops_playground
+    REV_OPS_MODULE_LOADED = True
+except ImportError as e:
+    REV_OPS_MODULE_LOADED = False
+    REV_OPS_IMPORT_ERROR = str(e)
 
 # Configure logging
 try:
@@ -218,24 +230,53 @@ def inject_custom_css():
         padding: 0.75rem 1.5rem !important;
         font-weight: 600 !important;
         font-size: 0.9rem !important;
-        letter-spacing: 0.3px !important;
-        box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4) !important;
+        letter-spacing: 0.5px !important;
+        box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4) !important;
         transition: all 0.3s ease !important;
     }
     
     .stButton > button:hover {
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
         transform: translateY(-2px) !important;
-        box-shadow: 0 8px 25px rgba(99, 102, 241, 0.5) !important;
+        box-shadow: 0 8px 25px rgba(124, 58, 237, 0.5) !important;
     }
 
     /* ==============================================
-       DATAFRAMES & TABLES - DARK GLASS
+       TABS - FUTURISTIC STYLE
        ============================================== */
-    [data-testid="stDataFrame"], .stDataFrame {
+    .stTabs [data-baseweb="tab-list"] {
         background: rgba(15, 23, 42, 0.8) !important;
-        border: 1px solid rgba(71, 85, 105, 0.3) !important;
         border-radius: 16px !important;
+        padding: 8px !important;
+        gap: 8px !important;
+        border: 1px solid rgba(99, 102, 241, 0.2) !important;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 12px !important;
+        padding: 12px 24px !important;
+        font-weight: 600 !important;
+        color: #94a3b8 !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    .stTabs [data-baseweb="tab"]:hover {
+        background: rgba(99, 102, 241, 0.1) !important;
+        color: #e2e8f0 !important;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
+        color: white !important;
+        box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4) !important;
+    }
+
+    /* ==============================================
+       DATA TABLES - DARK GLASS STYLE
+       ============================================== */
+    .stDataFrame {
+        background: rgba(15, 23, 42, 0.8) !important;
+        border-radius: 16px !important;
+        border: 1px solid rgba(99, 102, 241, 0.2) !important;
         overflow: hidden !important;
     }
     
@@ -243,160 +284,120 @@ def inject_custom_css():
         background: transparent !important;
     }
     
-    .stDataFrame table {
-        background: transparent !important;
-    }
-    
-    .stDataFrame th {
+    .stDataFrame thead th {
         background: rgba(30, 41, 59, 0.9) !important;
         color: #e2e8f0 !important;
-        font-weight: 600 !important;
+        font-weight: 700 !important;
         text-transform: uppercase !important;
+        letter-spacing: 1px !important;
         font-size: 0.75rem !important;
-        letter-spacing: 0.5px !important;
+        padding: 16px !important;
         border-bottom: 2px solid rgba(99, 102, 241, 0.3) !important;
     }
     
-    .stDataFrame td {
-        background: rgba(15, 23, 42, 0.5) !important;
-        color: #cbd5e1 !important;
-        border-bottom: 1px solid rgba(51, 65, 85, 0.5) !important;
-    }
-    
-    .stDataFrame tr:hover td {
-        background: rgba(51, 65, 85, 0.6) !important;
-    }
-
-    /* ==============================================
-       TABS - MODERN PILL STYLE
-       ============================================== */
-    .stTabs [data-baseweb="tab-list"] {
+    .stDataFrame tbody td {
         background: rgba(15, 23, 42, 0.6) !important;
-        border-radius: 16px !important;
-        padding: 6px !important;
-        gap: 6px !important;
-        border: 1px solid rgba(51, 65, 85, 0.5) !important;
+        color: #cbd5e1 !important;
+        padding: 12px 16px !important;
+        border-bottom: 1px solid rgba(99, 102, 241, 0.1) !important;
     }
     
-    .stTabs [data-baseweb="tab"] {
-        background: transparent !important;
-        color: #94a3b8 !important;
-        border-radius: 12px !important;
-        font-weight: 600 !important;
-        padding: 10px 20px !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        color: #f1f5f9 !important;
-        background: rgba(51, 65, 85, 0.5) !important;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%) !important;
-        color: white !important;
-        box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4) !important;
+    .stDataFrame tbody tr:hover td {
+        background: rgba(99, 102, 241, 0.1) !important;
     }
 
     /* ==============================================
-       EXPANDERS - COLLAPSIBLE CARDS (Simplified to prevent text garbling)
+       EXPANDER - SLEEK ACCORDION
        ============================================== */
-    [data-testid="stExpander"] {
-        background: rgba(30, 41, 59, 0.5) !important;
-        border: 1px solid rgba(71, 85, 105, 0.4) !important;
-        border-radius: 16px !important;
-        margin: 12px 0 !important;
+    .streamlit-expanderHeader {
+        background: rgba(30, 41, 59, 0.8) !important;
+        border-radius: 12px !important;
+        border: 1px solid rgba(99, 102, 241, 0.2) !important;
+        color: #e2e8f0 !important;
+        font-weight: 600 !important;
     }
     
-    [data-testid="stExpander"]:hover {
-        border-color: rgba(99, 102, 241, 0.5) !important;
+    .streamlit-expanderContent {
+        background: rgba(15, 23, 42, 0.6) !important;
+        border: 1px solid rgba(99, 102, 241, 0.1) !important;
+        border-top: none !important;
+        border-radius: 0 0 12px 12px !important;
     }
 
     /* ==============================================
        SELECT BOXES & INPUTS
        ============================================== */
     .stSelectbox > div > div,
-    .stTextInput > div > div > input,
-    .stNumberInput > div > div > input {
+    .stMultiSelect > div > div,
+    .stTextInput > div > div {
         background: rgba(30, 41, 59, 0.8) !important;
-        border: 1px solid rgba(71, 85, 105, 0.5) !important;
+        border: 1px solid rgba(99, 102, 241, 0.3) !important;
         border-radius: 12px !important;
-        color: #f1f5f9 !important;
-    }
-    
-    .stSelectbox > div > div:hover,
-    .stSelectbox > div > div:focus {
-        border-color: #6366f1 !important;
-        box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2) !important;
-    }
-    
-    /* Dropdown options */
-    [data-baseweb="popover"] {
-        background: #1e293b !important;
-        border: 1px solid rgba(71, 85, 105, 0.5) !important;
-        border-radius: 12px !important;
-    }
-    
-    [data-baseweb="menu"] {
-        background: transparent !important;
-    }
-    
-    [role="option"] {
-        background: transparent !important;
         color: #e2e8f0 !important;
     }
     
-    [role="option"]:hover {
-        background: rgba(99, 102, 241, 0.2) !important;
-    }
-
-    /* ==============================================
-       DIVIDERS & MARKDOWN
-       ============================================== */
-    hr {
-        border: none !important;
-        height: 1px !important;
-        background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.4), transparent) !important;
-        margin: 1.5rem 0 !important;
-    }
-    
-    [data-testid="stMarkdown"] a {
-        color: #818cf8 !important;
-        text-decoration: none !important;
-    }
-    
-    [data-testid="stMarkdown"] a:hover {
-        color: #a5b4fc !important;
-        text-decoration: underline !important;
-    }
-    
-    code {
+    .stSelectbox [data-baseweb="select"] > div,
+    .stMultiSelect [data-baseweb="select"] > div {
         background: rgba(30, 41, 59, 0.8) !important;
-        color: #fbbf24 !important;
-        padding: 2px 6px !important;
-        border-radius: 4px !important;
-        font-size: 0.85rem !important;
+        border-color: rgba(99, 102, 241, 0.3) !important;
     }
 
     /* ==============================================
-       SCROLLBAR - CUSTOM DARK
+       RADIO BUTTONS - NAVIGATION STYLE
+       ============================================== */
+    .stRadio > div {
+        background: transparent !important;
+    }
+    
+    .stRadio > div > label {
+        background: rgba(30, 41, 59, 0.6) !important;
+        border: 1px solid rgba(99, 102, 241, 0.2) !important;
+        border-radius: 12px !important;
+        padding: 12px 16px !important;
+        margin-bottom: 8px !important;
+        transition: all 0.3s ease !important;
+        cursor: pointer !important;
+    }
+    
+    .stRadio > div > label:hover {
+        background: rgba(99, 102, 241, 0.15) !important;
+        border-color: rgba(99, 102, 241, 0.4) !important;
+        transform: translateX(4px) !important;
+    }
+    
+    .stRadio > div > label[data-checked="true"] {
+        background: linear-gradient(135deg, rgba(79, 70, 229, 0.3) 0%, rgba(124, 58, 237, 0.3) 100%) !important;
+        border-color: #7c3aed !important;
+        box-shadow: 0 0 20px rgba(124, 58, 237, 0.2) !important;
+    }
+
+    /* ==============================================
+       PLOTLY CHARTS - DARK THEME
+       ============================================== */
+    .js-plotly-plot .plotly .bg {
+        fill: transparent !important;
+    }
+
+    /* ==============================================
+       SCROLLBAR - SUBTLE DARK
        ============================================== */
     ::-webkit-scrollbar {
-        width: 8px !important;
-        height: 8px !important;
+        width: 8px;
+        height: 8px;
     }
     
     ::-webkit-scrollbar-track {
-        background: #0f172a !important;
+        background: rgba(15, 23, 42, 0.5);
+        border-radius: 4px;
     }
     
     ::-webkit-scrollbar-thumb {
-        background: linear-gradient(180deg, #4f46e5, #7c3aed) !important;
-        border-radius: 10px !important;
+        background: rgba(99, 102, 241, 0.4);
+        border-radius: 4px;
     }
     
     ::-webkit-scrollbar-thumb:hover {
-        background: linear-gradient(180deg, #6366f1, #8b5cf6) !important;
+        background: rgba(99, 102, 241, 0.6);
     }
 
     /* ==============================================
@@ -405,169 +406,50 @@ def inject_custom_css():
     .stAlert {
         background: rgba(30, 41, 59, 0.8) !important;
         border-radius: 12px !important;
-        border: 1px solid rgba(71, 85, 105, 0.5) !important;
+        border-left: 4px solid #6366f1 !important;
     }
     
-    [data-testid="stInfo"] {
-        background: rgba(59, 130, 246, 0.1) !important;
-        border: 1px solid rgba(59, 130, 246, 0.3) !important;
-    }
-    
-    [data-testid="stSuccess"] {
-        background: rgba(16, 185, 129, 0.1) !important;
-        border: 1px solid rgba(16, 185, 129, 0.3) !important;
-    }
-    
-    [data-testid="stWarning"] {
-        background: rgba(245, 158, 11, 0.1) !important;
-        border: 1px solid rgba(245, 158, 11, 0.3) !important;
-    }
-    
-    [data-testid="stError"] {
-        background: rgba(239, 68, 68, 0.1) !important;
-        border: 1px solid rgba(239, 68, 68, 0.3) !important;
+    .element-container div[data-testid="stAlert"] {
+        background: rgba(30, 41, 59, 0.8) !important;
     }
 
     /* ==============================================
-       FILTER SECTION - DARK GLASS
+       DIVIDER
        ============================================== */
-    .filter-section {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
-        border: 1px solid rgba(99, 102, 241, 0.3) !important;
-        border-radius: 16px !important;
-        padding: 1.5rem !important;
-        margin: 1rem 0 !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3) !important;
-    }
-
-    /* ==============================================
-       HIDE STREAMLIT BRANDING
-       ============================================== */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-
-    /* ==============================================
-       NAVIGATION CARDS IN SIDEBAR
-       ============================================== */
-    .nav-card {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
-        border: 1px solid rgba(71, 85, 105, 0.4);
-        border-left: 4px solid transparent;
-        border-radius: 12px;
-        padding: 16px 20px;
-        margin: 8px 0;
-        cursor: pointer;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    }
-    
-    .nav-card:hover {
-        background: linear-gradient(135deg, rgba(51, 65, 85, 0.9) 0%, rgba(30, 41, 59, 0.95) 100%);
-        border-color: rgba(99, 102, 241, 0.5);
-        transform: translateX(4px);
-        box-shadow: 0 4px 20px rgba(99, 102, 241, 0.2);
-    }
-    
-    .nav-card.active {
-        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-        border: none;
-        border-left: 4px solid #60a5fa;
-        box-shadow: 0 8px 30px rgba(99, 102, 241, 0.4);
-    }
-    
-    .nav-card-icon {
-        font-size: 1.5rem;
-        margin-bottom: 4px;
-    }
-    
-    .nav-card-title {
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: #f1f5f9;
-        margin: 0;
-    }
-    
-    .nav-card-subtitle {
-        font-size: 0.7rem;
-        color: #94a3b8;
-        margin: 0;
-        opacity: 0.8;
-    }
-    
-    .nav-card.active .nav-card-title,
-    .nav-card.active .nav-card-subtitle {
-        color: white !important;
-    }
-
-    /* ==============================================
-       SIDEBAR RADIO BUTTONS AS CARDS
-       ============================================== */
-    [data-testid="stSidebar"] div[data-testid="stRadio"] > div {
-        gap: 8px !important;
-    }
-    
-    [data-testid="stSidebar"] div[data-testid="stRadio"] > div > label {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
-        border: 1px solid rgba(71, 85, 105, 0.4) !important;
-        border-left: 4px solid transparent !important;
-        border-radius: 12px !important;
-        padding: 16px 20px !important;
-        cursor: pointer !important;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
-        width: 100% !important;
-        margin: 4px 0 !important;
-    }
-    
-    [data-testid="stSidebar"] div[data-testid="stRadio"] > div > label:hover {
-        background: linear-gradient(135deg, rgba(51, 65, 85, 0.9) 0%, rgba(30, 41, 59, 0.95) 100%) !important;
-        border-color: rgba(99, 102, 241, 0.5) !important;
-        transform: translateX(4px) !important;
-        box-shadow: 0 4px 20px rgba(99, 102, 241, 0.2) !important;
-    }
-    
-    [data-testid="stSidebar"] div[data-testid="stRadio"] > div > label[data-checked="true"] {
-        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
+    hr {
         border: none !important;
-        border-left: 4px solid #60a5fa !important;
-        box-shadow: 0 8px 30px rgba(99, 102, 241, 0.4) !important;
-    }
-    
-    [data-testid="stSidebar"] div[data-testid="stRadio"] > div > label[data-checked="true"]:hover {
-        transform: translateX(0) !important;
-    }
-    
-    [data-testid="stSidebar"] div[data-testid="stRadio"] label p {
-        font-size: 0.9rem !important;
-        font-weight: 600 !important;
-        margin: 0 !important;
-        color: #f1f5f9 !important;
+        height: 1px !important;
+        background: linear-gradient(90deg, transparent 0%, rgba(99, 102, 241, 0.3) 50%, transparent 100%) !important;
+        margin: 2rem 0 !important;
     }
 
     /* ==============================================
-       MAIN CONTENT PADDING FOR STICKY BAR
+       SIDEBAR RADIO ANIMATION
        ============================================== */
-    .main .block-container {
-        padding-bottom: 120px !important;
+    [data-testid="stSidebar"] .stRadio > div > label {
+        display: flex !important;
+        align-items: center !important;
+        gap: 8px !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
 
 # =============================================================================
-# SIDEBAR NAVIGATION - REDESIGNED
+# SIDEBAR NAVIGATION
 # =============================================================================
 def render_sidebar():
-    """Render the sexy dark sidebar with navigation."""
+    """Render the sidebar with navigation."""
     with st.sidebar:
-        # Sexy header with gradient
+        # Logo and branding
         st.markdown("""
         <div style="
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 30px 20px;
+            background: linear-gradient(135deg, #1e40af 0%, #7c3aed 50%, #ec4899 100%);
+            padding: 25px;
             border-radius: 20px;
             text-align: center;
             margin-bottom: 25px;
-            box-shadow: 0 10px 40px rgba(102, 126, 234, 0.4);
+            box-shadow: 0 10px 40px rgba(124, 58, 237, 0.4);
             position: relative;
             overflow: hidden;
         ">
@@ -628,7 +510,8 @@ def render_sidebar():
                 "📈 S&OP Planning", 
                 "🛡️ Quality Management",
                 "📊 Q4 Revenue Snapshot",
-                "📅 2026 Yearly Planning"
+                "📅 2026 Yearly Planning",
+                "🎮 Revenue Operations Playground"
             ],
             label_visibility="collapsed",
             key="main_nav"
@@ -730,6 +613,9 @@ def render_sidebar():
             **📅 2026 Yearly Planning**
             Annual strategic planning and capacity
             
+            **🎮 Revenue Operations Playground**
+            QBR Generator & ad-hoc analysis tools
+            
             </div>
             """, unsafe_allow_html=True)
         
@@ -742,7 +628,7 @@ def render_sidebar():
             border-top: 1px solid rgba(99, 102, 241, 0.2);
         ">
             <p style="font-size: 0.7rem; color: #64748b; margin: 0;">
-                Calyx Command Center v4.0
+                Calyx Command Center v4.1
             </p>
             <p style="font-size: 0.65rem; color: #475569; margin: 4px 0 0 0;">
                 Built with ❤️ by Xander
@@ -1002,6 +888,37 @@ def render_2026_yearly_planning_section():
 
 
 # =============================================================================
+# REVENUE OPERATIONS PLAYGROUND SECTION
+# =============================================================================
+def render_rev_ops_playground_section():
+    """Render Revenue Operations Playground section."""
+    if REV_OPS_MODULE_LOADED:
+        try:
+            render_rev_ops_playground()
+        except Exception as e:
+            st.error(f"Error loading Revenue Operations Playground: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    else:
+        st.markdown("""
+        <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); 
+                     color: white; border-radius: 16px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(6, 182, 212, 0.3);'>
+            <h2 style='margin: 0; color: white !important;'>🎮 Revenue Operations Playground</h2>
+            <p style='font-size: 0.9rem; margin: 8px 0 0 0; opacity: 0.9; color: white !important;'>QBR Generator • Ad-hoc Analysis • Customer Deep Dives</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.info("📌 **Revenue Operations Playground module not yet loaded.**")
+        if REV_OPS_IMPORT_ERROR:
+            st.markdown(f"Import Error: `{REV_OPS_IMPORT_ERROR}`")
+        st.markdown("""
+        **To enable this section:**
+        1. Save `Rev_Ops_Playground.py` to `src/Rev_Ops_Playground.py`
+        2. Ensure all dependencies are installed
+        3. Refresh the application
+        """)
+
+
+# =============================================================================
 # MAIN APPLICATION
 # =============================================================================
 def main():
@@ -1020,6 +937,8 @@ def main():
         render_q4_revenue_section()
     elif section == "📅 2026 Yearly Planning":
         render_2026_yearly_planning_section()
+    elif section == "🎮 Revenue Operations Playground":
+        render_rev_ops_playground_section()
 
 
 if __name__ == "__main__":
