@@ -3437,8 +3437,8 @@ def clean_numeric(value):
 def load_qbr_data():
     """Load all data needed for QBR generation"""
     
-    # Load Sales Orders (A:AF to include all columns through Updated Status)
-    sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AF", version=CACHE_VERSION)
+    # Load Sales Orders (A:AG to include all columns through Updated Status)
+    sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AG", version=CACHE_VERSION)
     
     # Load Invoices (A:U to include Rep Master)
     invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:U", version=CACHE_VERSION)
