@@ -8437,46 +8437,67 @@ if __name__ == "__main__":
         layout="wide"
     )
     
-    # Navigation sidebar
-    st.sidebar.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
-            padding: 1.5rem;
+    # =========================================================================
+    # TOP NAVIGATION BAR - Prominent at top of page
+    # =========================================================================
+    st.markdown("""
+        <style>
+        /* Navigation tab styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            padding: 8px 16px;
             border-radius: 12px;
-            margin-bottom: 1.5rem;
-            text-align: center;
-        ">
-            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📊</div>
-            <div style="color: white; font-size: 1.1rem; font-weight: 700;">Revenue Operations</div>
-            <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">Hub</div>
-        </div>
+            border: 1px solid #334155;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background: transparent;
+            border-radius: 8px;
+            color: #94a3b8;
+            font-weight: 600;
+            padding: 12px 24px;
+        }
+        .stTabs [data-baseweb="tab"]:hover {
+            background: #334155;
+            color: #f1f5f9;
+        }
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+            color: white !important;
+        }
+        .stTabs [data-baseweb="tab-highlight"] {
+            display: none;
+        }
+        .stTabs [data-baseweb="tab-border"] {
+            display: none;
+        }
+        </style>
     """, unsafe_allow_html=True)
     
-    # Navigation menu
-    nav_selection = st.sidebar.radio(
-        "Navigation",
-        ["📋 QBR Generator", "📦 Product Forecasting Tool"],
-        label_visibility="collapsed"
-    )
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("""
+    # Header
+    st.markdown("""
         <div style="
-            background: #1e293b;
-            padding: 1rem;
-            border-radius: 8px;
-            margin-top: 1rem;
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+            padding: 1.5rem 2rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 16px;
         ">
-            <div style="color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem;">About</div>
-            <div style="color: #64748b; font-size: 0.8rem; line-height: 1.5;">
-                <strong style="color: #f1f5f9;">QBR Generator:</strong> Customer-focused quarterly business reviews<br><br>
-                <strong style="color: #f1f5f9;">Product Forecasting:</strong> SKU-level glass forecast and pipeline analysis
+            <div style="font-size: 2.5rem;">📊</div>
+            <div>
+                <h1 style="color: white; margin: 0; font-size: 1.8rem; font-weight: 700;">Revenue Operations Hub</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.9rem;">QBR Generation & Product Forecasting Tools</p>
             </div>
         </div>
     """, unsafe_allow_html=True)
     
-    # Route to selected page
-    if nav_selection == "📋 QBR Generator":
+    # Navigation tabs
+    tab1, tab2 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool"])
+    
+    with tab1:
         render_yearly_planning_2026()
-    else:
+    
+    with tab2:
         render_product_forecasting_tool()
