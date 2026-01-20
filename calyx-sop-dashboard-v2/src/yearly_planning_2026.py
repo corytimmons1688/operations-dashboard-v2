@@ -7203,11 +7203,1280 @@ def render_yearly_planning_2026():
                 render_ncr_section(customer_ncrs, customer_orders, selected_customer)
 
 
+# ========== PRODUCT FORECASTING TOOL ==========
+
+def load_deals_line_items():
+    """Load Deals Line Item data from Google Sheets - headers in Row 2"""
+    try:
+        spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
+        
+        if "service_account" not in st.secrets:
+            st.error("❌ Missing Google Cloud credentials in Streamlit secrets")
+            return pd.DataFrame()
+        
+        creds_dict = dict(st.secrets["service_account"])
+        creds = service_account.Credentials.from_service_account_info(
+            creds_dict, scopes=SCOPES
+        )
+        
+        service = build('sheets', 'v4', credentials=creds)
+        sheet = service.spreadsheets()
+        
+        # Load from Row 2 onwards (A2:S means start at row 2)
+        result = sheet.values().get(
+            spreadsheetId=spreadsheet_id,
+            range="Deals Line Item!A2:S"
+        ).execute()
+        
+        values = result.get('values', [])
+        
+        if not values:
+            st.warning("⚠️ No data found in Deals Line Item tab")
+            return pd.DataFrame()
+        
+        # Handle mismatched column counts
+        if len(values) > 1:
+            max_cols = max(len(row) for row in values)
+            for row in values:
+                while len(row) < max_cols:
+                    row.append('')
+        
+        # First row is headers (which was Row 2 in original sheet)
+        df = pd.DataFrame(values[1:], columns=values[0])
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Error loading Deals Line Item data: {str(e)}")
+        return pd.DataFrame()
+
+
+def process_deals_line_items(df):
+    """Process and clean Deals Line Item data"""
+    if df.empty:
+        return df
+    
+    # Remove duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+    
+    # Clean numeric data
+    if 'Amount' in df.columns:
+        df['Amount'] = df['Amount'].apply(clean_numeric)
+    if 'Quantity' in df.columns:
+        df['Quantity'] = df['Quantity'].apply(clean_numeric)
+    
+    # Clean date data
+    if 'Create Date' in df.columns:
+        df['Create Date'] = pd.to_datetime(df['Create Date'], errors='coerce')
+    if 'Close Date' in df.columns:
+        df['Close Date'] = pd.to_datetime(df['Close Date'], errors='coerce')
+    
+    # Create Deal Owner by combining First Name + Last Name
+    if 'Deal Owner First Name' in df.columns and 'Deal Owner Last Name' in df.columns:
+        df['Deal Owner'] = (
+            df['Deal Owner First Name'].fillna('').astype(str).str.strip() + ' ' + 
+            df['Deal Owner Last Name'].fillna('').astype(str).str.strip()
+        ).str.strip()
+    
+    # Clean text fields
+    for col in ['SKU', 'SKU Description', 'Deal Name', 'Deal Stage', 'Pipeline', 
+                'Deal Type', 'Close Status', 'Deal Close Status', 'Company Name', 
+                'Primary Associated Company']:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+            df[col] = df[col].replace('nan', '')
+            df[col] = df[col].str.replace('\n', '', regex=False).str.replace('\r', '', regex=False)
+    
+    # Parse boolean fields
+    if 'Is Closed Won' in df.columns:
+        df['Is Closed Won'] = df['Is Closed Won'].astype(str).str.lower().isin(['true', 'yes', '1'])
+    if 'Is closed lost' in df.columns:
+        df['Is closed lost'] = df['Is closed lost'].astype(str).str.lower().isin(['true', 'yes', '1'])
+    
+    return df
+
+
+def categorize_sku(sku, description):
+    """Categorize SKU into product categories based on SKU patterns and description"""
+    sku = str(sku).upper()
+    description = str(description).upper()
+    
+    # Glass/Dram categories
+    if any(x in sku for x in ['DRAM', 'DRM', '-D-', 'DR-']):
+        if any(x in description for x in ['CHILD', 'CR', 'CRC']):
+            return 'Drams', 'Child-Resistant Drams'
+        return 'Drams', 'Standard Drams'
+    
+    # Concentrate containers
+    if any(x in sku for x in ['CONC', 'CNCT', 'JAR', 'JR-', '-J-']):
+        if any(x in description for x in ['SILICONE', 'SIL']):
+            return 'Concentrates', 'Silicone Containers'
+        if any(x in description for x in ['GLASS', 'GLS']):
+            return 'Concentrates', 'Glass Containers'
+        return 'Concentrates', 'Concentrate Containers'
+    
+    # Tubes
+    if any(x in sku for x in ['TUBE', 'TB-', '-TB-', 'TUB-']):
+        if any(x in description for x in ['PRE-ROLL', 'PREROLL', 'PR']):
+            return 'Tubes', 'Pre-Roll Tubes'
+        return 'Tubes', 'Standard Tubes'
+    
+    # Bottles
+    if any(x in sku for x in ['BOTTLE', 'BTL', 'BT-', '-BT-']):
+        if any(x in description for x in ['TINCTURE', 'TINC']):
+            return 'Bottles', 'Tincture Bottles'
+        if any(x in description for x in ['DROPPER', 'DROP']):
+            return 'Bottles', 'Dropper Bottles'
+        return 'Bottles', 'Standard Bottles'
+    
+    # Bags/Pouches
+    if any(x in sku for x in ['BAG', 'POUCH', 'PCH', 'MYL']):
+        if any(x in description for x in ['MYLAR', 'MYL']):
+            return 'Bags & Pouches', 'Mylar Bags'
+        return 'Bags & Pouches', 'Exit Bags'
+    
+    # Caps/Closures
+    if any(x in sku for x in ['CAP', 'LID', 'CLOSURE', 'CLS']):
+        return 'Closures', 'Caps & Lids'
+    
+    # Labels
+    if any(x in sku for x in ['LABEL', 'LBL', 'STICKER']):
+        return 'Labels', 'Labels & Stickers'
+    
+    # Vape/Cartridges
+    if any(x in sku for x in ['VAPE', 'CART', 'CRT', '510']):
+        return 'Vape', 'Cartridges & Vape'
+    
+    # Packaging/Boxes
+    if any(x in sku for x in ['BOX', 'CARTON', 'PKG']):
+        return 'Packaging', 'Boxes & Cartons'
+    
+    # Fees/Services
+    if any(x in sku for x in ['FEE', 'SERVICE', 'FREIGHT', 'SHIP', 'RUSH']):
+        return 'Services', 'Fees & Services'
+    
+    # Default to Other/Unknown
+    return 'Other', 'Other Products'
+
+
+def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps"):
+    """Generate a professional HTML report for product forecasting"""
+    
+    generated_date = datetime.now().strftime('%B %d, %Y')
+    
+    if product_data.empty:
+        return "<html><body><h1>No product data available</h1></body></html>"
+    
+    # Calculate summary metrics
+    total_pipeline_value = product_data['Amount'].sum()
+    total_quantity = product_data['Quantity'].sum()
+    unique_skus = product_data['SKU'].nunique()
+    unique_deals = product_data['Deal ID'].nunique() if 'Deal ID' in product_data.columns else 0
+    
+    # Status breakdown
+    open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+    if 'Close Status' in product_data.columns:
+        open_pipeline = product_data[product_data['Close Status'].isin(open_statuses)]
+        open_value = open_pipeline['Amount'].sum()
+        open_qty = open_pipeline['Quantity'].sum()
+    else:
+        open_value = total_pipeline_value
+        open_qty = total_quantity
+    
+    # Category breakdown
+    category_summary = product_data.groupby('Product Category').agg({
+        'Amount': 'sum',
+        'Quantity': 'sum',
+        'SKU': 'nunique'
+    }).reset_index()
+    category_summary.columns = ['Category', 'Revenue', 'Quantity', 'SKU Count']
+    category_summary = category_summary.sort_values('Revenue', ascending=False)
+    
+    # Generate category rows
+    category_rows = ""
+    for _, row in category_summary.iterrows():
+        pct = (row['Revenue'] / total_pipeline_value * 100) if total_pipeline_value > 0 else 0
+        category_rows += f"""
+        <tr>
+            <td style="font-weight: 600; padding: 12px; text-align: left;">{row['Category']}</td>
+            <td style="text-align: right; padding: 12px; color: #059669; font-weight: 600;">${row['Revenue']:,.0f}</td>
+            <td style="text-align: right; padding: 12px;">{row['Quantity']:,.0f}</td>
+            <td style="text-align: right; padding: 12px;">{row['SKU Count']}</td>
+            <td style="text-align: right; padding: 12px;">
+                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
+                    <div style="background: #e2e8f0; border-radius: 4px; height: 10px; width: 100px; overflow: hidden;">
+                        <div style="background: linear-gradient(90deg, #3b82f6, #1d4ed8); height: 100%; width: {pct}%;"></div>
+                    </div>
+                    <span style="font-weight: 500; min-width: 50px;">{pct:.1f}%</span>
+                </div>
+            </td>
+        </tr>"""
+    
+    # Top SKUs table
+    sku_summary = product_data.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
+        'Amount': 'sum',
+        'Quantity': 'sum',
+        'Deal ID': 'nunique' if 'Deal ID' in product_data.columns else 'count'
+    }).reset_index()
+    sku_summary.columns = ['SKU', 'Description', 'Category', 'Revenue', 'Quantity', 'Deal Count']
+    sku_summary = sku_summary.sort_values('Revenue', ascending=False).head(20)
+    
+    sku_rows = ""
+    for _, row in sku_summary.iterrows():
+        desc = row['Description'][:50] + '...' if len(str(row['Description'])) > 50 else row['Description']
+        sku_rows += f"""
+        <tr>
+            <td style="font-weight: 600; padding: 10px; font-family: monospace; font-size: 0.85rem;">{row['SKU']}</td>
+            <td style="padding: 10px; color: #64748b; font-size: 0.85rem;">{desc}</td>
+            <td style="padding: 10px;">{row['Category']}</td>
+            <td style="text-align: right; padding: 10px; color: #059669; font-weight: 600;">${row['Revenue']:,.0f}</td>
+            <td style="text-align: right; padding: 10px;">{row['Quantity']:,.0f}</td>
+            <td style="text-align: center; padding: 10px;">{row['Deal Count']}</td>
+        </tr>"""
+    
+    # Pipeline stage breakdown (if status available)
+    pipeline_rows = ""
+    if 'Close Status' in product_data.columns:
+        stage_summary = product_data.groupby('Close Status').agg({
+            'Amount': 'sum',
+            'Quantity': 'sum',
+            'SKU': 'nunique'
+        }).reset_index()
+        stage_summary.columns = ['Status', 'Revenue', 'Quantity', 'SKU Count']
+        
+        # Define order
+        status_order = {'Commit': 0, 'Expect': 1, 'Best Case': 2, 'Opportunity': 3, 'Closed Won': 4, 'Closed Lost': 5}
+        stage_summary['Order'] = stage_summary['Status'].map(status_order).fillna(6)
+        stage_summary = stage_summary.sort_values('Order')
+        
+        for _, row in stage_summary.iterrows():
+            status_color = {
+                'Commit': '#10b981',
+                'Expect': '#3b82f6',
+                'Best Case': '#f59e0b',
+                'Opportunity': '#8b5cf6',
+                'Closed Won': '#059669',
+                'Closed Lost': '#ef4444'
+            }.get(row['Status'], '#64748b')
+            
+            pipeline_rows += f"""
+            <tr>
+                <td style="padding: 12px;">
+                    <span style="display: inline-block; padding: 4px 12px; background: {status_color}20; color: {status_color}; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">
+                        {row['Status']}
+                    </span>
+                </td>
+                <td style="text-align: right; padding: 12px; font-weight: 600;">${row['Revenue']:,.0f}</td>
+                <td style="text-align: right; padding: 12px;">{row['Quantity']:,.0f}</td>
+                <td style="text-align: right; padding: 12px;">{row['SKU Count']}</td>
+            </tr>"""
+    
+    # Build HTML
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Product Forecast Report - {date_label}</title>
+        <style>
+            * {{
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }}
+            
+            :root {{
+                --primary: #3b82f6;
+                --primary-dark: #1d4ed8;
+                --success: #10b981;
+                --warning: #f59e0b;
+                --danger: #ef4444;
+                --dark: #0f172a;
+                --dark-light: #1e293b;
+                --gray-100: #f8fafc;
+                --gray-200: #e2e8f0;
+                --gray-300: #cbd5e1;
+                --gray-400: #94a3b8;
+                --gray-500: #64748b;
+            }}
+            
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+                color: var(--dark);
+                line-height: 1.6;
+                padding: 40px;
+            }}
+            
+            .cover {{
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                padding: 60px;
+                border-radius: 24px;
+                margin-bottom: 40px;
+                position: relative;
+                overflow: hidden;
+            }}
+            
+            .cover::before {{
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--success) 100%);
+            }}
+            
+            .cover-content {{
+                text-align: center;
+                position: relative;
+                z-index: 2;
+            }}
+            
+            .cover-icon {{
+                font-size: 4rem;
+                margin-bottom: 20px;
+            }}
+            
+            .cover-title {{
+                font-size: 2.5rem;
+                font-weight: 800;
+                color: white;
+                letter-spacing: -1px;
+            }}
+            
+            .cover-subtitle {{
+                font-size: 1.2rem;
+                color: #94a3b8;
+                margin-top: 10px;
+            }}
+            
+            .cover-meta {{
+                display: flex;
+                justify-content: center;
+                gap: 20px;
+                margin-top: 30px;
+            }}
+            
+            .meta-pill {{
+                background: rgba(255,255,255,0.1);
+                border: 1px solid rgba(255,255,255,0.2);
+                padding: 8px 16px;
+                border-radius: 30px;
+                color: white;
+                font-size: 0.9rem;
+            }}
+            
+            .section {{
+                background: white;
+                border-radius: 20px;
+                padding: 40px;
+                margin-bottom: 30px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+            }}
+            
+            .section-header {{
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                margin-bottom: 30px;
+            }}
+            
+            .section-icon {{
+                width: 50px;
+                height: 50px;
+                background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+                border-radius: 14px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 1.5rem;
+            }}
+            
+            .section-icon.green {{
+                background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+            }}
+            
+            .section-icon.amber {{
+                background: linear-gradient(135deg, var(--warning) 0%, #d97706 100%);
+            }}
+            
+            .section-icon.purple {{
+                background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+            }}
+            
+            .section-title {{
+                font-size: 1.4rem;
+                font-weight: 700;
+                color: var(--dark);
+            }}
+            
+            .section-subtitle {{
+                font-size: 0.9rem;
+                color: var(--gray-500);
+            }}
+            
+            .metrics-grid {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 20px;
+                margin-bottom: 30px;
+            }}
+            
+            .metric-card {{
+                background: var(--gray-100);
+                border-radius: 16px;
+                padding: 24px;
+                text-align: center;
+                border: 1px solid var(--gray-200);
+            }}
+            
+            .metric-card.highlight {{
+                background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
+                border: none;
+            }}
+            
+            .metric-card.highlight .metric-value,
+            .metric-card.highlight .metric-label {{
+                color: white !important;
+            }}
+            
+            .metric-card.green {{
+                background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
+                border: none;
+            }}
+            
+            .metric-card.green .metric-value,
+            .metric-card.green .metric-label {{
+                color: white !important;
+            }}
+            
+            .metric-value {{
+                font-size: 2rem;
+                font-weight: 800;
+                color: var(--dark);
+                letter-spacing: -1px;
+            }}
+            
+            .metric-label {{
+                font-size: 0.8rem;
+                color: var(--gray-500);
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-top: 8px;
+                font-weight: 600;
+            }}
+            
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }}
+            
+            th {{
+                background: var(--dark);
+                color: white;
+                padding: 14px;
+                text-align: left;
+                font-weight: 600;
+                font-size: 0.85rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            
+            th:first-child {{
+                border-radius: 10px 0 0 0;
+            }}
+            
+            th:last-child {{
+                border-radius: 0 10px 0 0;
+            }}
+            
+            td {{
+                padding: 12px 14px;
+                border-bottom: 1px solid var(--gray-200);
+            }}
+            
+            tr:hover td {{
+                background: var(--gray-100);
+            }}
+            
+            tr:last-child td:first-child {{
+                border-radius: 0 0 0 10px;
+            }}
+            
+            tr:last-child td:last-child {{
+                border-radius: 0 0 10px 0;
+            }}
+            
+            .footer {{
+                margin-top: 40px;
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                padding: 40px;
+                text-align: center;
+                color: white;
+                border-radius: 20px;
+            }}
+            
+            .footer::before {{
+                content: '';
+                display: block;
+                height: 4px;
+                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--success) 100%);
+                margin: -40px -40px 30px -40px;
+                border-radius: 20px 20px 0 0;
+            }}
+            
+            @media print {{
+                body {{
+                    padding: 0;
+                }}
+                .section {{
+                    page-break-inside: avoid;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="cover">
+            <div class="cover-content">
+                <div class="cover-icon">📦</div>
+                <div class="cover-title">Glass Forecast Report</div>
+                <div class="cover-subtitle">Product Pipeline & SKU-Level Analysis</div>
+                <div class="cover-meta">
+                    <div class="meta-pill">📅 {generated_date}</div>
+                    <div class="meta-pill">👤 {rep_name}</div>
+                    <div class="meta-pill">📊 {date_label}</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon">📊</div>
+                <div>
+                    <div class="section-title">Executive Summary</div>
+                    <div class="section-subtitle">Product forecast overview and key metrics</div>
+                </div>
+            </div>
+            
+            <div class="metrics-grid">
+                <div class="metric-card highlight">
+                    <div class="metric-value">${total_pipeline_value:,.0f}</div>
+                    <div class="metric-label">Total Pipeline Value</div>
+                </div>
+                <div class="metric-card green">
+                    <div class="metric-value">{total_quantity:,.0f}</div>
+                    <div class="metric-label">Total Units</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{unique_skus}</div>
+                    <div class="metric-label">Unique SKUs</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">{unique_deals}</div>
+                    <div class="metric-label">Active Deals</div>
+                </div>
+            </div>
+            
+            <div class="metrics-grid" style="grid-template-columns: repeat(2, 1fr);">
+                <div class="metric-card" style="background: linear-gradient(135deg, #3b82f620 0%, #1d4ed820 100%); border: 2px solid var(--primary);">
+                    <div class="metric-value" style="color: var(--primary);">${open_value:,.0f}</div>
+                    <div class="metric-label">Open Pipeline (Forecasted)</div>
+                </div>
+                <div class="metric-card" style="background: linear-gradient(135deg, #8b5cf620 0%, #7c3aed20 100%); border: 2px solid #8b5cf6;">
+                    <div class="metric-value" style="color: #8b5cf6;">{open_qty:,.0f}</div>
+                    <div class="metric-label">Open Pipeline Units</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon green">📦</div>
+                <div>
+                    <div class="section-title">Category Breakdown</div>
+                    <div class="section-subtitle">Product pipeline by category</div>
+                </div>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">Category</th>
+                        <th style="text-align: right;">Revenue</th>
+                        <th style="text-align: right;">Quantity</th>
+                        <th style="text-align: right;">SKUs</th>
+                        <th style="text-align: right;">Share</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {category_rows}
+                </tbody>
+            </table>
+        </div>
+        
+        {f'''
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon amber">📈</div>
+                <div>
+                    <div class="section-title">Pipeline by Status</div>
+                    <div class="section-subtitle">Deal stages and expected close rates</div>
+                </div>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">Status</th>
+                        <th style="text-align: right;">Revenue</th>
+                        <th style="text-align: right;">Quantity</th>
+                        <th style="text-align: right;">SKUs</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {pipeline_rows}
+                </tbody>
+            </table>
+        </div>
+        ''' if pipeline_rows else ''}
+        
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon purple">🏆</div>
+                <div>
+                    <div class="section-title">Top SKUs</div>
+                    <div class="section-subtitle">Highest value products in pipeline</div>
+                </div>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">SKU</th>
+                        <th style="text-align: left;">Description</th>
+                        <th style="text-align: left;">Category</th>
+                        <th style="text-align: right;">Revenue</th>
+                        <th style="text-align: right;">Qty</th>
+                        <th style="text-align: center;">Deals</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {sku_rows}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 10px;">
+                Glass Forecast Report
+            </div>
+            <div style="font-size: 0.9rem; opacity: 0.6;">
+                Generated on {generated_date}
+            </div>
+            <div style="margin-top: 20px; font-size: 0.8rem; opacity: 0.4; text-transform: uppercase; letter-spacing: 2px;">
+                Calyx Containers
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+
+def render_product_forecasting_tool():
+    """Main render function for Product Forecasting Tool"""
+    
+    st.title("📦 Product Forecasting Tool")
+    st.caption("Glass forecast and SKU-level pipeline analysis")
+    
+    # Load data
+    with st.spinner("Loading pipeline data..."):
+        deals_line_items_df = load_deals_line_items()
+        deals_line_items_df = process_deals_line_items(deals_line_items_df)
+    
+    # Also load regular deals for comparison
+    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
+    
+    if deals_line_items_df.empty:
+        st.error("❌ Unable to load Deals Line Item data. Please check your Google Sheets connection.")
+        st.info("Make sure the 'Deals Line Item' tab exists and has headers in Row 2.")
+        return
+    
+    # Apply product categorization
+    deals_line_items_df[['Product Category', 'Product Subcategory']] = deals_line_items_df.apply(
+        lambda row: pd.Series(categorize_sku(row.get('SKU', ''), row.get('SKU Description', ''))),
+        axis=1
+    )
+    
+    # Custom CSS
+    st.markdown("""
+        <style>
+        div[data-baseweb="select"] > div {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+            border: 2px solid #8b5cf6 !important;
+            border-radius: 10px !important;
+        }
+        div[data-baseweb="select"] > div:hover {
+            border-color: #a78bfa !important;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.4) !important;
+        }
+        div[data-baseweb="select"] svg { fill: #8b5cf6 !important; }
+        .stMultiSelect > div > div {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+            border: 2px solid #8b5cf6 !important;
+        }
+        .stMultiSelect span[data-baseweb="tag"] { background: #8b5cf6 !important; }
+        div[data-testid="stMetric"] {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%) !important;
+            border: 1px solid #334155 !important;
+            border-radius: 12px !important;
+            padding: 1rem !important;
+        }
+        .stDownloadButton > button {
+            background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%) !important;
+            color: white !important;
+            border: none !important;
+            border-radius: 10px !important;
+        }
+        .stDownloadButton > button:hover {
+            background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 100%) !important;
+            box-shadow: 0 5px 20px rgba(139, 92, 246, 0.4) !important;
+        }
+        h3 {
+            color: #f1f5f9 !important;
+            border-bottom: 2px solid #8b5cf6 !important;
+            padding-bottom: 0.5rem !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # FILTERS SECTION
+    # =========================================================================
+    st.markdown("""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #8b5cf6;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.3rem; border: none !important;">🔍 Filter Product Pipeline</h3>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Get filter options
+    ALLOWED_REPS = ['Jake Lynch', 'Brad Sherman', 'Lance Mitton', 'Owen Labombard', 
+                    'Alex Gonzalez', 'Dave Borkowski', 'Kyle Bissell']
+    
+    if 'Deal Owner' in deals_line_items_df.columns:
+        rep_list = deals_line_items_df['Deal Owner'].dropna().unique().tolist()
+        rep_list = [r for r in rep_list if r in ALLOWED_REPS]
+        rep_list = ["All Reps"] + sorted(rep_list)
+    else:
+        rep_list = ["All Reps"]
+    
+    categories = ["All Categories"] + sorted(deals_line_items_df['Product Category'].dropna().unique().tolist())
+    
+    # Close Status options
+    if 'Close Status' in deals_line_items_df.columns:
+        status_options = ["All Statuses"] + sorted(deals_line_items_df['Close Status'].dropna().unique().tolist())
+    else:
+        status_options = ["All Statuses"]
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        selected_rep = st.selectbox("SALES REP", rep_list, key="pf_rep_selector")
+    
+    with col2:
+        selected_category = st.selectbox("PRODUCT CATEGORY", categories, key="pf_category_selector")
+    
+    with col3:
+        selected_status = st.selectbox("DEAL STATUS", status_options, key="pf_status_selector")
+    
+    # Date Filter
+    st.markdown("""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 0.75rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #f59e0b;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem; border: none !important;">📅 Date Range Filter</h3>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    col_period, col_range = st.columns([1, 2])
+    
+    with col_period:
+        period_type = st.selectbox(
+            "TIME PERIOD",
+            ["All Time", "This Month", "This Quarter", "This Year", "Next Quarter", "Next 6 Months", "Custom Range"],
+            key="pf_period_type"
+        )
+    
+    # Calculate date range
+    today = datetime.now()
+    
+    if period_type == "All Time":
+        start_date = None
+        end_date = None
+        date_label = "All Time"
+    elif period_type == "This Month":
+        start_date = today.replace(day=1)
+        end_date = today
+        date_label = today.strftime("%B %Y")
+    elif period_type == "This Quarter":
+        quarter = (today.month - 1) // 3
+        start_date = datetime(today.year, quarter * 3 + 1, 1)
+        end_date = today
+        date_label = f"Q{quarter + 1} {today.year}"
+    elif period_type == "This Year":
+        start_date = datetime(today.year, 1, 1)
+        end_date = today
+        date_label = str(today.year)
+    elif period_type == "Next Quarter":
+        quarter = (today.month - 1) // 3
+        next_quarter = quarter + 1
+        if next_quarter > 3:
+            start_date = datetime(today.year + 1, 1, 1)
+            end_date = datetime(today.year + 1, 3, 31)
+            date_label = f"Q1 {today.year + 1}"
+        else:
+            start_date = datetime(today.year, next_quarter * 3 + 1, 1)
+            end_month = (next_quarter + 1) * 3
+            if end_month == 6:
+                end_date = datetime(today.year, 6, 30)
+            elif end_month == 9:
+                end_date = datetime(today.year, 9, 30)
+            else:
+                end_date = datetime(today.year, 12, 31)
+            date_label = f"Q{next_quarter + 1} {today.year}"
+    elif period_type == "Next 6 Months":
+        start_date = today
+        end_date = today + timedelta(days=180)
+        date_label = f"Next 6 Months"
+    else:  # Custom Range
+        start_date = None
+        end_date = None
+        date_label = "Custom"
+    
+    with col_range:
+        if period_type == "Custom Range":
+            date_col1, date_col2 = st.columns(2)
+            with date_col1:
+                custom_start = st.date_input("START DATE", value=today - timedelta(days=90), key="pf_custom_start")
+            with date_col2:
+                custom_end = st.date_input("END DATE", value=today + timedelta(days=90), key="pf_custom_end")
+            start_date = datetime.combine(custom_start, datetime.min.time())
+            end_date = datetime.combine(custom_end, datetime.max.time())
+            date_label = f"{custom_start.strftime('%b %d, %Y')} - {custom_end.strftime('%b %d, %Y')}"
+        else:
+            if start_date and end_date:
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 0.75rem 1rem;
+                        border-radius: 8px;
+                        margin-top: 1.5rem;
+                        color: #94a3b8;
+                    ">
+                        <span style="color: #f59e0b; font-weight: 600;">📆 {date_label}</span><br>
+                        <span style="font-size: 0.85rem;">{start_date.strftime('%b %d, %Y')} → {end_date.strftime('%b %d, %Y')}</span>
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 0.75rem 1rem;
+                        border-radius: 8px;
+                        margin-top: 1.5rem;
+                        color: #94a3b8;
+                    ">
+                        <span style="color: #f59e0b; font-weight: 600;">📆 All Time</span><br>
+                        <span style="font-size: 0.85rem;">No date filter applied</span>
+                    </div>
+                """, unsafe_allow_html=True)
+    
+    # =========================================================================
+    # APPLY FILTERS
+    # =========================================================================
+    filtered_df = deals_line_items_df.copy()
+    
+    # Rep filter
+    if selected_rep != "All Reps" and 'Deal Owner' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Deal Owner'] == selected_rep]
+    
+    # Category filter
+    if selected_category != "All Categories":
+        filtered_df = filtered_df[filtered_df['Product Category'] == selected_category]
+    
+    # Status filter
+    if selected_status != "All Statuses" and 'Close Status' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Close Status'] == selected_status]
+    
+    # Date filter (based on Close Date)
+    if start_date is not None and 'Close Date' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Close Date'] >= pd.Timestamp(start_date)]
+    if end_date is not None and 'Close Date' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Close Date'] <= pd.Timestamp(end_date)]
+    
+    if filtered_df.empty:
+        st.warning("No data matches the selected filters.")
+        return
+    
+    # =========================================================================
+    # SUMMARY METRICS
+    # =========================================================================
+    st.markdown("---")
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #8b5cf6 100%);
+            padding: 1.5rem 2rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+        ">
+            <h1 style="color: white; margin: 0; font-size: 2rem;">📦 Glass Forecast Overview</h1>
+            <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                {selected_rep} | {date_label} | Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Calculate metrics
+    total_pipeline = filtered_df['Amount'].sum()
+    total_quantity = filtered_df['Quantity'].sum()
+    unique_skus = filtered_df['SKU'].nunique()
+    unique_deals = filtered_df['Deal ID'].nunique() if 'Deal ID' in filtered_df.columns else len(filtered_df)
+    
+    # Open pipeline (forecasted)
+    open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+    if 'Close Status' in filtered_df.columns:
+        open_pipeline_df = filtered_df[filtered_df['Close Status'].isin(open_statuses)]
+        open_value = open_pipeline_df['Amount'].sum()
+        open_qty = open_pipeline_df['Quantity'].sum()
+        commit_value = filtered_df[filtered_df['Close Status'] == 'Commit']['Amount'].sum()
+    else:
+        open_value = total_pipeline
+        open_qty = total_quantity
+        commit_value = 0
+    
+    st.markdown("### 📊 Summary Metrics")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Pipeline Value", f"${total_pipeline:,.0f}")
+    with col2:
+        st.metric("Total Units", f"{total_quantity:,.0f}")
+    with col3:
+        st.metric("Unique SKUs", f"{unique_skus}")
+    with col4:
+        st.metric("Active Deals", f"{unique_deals}")
+    
+    col5, col6, col7, col8 = st.columns(4)
+    
+    with col5:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+                padding: 16px;
+                border-radius: 12px;
+                text-align: center;
+            ">
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Commit Pipeline</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">${commit_value:,.0f}</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col6:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+                padding: 16px;
+                border-radius: 12px;
+                text-align: center;
+            ">
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Open Pipeline</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">${open_value:,.0f}</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col7:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+                padding: 16px;
+                border-radius: 12px;
+                text-align: center;
+            ">
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Open Units</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">{open_qty:,.0f}</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    avg_deal = total_pipeline / unique_deals if unique_deals > 0 else 0
+    with col8:
+        st.metric("Avg Deal Value", f"${avg_deal:,.0f}")
+    
+    # =========================================================================
+    # DOWNLOAD BUTTON
+    # =========================================================================
+    st.markdown("---")
+    
+    # Generate HTML report
+    html_report = create_product_forecast_html(filtered_df, date_label, selected_rep)
+    
+    st.download_button(
+        label="📥 Download Glass Forecast Report (HTML)",
+        data=html_report,
+        file_name=f"glass_forecast_{date_label.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+        mime="text/html",
+        key="download_product_forecast"
+    )
+    
+    # =========================================================================
+    # CATEGORY BREAKDOWN
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 📦 Category Breakdown")
+    
+    category_summary = filtered_df.groupby('Product Category').agg({
+        'Amount': 'sum',
+        'Quantity': 'sum',
+        'SKU': 'nunique',
+        'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
+    }).reset_index()
+    category_summary.columns = ['Category', 'Revenue', 'Quantity', 'Unique SKUs', 'Deals']
+    category_summary = category_summary.sort_values('Revenue', ascending=False)
+    category_summary['% of Revenue'] = (category_summary['Revenue'] / total_pipeline * 100).round(1)
+    
+    col_chart, col_table = st.columns([1, 1])
+    
+    with col_chart:
+        # Pie chart
+        colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#14b8a6']
+        fig = go.Figure(data=[go.Pie(
+            labels=category_summary['Category'],
+            values=category_summary['Revenue'],
+            hole=0.45,
+            marker=dict(colors=colors[:len(category_summary)]),
+            textposition='outside',
+            textinfo='label+percent'
+        )])
+        fig.update_layout(
+            title="Revenue by Category",
+            showlegend=False,
+            height=400,
+            margin=dict(t=60, b=40, l=40, r=40)
+        )
+        st.plotly_chart(fig, use_container_width=True, key="category_pie")
+    
+    with col_table:
+        display_df = category_summary.copy()
+        display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
+        display_df['Quantity'] = display_df['Quantity'].apply(lambda x: f"{x:,.0f}")
+        display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # PIPELINE BY STATUS
+    # =========================================================================
+    if 'Close Status' in filtered_df.columns:
+        st.markdown("---")
+        st.markdown("### 📈 Pipeline by Status")
+        
+        status_summary = filtered_df.groupby('Close Status').agg({
+            'Amount': 'sum',
+            'Quantity': 'sum',
+            'SKU': 'nunique'
+        }).reset_index()
+        status_summary.columns = ['Status', 'Revenue', 'Quantity', 'Unique SKUs']
+        
+        # Define order
+        status_order = {'Commit': 0, 'Expect': 1, 'Best Case': 2, 'Opportunity': 3, 'Closed Won': 4, 'Closed Lost': 5}
+        status_summary['Order'] = status_summary['Status'].map(status_order).fillna(6)
+        status_summary = status_summary.sort_values('Order')
+        
+        status_colors = {
+            'Commit': '#10b981',
+            'Expect': '#3b82f6',
+            'Best Case': '#f59e0b',
+            'Opportunity': '#8b5cf6',
+            'Closed Won': '#059669',
+            'Closed Lost': '#ef4444'
+        }
+        
+        col_status_chart, col_status_table = st.columns([1, 1])
+        
+        with col_status_chart:
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=status_summary['Status'],
+                    y=status_summary['Revenue'],
+                    marker=dict(color=[status_colors.get(s, '#64748b') for s in status_summary['Status']]),
+                    text=[f'${x:,.0f}' for x in status_summary['Revenue']],
+                    textposition='outside'
+                )
+            ])
+            max_val = status_summary['Revenue'].max()
+            fig.update_layout(
+                title="Revenue by Deal Status",
+                xaxis_title="",
+                yaxis_title="Revenue",
+                yaxis=dict(range=[0, max_val * 1.15], tickformat='$,.0f'),
+                height=400,
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True, key="status_bar")
+        
+        with col_status_table:
+            display_status = status_summary[['Status', 'Revenue', 'Quantity', 'Unique SKUs']].copy()
+            display_status['Revenue'] = display_status['Revenue'].apply(lambda x: f"${x:,.0f}")
+            display_status['Quantity'] = display_status['Quantity'].apply(lambda x: f"{x:,.0f}")
+            st.dataframe(display_status, use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # TOP SKUS
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 🏆 Top SKUs by Revenue")
+    
+    sku_summary = filtered_df.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
+        'Amount': 'sum',
+        'Quantity': 'sum',
+        'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
+    }).reset_index()
+    sku_summary.columns = ['SKU', 'Description', 'Category', 'Revenue', 'Quantity', 'Deal Count']
+    sku_summary = sku_summary.sort_values('Revenue', ascending=False)
+    
+    # Show top 25
+    top_skus = sku_summary.head(25).copy()
+    top_skus['Revenue'] = top_skus['Revenue'].apply(lambda x: f"${x:,.0f}")
+    top_skus['Quantity'] = top_skus['Quantity'].apply(lambda x: f"{x:,.0f}")
+    
+    st.dataframe(top_skus, use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # SUBCATEGORY BREAKDOWN
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 📋 Subcategory Details")
+    
+    subcat_summary = filtered_df.groupby(['Product Category', 'Product Subcategory']).agg({
+        'Amount': 'sum',
+        'Quantity': 'sum',
+        'SKU': 'nunique'
+    }).reset_index()
+    subcat_summary.columns = ['Category', 'Subcategory', 'Revenue', 'Quantity', 'Unique SKUs']
+    subcat_summary = subcat_summary.sort_values(['Category', 'Revenue'], ascending=[True, False])
+    
+    display_subcat = subcat_summary.copy()
+    display_subcat['Revenue'] = display_subcat['Revenue'].apply(lambda x: f"${x:,.0f}")
+    display_subcat['Quantity'] = display_subcat['Quantity'].apply(lambda x: f"{x:,.0f}")
+    
+    st.dataframe(display_subcat, use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # COMPANY BREAKDOWN
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 🏢 Top Customers by Forecasted Value")
+    
+    company_col = 'Company Name' if 'Company Name' in filtered_df.columns else 'Primary Associated Company'
+    if company_col in filtered_df.columns:
+        company_summary = filtered_df.groupby(company_col).agg({
+            'Amount': 'sum',
+            'Quantity': 'sum',
+            'SKU': 'nunique',
+            'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
+        }).reset_index()
+        company_summary.columns = ['Customer', 'Revenue', 'Quantity', 'Unique SKUs', 'Deals']
+        company_summary = company_summary.sort_values('Revenue', ascending=False).head(20)
+        company_summary['% of Total'] = (company_summary['Revenue'] / total_pipeline * 100).round(1)
+        
+        display_company = company_summary.copy()
+        display_company['Revenue'] = display_company['Revenue'].apply(lambda x: f"${x:,.0f}")
+        display_company['Quantity'] = display_company['Quantity'].apply(lambda x: f"{x:,.0f}")
+        display_company['% of Total'] = display_company['% of Total'].apply(lambda x: f"{x:.1f}%")
+        
+        st.dataframe(display_company, use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # DEAL DETAILS EXPANDER
+    # =========================================================================
+    with st.expander("📋 View All Deal Line Items"):
+        display_cols = ['Deal Name', 'SKU', 'SKU Description', 'Quantity', 'Amount', 
+                        'Close Date', 'Close Status', 'Company Name', 'Deal Owner']
+        display_cols = [c for c in display_cols if c in filtered_df.columns]
+        
+        detail_df = filtered_df[display_cols].copy()
+        
+        if 'Amount' in detail_df.columns:
+            detail_df['Amount'] = detail_df['Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "-")
+        if 'Quantity' in detail_df.columns:
+            detail_df['Quantity'] = detail_df['Quantity'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
+        if 'Close Date' in detail_df.columns:
+            detail_df['Close Date'] = pd.to_datetime(detail_df['Close Date'], errors='coerce').dt.strftime('%Y-%m-%d').fillna('')
+        
+        st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+
 # ========== ENTRY POINT ==========
 if __name__ == "__main__":
     st.set_page_config(
-        page_title="QBR Generator",
-        page_icon="📋",
+        page_title="Revenue Operations Hub",
+        page_icon="📊",
         layout="wide"
     )
-    render_yearly_planning_2026()
+    
+    # Navigation sidebar
+    st.sidebar.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        ">
+            <div style="font-size: 2rem; margin-bottom: 0.5rem;">📊</div>
+            <div style="color: white; font-size: 1.1rem; font-weight: 700;">Revenue Operations</div>
+            <div style="color: rgba(255,255,255,0.7); font-size: 0.8rem;">Hub</div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Navigation menu
+    nav_selection = st.sidebar.radio(
+        "Navigation",
+        ["📋 QBR Generator", "📦 Product Forecasting Tool"],
+        label_visibility="collapsed"
+    )
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("""
+        <div style="
+            background: #1e293b;
+            padding: 1rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+        ">
+            <div style="color: #94a3b8; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem;">About</div>
+            <div style="color: #64748b; font-size: 0.8rem; line-height: 1.5;">
+                <strong style="color: #f1f5f9;">QBR Generator:</strong> Customer-focused quarterly business reviews<br><br>
+                <strong style="color: #f1f5f9;">Product Forecasting:</strong> SKU-level glass forecast and pipeline analysis
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Route to selected page
+    if nav_selection == "📋 QBR Generator":
+        render_yearly_planning_2026()
+    else:
+        render_product_forecasting_tool()
