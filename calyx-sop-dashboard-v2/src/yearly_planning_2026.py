@@ -7972,7 +7972,7 @@ def render_product_forecasting_tool():
     """Main render function for Product Forecasting Tool"""
     
     st.title("📦 Product Forecasting Tool")
-    st.caption("Quantity-based product pipeline analysis")
+    st.caption("Quantity-based product pipeline analysis with actuals and pending orders")
     
     # Load data
     with st.spinner("Loading pipeline data..."):
@@ -7981,6 +7981,73 @@ def render_product_forecasting_tool():
     
     # Also load regular deals for comparison
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
+    
+    # Initialize dataframes
+    sales_orders_df = pd.DataFrame()
+    invoices_df = pd.DataFrame()
+    
+    # Load Sales Orders (for Pending Orders analysis)
+    with st.spinner("Loading sales orders..."):
+        sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AG", version=CACHE_VERSION)
+        if not sales_orders_df.empty:
+            # Clean data
+            if sales_orders_df.columns.duplicated().any():
+                sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
+            
+            # Clean numeric columns
+            for col in ['Amount', 'Amount (Transaction Total)', 'Quantity Ordered', 'Quantity Fulfilled']:
+                if col in sales_orders_df.columns:
+                    sales_orders_df[col] = sales_orders_df[col].apply(clean_numeric)
+            
+            # Handle Amount column naming
+            if 'Amount (Transaction Total)' in sales_orders_df.columns and 'Amount' not in sales_orders_df.columns:
+                sales_orders_df = sales_orders_df.rename(columns={'Amount (Transaction Total)': 'Amount'})
+            
+            # Clean date columns
+            for col in ['Order Start Date', 'Actual Ship Date', 'Customer Promise Date', 'Customer Promise Last Date to Ship']:
+                if col in sales_orders_df.columns:
+                    sales_orders_df[col] = pd.to_datetime(sales_orders_df[col], errors='coerce')
+            
+            # Apply product categorization
+            if 'Item' in sales_orders_df.columns:
+                sales_orders_df[['Product Category', 'Product Subcategory']] = sales_orders_df.apply(
+                    lambda row: pd.Series(categorize_sku_for_pipeline(
+                        row.get('Item', ''), 
+                        row.get('Item Description', row.get('Description', ''))
+                    )),
+                    axis=1
+                )
+    
+    # Load Invoices (for YTD Actuals)
+    with st.spinner("Loading invoice data..."):
+        invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:U", version=CACHE_VERSION)
+        if not invoices_df.empty:
+            # Clean data
+            if invoices_df.columns.duplicated().any():
+                invoices_df = invoices_df.loc[:, ~invoices_df.columns.duplicated()]
+            
+            # Handle Amount column naming
+            if 'Amount (Transaction Total)' in invoices_df.columns and 'Amount' not in invoices_df.columns:
+                invoices_df = invoices_df.rename(columns={'Amount (Transaction Total)': 'Amount'})
+            
+            # Clean numeric columns
+            for col in ['Amount', 'Amount Remaining', 'Quantity']:
+                if col in invoices_df.columns:
+                    invoices_df[col] = invoices_df[col].apply(clean_numeric)
+            
+            # Clean date columns
+            if 'Date' in invoices_df.columns:
+                invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
+            
+            # Apply product categorization
+            if 'Item' in invoices_df.columns:
+                invoices_df[['Product Category', 'Product Subcategory']] = invoices_df.apply(
+                    lambda row: pd.Series(categorize_sku_for_pipeline(
+                        row.get('Item', ''), 
+                        row.get('Item Description', row.get('Description', ''))
+                    )),
+                    axis=1
+                )
     
     if deals_line_items_df.empty:
         st.error("❌ Unable to load Deals Line Item data. Please check your Google Sheets connection.")
@@ -8289,31 +8356,82 @@ def render_product_forecasting_tool():
     _, pairing_info = apply_dml_pairing_for_forecast(filtered_df)
     
     # =========================================================================
-    # SUMMARY METRICS (Quantity-Focused)
+    # CALCULATE PENDING ORDERS & YTD ACTUALS METRICS
+    # =========================================================================
+    
+    # Filter Pending Orders (Pending Approval + Pending Fulfillment)
+    pending_orders_df = pd.DataFrame()
+    pending_orders_qty = 0
+    pending_orders_value = 0
+    
+    if not sales_orders_df.empty:
+        # Get pending statuses
+        status_col = 'Status' if 'Status' in sales_orders_df.columns else 'Updated Status'
+        if status_col in sales_orders_df.columns:
+            pending_statuses = ['Pending Approval', 'Pending Fulfillment']
+            pending_orders_df = sales_orders_df[sales_orders_df[status_col].isin(pending_statuses)].copy()
+            
+            # Apply category filter if selected
+            if selected_categories and len(selected_categories) > 0 and 'Product Category' in pending_orders_df.columns:
+                pending_orders_df = pending_orders_df[pending_orders_df['Product Category'].isin(selected_categories)]
+            
+            # Calculate pending totals
+            if 'Quantity Ordered' in pending_orders_df.columns and 'Quantity Fulfilled' in pending_orders_df.columns:
+                pending_orders_df['Qty Remaining'] = pending_orders_df['Quantity Ordered'].fillna(0) - pending_orders_df['Quantity Fulfilled'].fillna(0)
+                pending_orders_qty = pending_orders_df['Qty Remaining'].sum()
+            elif 'Quantity' in pending_orders_df.columns:
+                pending_orders_qty = pending_orders_df['Quantity'].sum()
+            
+            if 'Amount' in pending_orders_df.columns:
+                pending_orders_value = pending_orders_df['Amount'].sum()
+    
+    # Calculate YTD Actuals (Invoiced this year)
+    ytd_actuals_df = pd.DataFrame()
+    ytd_qty = 0
+    ytd_revenue = 0
+    
+    if not invoices_df.empty:
+        # Filter to current year
+        current_year = datetime.now().year
+        if 'Date' in invoices_df.columns:
+            ytd_actuals_df = invoices_df[invoices_df['Date'].dt.year == current_year].copy()
+            
+            # Apply category filter if selected
+            if selected_categories and len(selected_categories) > 0 and 'Product Category' in ytd_actuals_df.columns:
+                ytd_actuals_df = ytd_actuals_df[ytd_actuals_df['Product Category'].isin(selected_categories)]
+            
+            # Calculate YTD totals
+            if 'Quantity' in ytd_actuals_df.columns:
+                ytd_qty = ytd_actuals_df['Quantity'].sum()
+            if 'Amount' in ytd_actuals_df.columns:
+                ytd_revenue = ytd_actuals_df['Amount'].sum()
+    
+    # =========================================================================
+    # EXECUTIVE SUMMARY CARDS (Calyx Cure Style)
     # =========================================================================
     st.markdown("---")
     st.markdown(f"""
         <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #8b5cf6 100%);
+            background: linear-gradient(135deg, #10b981 0%, #3b82f6 50%, #8b5cf6 100%);
             padding: 1.5rem 2rem;
             border-radius: 12px;
             margin-bottom: 1rem;
+            text-align: center;
         ">
-            <h1 style="color: white; margin: 0; font-size: 2rem;">📦 Product Quantity Forecast</h1>
-            <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+            <h1 style="color: white; margin: 0; font-size: 2rem; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">📦 Product Forecast Dashboard</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
                 {selected_rep} | {date_label} | Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
             </p>
         </div>
     """, unsafe_allow_html=True)
     
-    # Calculate metrics (quantity-focused)
+    # Calculate pipeline metrics
     total_quantity = filtered_df['Quantity'].sum()
     unique_skus = filtered_df['SKU'].nunique()
     unique_deals = filtered_df['Deal ID'].nunique() if 'Deal ID' in filtered_df.columns else len(filtered_df)
     unique_categories = filtered_df['Product Category'].nunique()
     
     # Open pipeline quantities by status
-    open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
     if 'Close Status' in filtered_df.columns:
         commit_qty = filtered_df[filtered_df['Close Status'] == 'Commit']['Quantity'].sum()
         expect_qty = filtered_df[filtered_df['Close Status'] == 'Expect']['Quantity'].sum()
@@ -8322,21 +8440,78 @@ def render_product_forecasting_tool():
     else:
         commit_qty = expect_qty = bestcase_qty = opportunity_qty = 0
     
-    st.markdown("### 📊 Quantity Summary")
+    # Summary Cards Row (like Calyx Cure email)
+    st.markdown("""
+        <style>
+        .summary-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            height: 100%;
+        }
+        .summary-card-label {
+            font-size: 0.7rem;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        .summary-card-value {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .summary-card-sublabel {
+            font-size: 0.75rem;
+            color: #94a3b8;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Forecasted Units", f"{total_quantity:,.0f}")
-    with col2:
-        st.metric("Unique SKUs", f"{unique_skus}")
-    with col3:
-        st.metric("Active Deals", f"{unique_deals}")
-    with col4:
-        st.metric("Product Categories", f"{unique_categories}")
+        st.markdown(f"""
+            <div class="summary-card">
+                <div class="summary-card-label">📊 Pipeline</div>
+                <div class="summary-card-value" style="color: #60a5fa;">{total_quantity:,.0f}</div>
+                <div class="summary-card-sublabel">units in deals</div>
+            </div>
+        """, unsafe_allow_html=True)
     
-    # Status breakdown cards
-    st.markdown("#### 📈 Quantity by Pipeline Stage")
+    with col2:
+        st.markdown(f"""
+            <div class="summary-card">
+                <div class="summary-card-label">📦 Pending Orders</div>
+                <div class="summary-card-value" style="color: #fbbf24;">{pending_orders_qty:,.0f}</div>
+                <div class="summary-card-sublabel">units to fulfill</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+            <div class="summary-card">
+                <div class="summary-card-label">✅ YTD Shipped</div>
+                <div class="summary-card-value" style="color: #4ade80;">{ytd_qty:,.0f}</div>
+                <div class="summary-card-sublabel">units invoiced</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col4:
+        st.markdown(f"""
+            <div class="summary-card">
+                <div class="summary-card-label">💰 YTD Revenue</div>
+                <div class="summary-card-value" style="color: #a78bfa;">${ytd_revenue:,.0f}</div>
+                <div class="summary-card-sublabel">invoiced {datetime.now().year}</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # Pipeline Stage Cards
+    st.markdown("### 📈 Pipeline by Stage")
     col5, col6, col7, col8 = st.columns(4)
     
     with col5:
@@ -8658,6 +8833,173 @@ def render_product_forecasting_tool():
         display_company['% of Total'] = display_company['% of Total'].apply(lambda x: f"{x:.1f}%")
         
         st.dataframe(display_company, use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # ACTIVE ORDERS (Pending Fulfillment from NetSuite)
+    # =========================================================================
+    if not pending_orders_df.empty:
+        st.markdown("---")
+        st.markdown("""
+            <div style="
+                background: #f59e0b;
+                color: white;
+                padding: 12px 20px;
+                border-radius: 10px 10px 0 0;
+                font-size: 1.1rem;
+                font-weight: 700;
+            ">
+                📦 Active Orders (NetSuite Sales Orders)
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Summarize by category
+        if 'Product Category' in pending_orders_df.columns:
+            pending_by_cat = pending_orders_df.groupby('Product Category').agg({
+                'Qty Remaining': 'sum' if 'Qty Remaining' in pending_orders_df.columns else 'count',
+                'Amount': 'sum' if 'Amount' in pending_orders_df.columns else 'count'
+            }).reset_index()
+            
+            if 'Qty Remaining' not in pending_orders_df.columns:
+                pending_by_cat = pending_orders_df.groupby('Product Category').agg({
+                    'Quantity Ordered': 'sum' if 'Quantity Ordered' in pending_orders_df.columns else 'count',
+                    'Amount': 'sum' if 'Amount' in pending_orders_df.columns else 'count'
+                }).reset_index()
+                pending_by_cat.columns = ['Category', 'Qty Remaining', 'Amount']
+            else:
+                pending_by_cat.columns = ['Category', 'Qty Remaining', 'Amount']
+            
+            pending_by_cat = pending_by_cat.sort_values('Qty Remaining', ascending=False)
+            
+            # Display table
+            display_pending = pending_by_cat.copy()
+            display_pending['Qty Remaining'] = display_pending['Qty Remaining'].apply(lambda x: f"{x:,.0f}")
+            display_pending['Amount'] = display_pending['Amount'].apply(lambda x: f"${x:,.0f}")
+            
+            col_pending_chart, col_pending_table = st.columns([1, 1])
+            
+            with col_pending_chart:
+                # Bar chart
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=pending_by_cat['Category'],
+                        y=pending_by_cat['Qty Remaining'],
+                        marker=dict(color='#f59e0b'),
+                        text=[f'{x:,.0f}' for x in pending_by_cat['Qty Remaining']],
+                        textposition='outside'
+                    )
+                ])
+                fig.update_layout(
+                    title="Pending Quantity by Category",
+                    xaxis_title="",
+                    yaxis_title="Units",
+                    height=350,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True, key="pending_orders_bar")
+            
+            with col_pending_table:
+                st.dataframe(display_pending, use_container_width=True, hide_index=True)
+        
+        # Detailed pending orders expander
+        with st.expander("📋 View Pending Order Details"):
+            display_cols = ['Document Number', 'Item', 'Item Description', 'Corrected Customer Name', 
+                           'Quantity Ordered', 'Quantity Fulfilled', 'Amount', 'Status', 'Rep Master']
+            display_cols = [c for c in display_cols if c in pending_orders_df.columns]
+            
+            pending_detail = pending_orders_df[display_cols].copy()
+            
+            for col in ['Quantity Ordered', 'Quantity Fulfilled']:
+                if col in pending_detail.columns:
+                    pending_detail[col] = pending_detail[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
+            if 'Amount' in pending_detail.columns:
+                pending_detail['Amount'] = pending_detail['Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "-")
+            
+            st.dataframe(pending_detail.head(100), use_container_width=True, hide_index=True)
+    
+    # =========================================================================
+    # YTD ACTUALS (Invoiced Revenue from NetSuite)
+    # =========================================================================
+    if not ytd_actuals_df.empty:
+        st.markdown("---")
+        st.markdown(f"""
+            <div style="
+                background: #10b981;
+                color: white;
+                padding: 12px 20px;
+                border-radius: 10px 10px 0 0;
+                font-size: 1.1rem;
+                font-weight: 700;
+            ">
+                ✅ YTD Actuals ({datetime.now().year} Invoiced)
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Summarize by category
+        if 'Product Category' in ytd_actuals_df.columns:
+            ytd_by_cat = ytd_actuals_df.groupby('Product Category').agg({
+                'Quantity': 'sum' if 'Quantity' in ytd_actuals_df.columns else 'count',
+                'Amount': 'sum' if 'Amount' in ytd_actuals_df.columns else 'count'
+            }).reset_index()
+            ytd_by_cat.columns = ['Category', 'Quantity', 'Revenue']
+            ytd_by_cat = ytd_by_cat.sort_values('Revenue', ascending=False)
+            ytd_by_cat['% of Total'] = (ytd_by_cat['Revenue'] / ytd_by_cat['Revenue'].sum() * 100).round(1)
+            
+            col_ytd_chart, col_ytd_table = st.columns([1, 1])
+            
+            with col_ytd_chart:
+                # Pie chart for YTD revenue mix
+                colors = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899']
+                fig = go.Figure(data=[go.Pie(
+                    labels=ytd_by_cat['Category'],
+                    values=ytd_by_cat['Revenue'],
+                    hole=0.45,
+                    marker=dict(colors=colors[:len(ytd_by_cat)]),
+                    textposition='outside',
+                    textinfo='label+percent'
+                )])
+                fig.update_layout(
+                    title="YTD Revenue by Category",
+                    showlegend=False,
+                    height=400,
+                    margin=dict(t=60, b=40, l=40, r=40)
+                )
+                st.plotly_chart(fig, use_container_width=True, key="ytd_pie")
+            
+            with col_ytd_table:
+                display_ytd = ytd_by_cat.copy()
+                display_ytd['Quantity'] = display_ytd['Quantity'].apply(lambda x: f"{x:,.0f}")
+                display_ytd['Revenue'] = display_ytd['Revenue'].apply(lambda x: f"${x:,.0f}")
+                display_ytd['% of Total'] = display_ytd['% of Total'].apply(lambda x: f"{x:.1f}%")
+                st.dataframe(display_ytd, use_container_width=True, hide_index=True)
+        
+        # Monthly trend
+        if 'Date' in ytd_actuals_df.columns:
+            ytd_actuals_df['Month'] = ytd_actuals_df['Date'].dt.to_period('M').astype(str)
+            monthly_trend = ytd_actuals_df.groupby('Month').agg({
+                'Amount': 'sum',
+                'Quantity': 'sum'
+            }).reset_index()
+            
+            if not monthly_trend.empty:
+                st.markdown("#### 📅 Monthly Revenue Trend")
+                
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=monthly_trend['Month'],
+                    y=monthly_trend['Amount'],
+                    name='Revenue',
+                    marker=dict(color='#10b981'),
+                    text=[f'${x:,.0f}' for x in monthly_trend['Amount']],
+                    textposition='outside'
+                ))
+                fig.update_layout(
+                    xaxis_title="Month",
+                    yaxis_title="Revenue",
+                    yaxis=dict(tickformat='$,.0f'),
+                    height=350,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True, key="monthly_trend")
     
     # =========================================================================
     # DEAL DETAILS EXPANDER (No Amount column)
