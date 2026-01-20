@@ -7559,6 +7559,139 @@ def render_yearly_planning_2026():
         st.markdown("<br>", unsafe_allow_html=True)
         pipeline_chart = create_pipeline_comparison_chart(pipeline_data, "")
         st.plotly_chart(pipeline_chart, use_container_width=True)
+        
+        # ===== PIPELINE VERIFICATION SECTION =====
+        with st.expander("🔍 Verify Pipeline Assignment (View Raw Line Items)"):
+            st.caption("Review invoices assigned to each pipeline. Includes SO Manually Built assignments based on Rep.")
+            
+            if not line_items_df.empty and 'Forecast Pipeline' in line_items_df.columns:
+                # Filter to selected year
+                year_filtered_df = line_items_df.copy()
+                if 'Date' in year_filtered_df.columns:
+                    year_filtered_df = year_filtered_df[year_filtered_df['Date'].dt.year == selected_year]
+                
+                # Get pipelines with data (including Unmapped)
+                available_pipelines = year_filtered_df['Forecast Pipeline'].dropna().unique().tolist()
+                # Add None/NaN option for unmapped
+                if year_filtered_df['Forecast Pipeline'].isna().any():
+                    available_pipelines.append('(Unmapped)')
+                
+                # Sort by forecast pipelines order
+                sorted_pipelines = [p for p in FORECAST_PIPELINES if p in available_pipelines]
+                extras = [p for p in available_pipelines if p not in FORECAST_PIPELINES and p != '(Unmapped)']
+                sorted_pipelines.extend(extras)
+                if '(Unmapped)' in available_pipelines:
+                    sorted_pipelines.append('(Unmapped)')
+                
+                if sorted_pipelines:
+                    st.markdown("**SELECT PIPELINE TO INSPECT**")
+                    verify_pipeline = st.selectbox(
+                        "Select pipeline to inspect:",
+                        options=sorted_pipelines,
+                        key="verify_forecast_pipeline",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if verify_pipeline:
+                        # Get items in this pipeline
+                        if verify_pipeline == '(Unmapped)':
+                            pipe_items = year_filtered_df[year_filtered_df['Forecast Pipeline'].isna()].copy()
+                        else:
+                            pipe_items = year_filtered_df[year_filtered_df['Forecast Pipeline'] == verify_pipeline].copy()
+                        
+                        # Determine which columns to show
+                        verify_cols = ['Document Number']
+                        if 'Correct Customer' in pipe_items.columns:
+                            verify_cols.append('Correct Customer')
+                        elif 'Customer' in pipe_items.columns:
+                            verify_cols.append('Customer')
+                        if 'Rep Master' in pipe_items.columns:
+                            verify_cols.append('Rep Master')
+                        if 'Raw_Pipeline' in pipe_items.columns:
+                            verify_cols.append('Raw_Pipeline')
+                        if 'Amount' in pipe_items.columns:
+                            verify_cols.append('Amount')
+                        if 'Date' in pipe_items.columns:
+                            verify_cols.append('Date')
+                        if 'Forecast Category' in pipe_items.columns:
+                            verify_cols.append('Forecast Category')
+                        
+                        # Filter to existing columns
+                        verify_cols = [c for c in verify_cols if c in pipe_items.columns]
+                        
+                        if verify_cols:
+                            verify_display = pipe_items[verify_cols].copy()
+                            
+                            # Calculate totals before formatting
+                            pipe_total_amount = pipe_items['Amount'].sum() if 'Amount' in pipe_items.columns else 0
+                            unique_invoices = pipe_items['Document Number'].nunique() if 'Document Number' in pipe_items.columns else len(pipe_items)
+                            
+                            # Format Amount for display
+                            if 'Amount' in verify_display.columns:
+                                verify_display['Amount'] = verify_display['Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "-")
+                            
+                            # Format Date for display
+                            if 'Date' in verify_display.columns:
+                                verify_display['Date'] = verify_display['Date'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "-")
+                            
+                            # Color code for pipeline
+                            pipe_color = PIPELINE_COLORS.get(verify_pipeline, '#94a3b8')
+                            
+                            # Show summary stats
+                            st.markdown(f"""
+                                <div style="background: rgba(139, 92, 246, 0.1); border: 1px solid rgba(139, 92, 246, 0.3); padding: 12px 16px; border-radius: 8px; margin-bottom: 12px;">
+                                    <span style="color: #94a3b8;">Invoices in </span>
+                                    <strong style="color: {pipe_color};">{verify_pipeline}</strong>
+                                    <span style="color: #94a3b8;">: </span>
+                                    <span style="color: #f1f5f9; font-weight: 600;">{unique_invoices:,} invoices</span>
+                                    <span style="color: #475569; margin: 0 8px;">|</span>
+                                    <span style="color: #94a3b8;">{len(pipe_items):,} line items</span>
+                                    <span style="color: #475569; margin: 0 8px;">|</span>
+                                    <span style="color: #94a3b8;">Total: </span>
+                                    <span style="color: #a78bfa; font-weight: 600;">${pipe_total_amount:,.0f}</span>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Show the data (aggregated by invoice for cleaner view)
+                            invoice_summary = pipe_items.groupby('Document Number').agg({
+                                'Amount': 'sum',
+                                'Rep Master': 'first' if 'Rep Master' in pipe_items.columns else 'count',
+                                'Correct Customer': 'first' if 'Correct Customer' in pipe_items.columns else ('Customer' if 'Customer' in pipe_items.columns else 'count'),
+                                'Raw_Pipeline': 'first' if 'Raw_Pipeline' in pipe_items.columns else 'count',
+                                'Date': 'first' if 'Date' in pipe_items.columns else 'count'
+                            }).reset_index()
+                            
+                            # Rename columns for display
+                            invoice_summary.columns = ['Invoice #', 'Total Amount', 'Rep', 'Customer', 'Raw Pipeline', 'Date']
+                            invoice_summary = invoice_summary.sort_values('Total Amount', ascending=False)
+                            
+                            # Format for display
+                            invoice_summary['Total Amount'] = invoice_summary['Total Amount'].apply(lambda x: f"${x:,.2f}")
+                            if 'Date' in invoice_summary.columns:
+                                invoice_summary['Date'] = invoice_summary['Date'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "-")
+                            
+                            st.dataframe(
+                                invoice_summary.head(200),
+                                use_container_width=True,
+                                hide_index=True,
+                                height=400
+                            )
+                            
+                            if len(invoice_summary) > 200:
+                                st.caption(f"Showing first 200 of {len(invoice_summary):,} invoices")
+                            
+                            # Show rep breakdown for this pipeline
+                            if 'Rep Master' in pipe_items.columns:
+                                st.markdown("**Revenue by Rep:**")
+                                rep_summary = pipe_items.groupby('Rep Master')['Amount'].sum().sort_values(ascending=False)
+                                for rep, amount in rep_summary.items():
+                                    st.markdown(f"- `{rep}`: ${amount:,.0f}")
+                        else:
+                            st.info("No detailed data available for this pipeline.")
+                else:
+                    st.info("No pipeline data available for the selected year.")
+            else:
+                st.info("Line item data not available for pipeline verification.")
     else:
         st.info("📊 Pipeline breakdown will populate as invoices are linked to HubSpot deals.")
     
@@ -7633,6 +7766,118 @@ def render_yearly_planning_2026():
                     "Annual Goal": st.column_config.TextColumn("Annual Goal", width="small"),
                 }
             )
+        
+        # ===== VERIFICATION SECTION - Drill down into raw line items =====
+        with st.expander("🔍 Verify Categorization (View Raw Line Items)"):
+            st.caption("Review the actual SKUs/items included in each category to verify correct classification")
+            
+            # Get categories that have actuals for the selector
+            if not line_items_df.empty and 'Forecast Category' in line_items_df.columns:
+                # Filter to selected year
+                year_filtered_df = line_items_df.copy()
+                if 'Date' in year_filtered_df.columns:
+                    year_filtered_df = year_filtered_df[year_filtered_df['Date'].dt.year == selected_year]
+                
+                # Get categories with data
+                available_categories = year_filtered_df['Forecast Category'].dropna().unique().tolist()
+                # Sort by the order in FORECAST_CATEGORIES, then add any extras
+                sorted_categories = [c for c in FORECAST_CATEGORIES if c in available_categories]
+                extras = [c for c in available_categories if c not in FORECAST_CATEGORIES]
+                sorted_categories.extend(extras)
+                
+                if sorted_categories:
+                    st.markdown("**SELECT CATEGORY TO INSPECT**")
+                    verify_category = st.selectbox(
+                        "Select category to inspect:",
+                        options=sorted_categories,
+                        key="verify_forecast_category",
+                        label_visibility="collapsed"
+                    )
+                    
+                    if verify_category:
+                        # Get items in this category
+                        cat_items = year_filtered_df[year_filtered_df['Forecast Category'] == verify_category].copy()
+                        
+                        # Determine which columns to show
+                        verify_cols = []
+                        if 'Item' in cat_items.columns:
+                            verify_cols.append('Item')
+                        if 'Product Category' in cat_items.columns:
+                            verify_cols.append('Product Category')
+                        if 'Product Sub-Category' in cat_items.columns:
+                            verify_cols.append('Product Sub-Category')
+                        if 'Unified Category' in cat_items.columns:
+                            verify_cols.append('Unified Category')
+                        if 'Amount' in cat_items.columns:
+                            verify_cols.append('Amount')
+                        if 'Quantity' in cat_items.columns:
+                            verify_cols.append('Quantity')
+                        if 'Document Number' in cat_items.columns:
+                            verify_cols.append('Document Number')
+                        
+                        # Filter to existing columns
+                        verify_cols = [c for c in verify_cols if c in cat_items.columns]
+                        
+                        if verify_cols:
+                            verify_display = cat_items[verify_cols].copy()
+                            
+                            # Calculate totals before formatting
+                            cat_total_amount = cat_items['Amount'].sum() if 'Amount' in cat_items.columns else 0
+                            cat_total_qty = cat_items['Quantity'].sum() if 'Quantity' in cat_items.columns else 0
+                            
+                            # Format Amount for display
+                            if 'Amount' in verify_display.columns:
+                                verify_display['Amount'] = verify_display['Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "-")
+                            
+                            # Format Quantity for display
+                            if 'Quantity' in verify_display.columns:
+                                verify_display['Quantity'] = verify_display['Quantity'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
+                            
+                            # Show summary stats
+                            st.markdown(f"""
+                                <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); padding: 12px 16px; border-radius: 8px; margin-bottom: 12px;">
+                                    <span style="color: #94a3b8;">Items in </span>
+                                    <strong style="color: #34d399;">{verify_category}</strong>
+                                    <span style="color: #94a3b8;">: </span>
+                                    <span style="color: #f1f5f9; font-weight: 600;">{len(cat_items):,} line items</span>
+                                    <span style="color: #475569; margin: 0 8px;">|</span>
+                                    <span style="color: #94a3b8;">Total: </span>
+                                    <span style="color: #10b981; font-weight: 600;">${cat_total_amount:,.0f}</span>
+                                </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # Show the data
+                            st.dataframe(
+                                verify_display.head(500),  # Limit to 500 rows for performance
+                                use_container_width=True,
+                                hide_index=True,
+                                height=400
+                            )
+                            
+                            if len(cat_items) > 500:
+                                st.caption(f"Showing first 500 of {len(cat_items):,} line items")
+                            
+                            # Show unique sub-categories breakdown
+                            if 'Product Sub-Category' in cat_items.columns:
+                                st.markdown("**Sub-categories found:**")
+                                
+                                subcat_summary = cat_items.groupby('Product Sub-Category').agg({
+                                    'Amount': 'sum',
+                                    'Quantity': 'sum' if 'Quantity' in cat_items.columns else 'count'
+                                }).reset_index()
+                                subcat_summary = subcat_summary.sort_values('Amount', ascending=False)
+                                
+                                for _, subcat_row in subcat_summary.iterrows():
+                                    subcat_name = subcat_row['Product Sub-Category']
+                                    subcat_count = len(cat_items[cat_items['Product Sub-Category'] == subcat_name])
+                                    subcat_revenue = subcat_row['Amount']
+                                    st.markdown(f"- `{subcat_name}`: {subcat_count} items, ${subcat_revenue:,.0f}")
+                        else:
+                            st.info("No detailed item data available for verification.")
+                else:
+                    st.info("No category data available for the selected year.")
+            else:
+                st.info("Line item data not available for verification.")
     
     # Monthly Trend
     st.markdown("""
