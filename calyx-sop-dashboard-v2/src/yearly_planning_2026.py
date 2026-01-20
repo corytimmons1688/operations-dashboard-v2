@@ -21,10 +21,6 @@ import io
 import re
 import uuid
 
-# ========== DEBUG: Version Check ==========
-APP_VERSION = "v8_with_product_forecasting"
-print(f"🔧 DEBUG: Loading {APP_VERSION}")
-
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -6101,9 +6097,76 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
 # ========== MAIN RENDER FUNCTION ==========
 
 def render_yearly_planning_2026():
-    """Main entry point for QBR Generator"""
+    """Main entry point - shows navigation tabs for QBR and Product Forecasting"""
     
-    st.title("📋 QBR Generator")
+    # Navigation tabs styling
+    st.markdown("""
+        <style>
+        /* Navigation tab styling */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 8px;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            padding: 8px 16px;
+            border-radius: 12px;
+            border: 1px solid #334155;
+        }
+        .stTabs [data-baseweb="tab"] {
+            background: transparent;
+            border-radius: 8px;
+            color: #94a3b8;
+            font-weight: 600;
+            padding: 12px 24px;
+        }
+        .stTabs [data-baseweb="tab"]:hover {
+            background: #334155;
+            color: #f1f5f9;
+        }
+        .stTabs [aria-selected="true"] {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
+            color: white !important;
+        }
+        .stTabs [data-baseweb="tab-highlight"] {
+            display: none;
+        }
+        .stTabs [data-baseweb="tab-border"] {
+            display: none;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    # Header
+    st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+            padding: 1.25rem 2rem;
+            border-radius: 12px;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        ">
+            <div style="font-size: 2rem;">📊</div>
+            <div>
+                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">2026 Yearly Planning</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">QBR Generation & Product Forecasting Tools</p>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Navigation tabs
+    tab1, tab2 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool"])
+    
+    with tab1:
+        render_qbr_generator_content()
+    
+    with tab2:
+        render_product_forecasting_tool()
+
+
+def render_qbr_generator_content():
+    """QBR Generator content (original yearly planning functionality)"""
+    
+    st.markdown("### 📋 QBR Generator")
     st.caption("Generate Quarterly Business Review reports for customer meetings")
     
     # Load data
@@ -8433,97 +8496,6 @@ def render_product_forecasting_tool():
         st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
 
-# ========== MAIN APP FUNCTION ==========
-def main_app():
-    """Main application with navigation"""
-    
-    # DEBUG: Show version banner
-    st.markdown("""
-        <div style="
-            background: #dc2626;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 8px;
-            margin-bottom: 1rem;
-            font-weight: bold;
-        ">
-            🔧 DEBUG: Running v8_with_product_forecasting - If you see this, the new code IS running!
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # =========================================================================
-    # TOP NAVIGATION BAR - Prominent at top of page
-    # =========================================================================
-    st.markdown("""
-        <style>
-        /* Navigation tab styling */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            padding: 8px 16px;
-            border-radius: 12px;
-            border: 1px solid #334155;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background: transparent;
-            border-radius: 8px;
-            color: #94a3b8;
-            font-weight: 600;
-            padding: 12px 24px;
-        }
-        .stTabs [data-baseweb="tab"]:hover {
-            background: #334155;
-            color: #f1f5f9;
-        }
-        .stTabs [aria-selected="true"] {
-            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
-            color: white !important;
-        }
-        .stTabs [data-baseweb="tab-highlight"] {
-            display: none;
-        }
-        .stTabs [data-baseweb="tab-border"] {
-            display: none;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    # Header
-    st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
-            padding: 1.5rem 2rem;
-            border-radius: 12px;
-            margin-bottom: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        ">
-            <div style="font-size: 2.5rem;">📊</div>
-            <div>
-                <h1 style="color: white; margin: 0; font-size: 1.8rem; font-weight: 700;">Revenue Operations Hub</h1>
-                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.9rem;">QBR Generation & Product Forecasting Tools</p>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    # Navigation tabs
-    tab1, tab2 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool"])
-    
-    with tab1:
-        render_yearly_planning_2026()
-    
-    with tab2:
-        render_product_forecasting_tool()
-
-
 # ========== ENTRY POINT ==========
-# This runs regardless of how the file is executed
-st.set_page_config(
-    page_title="Revenue Operations Hub",
-    page_icon="📊",
-    layout="wide"
-)
-
-# Run the main app
-main_app()
+# This file is designed to be called from a multi-page Streamlit app
+# The main entry point is render_yearly_planning_2026() which includes navigation tabs
