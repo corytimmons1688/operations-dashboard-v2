@@ -8131,18 +8131,31 @@ def render_yearly_planning_2026():
             deals_by_pipeline = filtered_deals.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             deals_by_pipeline.columns = ['Pipeline', 'Deals']
     
-    # ===== BREAKDOWN BY CATEGORY =====
-    st.markdown("### By Product Category")
+    # ===== COMPREHENSIVE CATEGORY CHART - Plan vs Full Pipeline =====
+    st.markdown("### 📊 Plan vs. Full Pipeline by Category")
+    st.caption("Compare your YTD plan against realized revenue plus everything in the pipeline")
     
-    # Merge all category data
+    # Merge all category data INCLUDING plan
     all_categories = list(set(
+        FORECAST_CATEGORIES +
         list(actuals_by_category['Category'].unique() if not actuals_by_category.empty else []) +
         list(pending_by_category['Category'].unique() if not pending_by_category.empty else []) +
         list(deals_by_category['Category'].unique() if not deals_by_category.empty else [])
     ))
     
-    if all_categories:
-        category_combined = pd.DataFrame({'Category': all_categories})
+    # Filter to forecast categories for cleaner chart
+    chart_categories = [c for c in FORECAST_CATEGORIES if c in all_categories]
+    
+    if chart_categories:
+        category_combined = pd.DataFrame({'Category': chart_categories})
+        
+        # Add YTD Plan from forecast
+        plan_by_category = ytd_plan[
+            (ytd_plan['Pipeline'] == 'Total') & 
+            (ytd_plan['Category'].isin(chart_categories))
+        ][['Category', 'YTD_Plan']].copy()
+        category_combined = category_combined.merge(plan_by_category, on='Category', how='left')
+        category_combined['YTD_Plan'] = category_combined['YTD_Plan'].fillna(0)
         
         if not actuals_by_category.empty:
             category_combined = category_combined.merge(actuals_by_category, on='Category', how='left')
@@ -8161,86 +8174,221 @@ def render_yearly_planning_2026():
         
         category_combined = category_combined.fillna(0)
         category_combined['Total Pipeline'] = category_combined['Actuals'] + category_combined['Pending'] + category_combined['Deals']
-        category_combined = category_combined.sort_values('Total Pipeline', ascending=False)
+        category_combined['Variance'] = category_combined['Total Pipeline'] - category_combined['YTD_Plan']
+        category_combined['Attainment'] = np.where(
+            category_combined['YTD_Plan'] > 0,
+            (category_combined['Total Pipeline'] / category_combined['YTD_Plan'] * 100),
+            0
+        )
+        category_combined = category_combined.sort_values('YTD_Plan', ascending=False)
         
-        # Create stacked bar chart
+        # ===== BIG BEAUTIFUL CHART =====
         fig_cat = go.Figure()
         
+        # Plan bar (gray, semi-transparent background)
         fig_cat.add_trace(go.Bar(
-            name='Actuals (Invoiced)',
+            name='YTD Plan',
+            x=category_combined['Category'],
+            y=category_combined['YTD_Plan'],
+            marker=dict(
+                color='rgba(148, 163, 184, 0.3)',
+                line=dict(color='rgba(148, 163, 184, 0.6)', width=2)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in category_combined['YTD_Plan']],
+            textposition='outside',
+            textfont=dict(color='#94a3b8', size=11),
+            hovertemplate='<b>%{x}</b><br>Plan: $%{y:,.0f}<extra></extra>',
+            offsetgroup=0
+        ))
+        
+        # Actuals (green - base of stack)
+        fig_cat.add_trace(go.Bar(
+            name='✓ Actuals (Invoiced)',
             x=category_combined['Category'],
             y=category_combined['Actuals'],
-            marker_color='#10b981',
-            text=[f"${x:,.0f}" for x in category_combined['Actuals']],
+            marker=dict(
+                color='#10b981',
+                line=dict(color='#059669', width=1)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in category_combined['Actuals']],
             textposition='inside',
-            textfont=dict(color='white', size=10),
-            hovertemplate='<b>%{x}</b><br>Actuals: $%{y:,.0f}<extra></extra>'
+            textfont=dict(color='white', size=10, family='Inter'),
+            hovertemplate='<b>%{x}</b><br>Invoiced: $%{y:,.0f}<extra></extra>',
+            offsetgroup=1
         ))
         
+        # Pending Orders (amber - middle of stack)
         fig_cat.add_trace(go.Bar(
-            name='Pending Orders',
+            name='📋 Pending Orders',
             x=category_combined['Category'],
             y=category_combined['Pending'],
-            marker_color='#f59e0b',
-            text=[f"${x:,.0f}" if x > 0 else "" for x in category_combined['Pending']],
+            marker=dict(
+                color='#f59e0b',
+                line=dict(color='#d97706', width=1)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else "" for x in category_combined['Pending']],
             textposition='inside',
-            textfont=dict(color='white', size=10),
-            hovertemplate='<b>%{x}</b><br>Pending: $%{y:,.0f}<extra></extra>'
+            textfont=dict(color='white', size=10, family='Inter'),
+            hovertemplate='<b>%{x}</b><br>Pending: $%{y:,.0f}<extra></extra>',
+            offsetgroup=1
         ))
         
+        # HubSpot Deals (purple - top of stack)
         fig_cat.add_trace(go.Bar(
-            name=f'HubSpot Deals ({", ".join(selected_stages[:2])}{"..." if len(selected_stages) > 2 else ""})',
+            name='🎯 HubSpot Deals',
             x=category_combined['Category'],
             y=category_combined['Deals'],
-            marker_color='#8b5cf6',
-            text=[f"${x:,.0f}" if x > 0 else "" for x in category_combined['Deals']],
+            marker=dict(
+                color='#8b5cf6',
+                line=dict(color='#7c3aed', width=1)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else "" for x in category_combined['Deals']],
             textposition='inside',
-            textfont=dict(color='white', size=10),
-            hovertemplate='<b>%{x}</b><br>Deals: $%{y:,.0f}<extra></extra>'
+            textfont=dict(color='white', size=10, family='Inter'),
+            hovertemplate='<b>%{x}</b><br>Deals: $%{y:,.0f}<extra></extra>',
+            offsetgroup=1
         ))
+        
+        # Add attainment % annotations at the top
+        for i, row in category_combined.iterrows():
+            att = row['Attainment']
+            total = row['Total Pipeline']
+            color = '#10b981' if att >= 100 else '#f59e0b' if att >= 80 else '#ef4444'
+            
+            fig_cat.add_annotation(
+                x=row['Category'],
+                y=total + (category_combined['YTD_Plan'].max() * 0.05),
+                text=f"{att:.0f}%",
+                showarrow=False,
+                font=dict(color=color, size=12, family='Inter'),
+                yanchor='bottom'
+            )
         
         fig_cat.update_layout(
             barmode='stack',
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#94a3b8'),
-            xaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickangle=-45),
-            yaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickformat='$,.0f'),
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-            height=400,
-            margin=dict(t=60, b=100, l=80, r=40)
+            font=dict(color='#e2e8f0', family='Inter, sans-serif'),
+            xaxis=dict(
+                gridcolor='rgba(148, 163, 184, 0.1)',
+                tickangle=-45,
+                tickfont=dict(size=12, color='#e2e8f0'),
+                showline=False
+            ),
+            yaxis=dict(
+                gridcolor='rgba(148, 163, 184, 0.1)',
+                tickformat='$,.0f',
+                tickfont=dict(size=10, color='#94a3b8'),
+                showline=False,
+                zeroline=False
+            ),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='center',
+                x=0.5,
+                font=dict(size=11, color='#e2e8f0'),
+                bgcolor='rgba(0,0,0,0)'
+            ),
+            height=500,
+            margin=dict(t=80, b=120, l=80, r=40),
+            bargap=0.3,
+            bargroupgap=0.1,
+            hoverlabel=dict(
+                bgcolor='#1e293b',
+                font_size=12,
+                font_family='Inter, sans-serif'
+            )
         )
         
         st.plotly_chart(fig_cat, use_container_width=True)
         
+        # Summary metrics row
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        metric_cols = st.columns(5)
+        total_plan = category_combined['YTD_Plan'].sum()
+        total_actuals = category_combined['Actuals'].sum()
+        total_pending = category_combined['Pending'].sum()
+        total_deals = category_combined['Deals'].sum()
+        total_pipeline = total_actuals + total_pending + total_deals
+        overall_att = (total_pipeline / total_plan * 100) if total_plan > 0 else 0
+        
+        with metric_cols[0]:
+            st.markdown(f"""
+                <div style="text-align: center; padding: 0.75rem; background: rgba(148,163,184,0.1); border-radius: 8px;">
+                    <div style="color: #94a3b8; font-size: 0.7rem; text-transform: uppercase;">YTD Plan</div>
+                    <div style="color: #f1f5f9; font-size: 1.25rem; font-weight: 700;">${total_plan:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[1]:
+            st.markdown(f"""
+                <div style="text-align: center; padding: 0.75rem; background: rgba(16,185,129,0.1); border-radius: 8px; border: 1px solid rgba(16,185,129,0.3);">
+                    <div style="color: #10b981; font-size: 0.7rem; text-transform: uppercase;">✓ Invoiced</div>
+                    <div style="color: #10b981; font-size: 1.25rem; font-weight: 700;">${total_actuals:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[2]:
+            st.markdown(f"""
+                <div style="text-align: center; padding: 0.75rem; background: rgba(245,158,11,0.1); border-radius: 8px; border: 1px solid rgba(245,158,11,0.3);">
+                    <div style="color: #f59e0b; font-size: 0.7rem; text-transform: uppercase;">📋 Pending</div>
+                    <div style="color: #f59e0b; font-size: 1.25rem; font-weight: 700;">${total_pending:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[3]:
+            st.markdown(f"""
+                <div style="text-align: center; padding: 0.75rem; background: rgba(139,92,246,0.1); border-radius: 8px; border: 1px solid rgba(139,92,246,0.3);">
+                    <div style="color: #8b5cf6; font-size: 0.7rem; text-transform: uppercase;">🎯 Deals</div>
+                    <div style="color: #8b5cf6; font-size: 1.25rem; font-weight: 700;">${total_deals:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with metric_cols[4]:
+            att_color = '#10b981' if overall_att >= 100 else '#f59e0b' if overall_att >= 80 else '#ef4444'
+            st.markdown(f"""
+                <div style="text-align: center; padding: 0.75rem; background: rgba(99,102,241,0.1); border-radius: 8px; border: 1px solid rgba(99,102,241,0.3);">
+                    <div style="color: #6366f1; font-size: 0.7rem; text-transform: uppercase;">Pipeline Attainment</div>
+                    <div style="color: {att_color}; font-size: 1.25rem; font-weight: 700;">{overall_att:.1f}%</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
         # Data table
-        with st.expander("📋 View Category Breakdown Table"):
+        with st.expander("📋 View Full Category Breakdown Table"):
             display_cat = category_combined.copy()
+            display_cat = display_cat.rename(columns={'YTD_Plan': 'YTD Plan', 'Total Pipeline': 'Total (with Pipeline)'})
+            display_cat['YTD Plan'] = display_cat['YTD Plan'].apply(lambda x: f"${x:,.0f}")
             display_cat['Actuals'] = display_cat['Actuals'].apply(lambda x: f"${x:,.0f}")
             display_cat['Pending'] = display_cat['Pending'].apply(lambda x: f"${x:,.0f}")
             display_cat['Deals'] = display_cat['Deals'].apply(lambda x: f"${x:,.0f}")
-            display_cat['Total Pipeline'] = display_cat['Total Pipeline'].apply(lambda x: f"${x:,.0f}")
-            st.dataframe(display_cat, use_container_width=True, hide_index=True)
+            display_cat['Total (with Pipeline)'] = display_cat['Total (with Pipeline)'].apply(lambda x: f"${x:,.0f}")
+            display_cat['Variance'] = display_cat['Variance'].apply(lambda x: f"${x:+,.0f}")
+            display_cat['Attainment'] = display_cat['Attainment'].apply(lambda x: f"{x:.1f}%")
+            st.dataframe(display_cat[['Category', 'YTD Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
+                        use_container_width=True, hide_index=True)
     else:
         st.info("No category data available")
     
-    # ===== BREAKDOWN BY PIPELINE =====
-    st.markdown("### By Sales Pipeline")
+    # ===== COMPREHENSIVE PIPELINE CHART - Plan vs Full Pipeline =====
+    st.markdown("### 📊 Plan vs. Full Pipeline by Sales Motion")
+    st.caption("Compare your YTD plan against realized revenue plus everything in the pipeline")
     
-    # Merge all pipeline data
-    all_pipelines = list(set(
-        list(actuals_by_pipeline['Pipeline'].unique() if not actuals_by_pipeline.empty else []) +
-        list(pending_by_pipeline['Pipeline'].unique() if not pending_by_pipeline.empty else []) +
-        list(deals_by_pipeline['Pipeline'].unique() if not deals_by_pipeline.empty else [])
-    ))
+    # Filter to known pipelines and add plan data
+    chart_pipelines = FORECAST_PIPELINES.copy()
     
-    # Filter to known pipelines
-    known_pipelines = [p for p in all_pipelines if p in FORECAST_PIPELINES]
-    other_pipelines = [p for p in all_pipelines if p not in FORECAST_PIPELINES and p != 'Unmapped' and pd.notna(p)]
-    
-    if known_pipelines or other_pipelines:
-        pipeline_list = known_pipelines + other_pipelines
-        pipeline_combined = pd.DataFrame({'Pipeline': pipeline_list})
+    if chart_pipelines:
+        pipeline_combined = pd.DataFrame({'Pipeline': chart_pipelines})
+        
+        # Add YTD Plan from forecast
+        plan_by_pipeline = ytd_plan[
+            (ytd_plan['Category'] == 'Total') & 
+            (ytd_plan['Pipeline'].isin(chart_pipelines))
+        ][['Pipeline', 'YTD_Plan']].copy()
+        pipeline_combined = pipeline_combined.merge(plan_by_pipeline, on='Pipeline', how='left')
+        pipeline_combined['YTD_Plan'] = pipeline_combined['YTD_Plan'].fillna(0)
         
         if not actuals_by_pipeline.empty:
             pipeline_combined = pipeline_combined.merge(actuals_by_pipeline, on='Pipeline', how='left')
@@ -8259,69 +8407,155 @@ def render_yearly_planning_2026():
         
         pipeline_combined = pipeline_combined.fillna(0)
         pipeline_combined['Total Pipeline'] = pipeline_combined['Actuals'] + pipeline_combined['Pending'] + pipeline_combined['Deals']
-        pipeline_combined = pipeline_combined.sort_values('Total Pipeline', ascending=True)  # For horizontal bar
+        pipeline_combined['Variance'] = pipeline_combined['Total Pipeline'] - pipeline_combined['YTD_Plan']
+        pipeline_combined['Attainment'] = np.where(
+            pipeline_combined['YTD_Plan'] > 0,
+            (pipeline_combined['Total Pipeline'] / pipeline_combined['YTD_Plan'] * 100),
+            0
+        )
+        pipeline_combined = pipeline_combined.sort_values('YTD_Plan', ascending=True)  # For horizontal bar
         
-        # Create horizontal stacked bar chart
+        # Get pipeline colors
+        pipe_colors = [PIPELINE_COLORS.get(p, '#3b82f6') for p in pipeline_combined['Pipeline']]
+        
+        # ===== BIG BEAUTIFUL HORIZONTAL CHART =====
         fig_pipe = go.Figure()
         
+        # Plan bar (gray background)
         fig_pipe.add_trace(go.Bar(
-            name='Actuals (Invoiced)',
+            name='YTD Plan',
+            y=pipeline_combined['Pipeline'],
+            x=pipeline_combined['YTD_Plan'],
+            orientation='h',
+            marker=dict(
+                color='rgba(148, 163, 184, 0.25)',
+                line=dict(color='rgba(148, 163, 184, 0.5)', width=2)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in pipeline_combined['YTD_Plan']],
+            textposition='outside',
+            textfont=dict(color='#94a3b8', size=11),
+            hovertemplate='<b>%{y}</b><br>Plan: $%{x:,.0f}<extra></extra>',
+            offsetgroup=0
+        ))
+        
+        # Actuals (with pipeline-specific colors)
+        fig_pipe.add_trace(go.Bar(
+            name='✓ Actuals (Invoiced)',
             y=pipeline_combined['Pipeline'],
             x=pipeline_combined['Actuals'],
             orientation='h',
-            marker_color='#10b981',
-            text=[f"${x:,.0f}" for x in pipeline_combined['Actuals']],
+            marker=dict(
+                color='#10b981',
+                line=dict(color='#059669', width=1)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in pipeline_combined['Actuals']],
             textposition='inside',
-            textfont=dict(color='white', size=10),
-            hovertemplate='<b>%{y}</b><br>Actuals: $%{x:,.0f}<extra></extra>'
+            textfont=dict(color='white', size=10, family='Inter'),
+            hovertemplate='<b>%{y}</b><br>Invoiced: $%{x:,.0f}<extra></extra>',
+            offsetgroup=1
         ))
         
+        # Pending Orders
         fig_pipe.add_trace(go.Bar(
-            name='Pending Orders',
+            name='📋 Pending Orders',
             y=pipeline_combined['Pipeline'],
             x=pipeline_combined['Pending'],
             orientation='h',
-            marker_color='#f59e0b',
-            text=[f"${x:,.0f}" if x > 0 else "" for x in pipeline_combined['Pending']],
+            marker=dict(
+                color='#f59e0b',
+                line=dict(color='#d97706', width=1)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else "" for x in pipeline_combined['Pending']],
             textposition='inside',
-            textfont=dict(color='white', size=10),
-            hovertemplate='<b>%{y}</b><br>Pending: $%{x:,.0f}<extra></extra>'
+            textfont=dict(color='white', size=10, family='Inter'),
+            hovertemplate='<b>%{y}</b><br>Pending: $%{x:,.0f}<extra></extra>',
+            offsetgroup=1
         ))
         
+        # HubSpot Deals
         fig_pipe.add_trace(go.Bar(
-            name=f'HubSpot Deals',
+            name='🎯 HubSpot Deals',
             y=pipeline_combined['Pipeline'],
             x=pipeline_combined['Deals'],
             orientation='h',
-            marker_color='#8b5cf6',
-            text=[f"${x:,.0f}" if x > 0 else "" for x in pipeline_combined['Deals']],
+            marker=dict(
+                color='#8b5cf6',
+                line=dict(color='#7c3aed', width=1)
+            ),
+            text=[f"${x/1000:.0f}K" if x >= 1000 else "" for x in pipeline_combined['Deals']],
             textposition='inside',
-            textfont=dict(color='white', size=10),
-            hovertemplate='<b>%{y}</b><br>Deals: $%{x:,.0f}<extra></extra>'
+            textfont=dict(color='white', size=10, family='Inter'),
+            hovertemplate='<b>%{y}</b><br>Deals: $%{x:,.0f}<extra></extra>',
+            offsetgroup=1
         ))
+        
+        # Add attainment % annotations
+        for i, row in pipeline_combined.iterrows():
+            att = row['Attainment']
+            total = row['Total Pipeline']
+            color = '#10b981' if att >= 100 else '#f59e0b' if att >= 80 else '#ef4444'
+            
+            fig_pipe.add_annotation(
+                y=row['Pipeline'],
+                x=max(row['YTD_Plan'], total) + (pipeline_combined['YTD_Plan'].max() * 0.08),
+                text=f"{att:.0f}%",
+                showarrow=False,
+                font=dict(color=color, size=12, family='Inter'),
+                xanchor='left'
+            )
         
         fig_pipe.update_layout(
             barmode='stack',
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='#94a3b8'),
-            xaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickformat='$,.0f'),
-            yaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)'),
-            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
-            height=350,
-            margin=dict(t=60, b=40, l=120, r=40)
+            font=dict(color='#e2e8f0', family='Inter, sans-serif'),
+            xaxis=dict(
+                gridcolor='rgba(148, 163, 184, 0.1)',
+                tickformat='$,.0f',
+                tickfont=dict(size=10, color='#94a3b8'),
+                showline=False,
+                zeroline=False
+            ),
+            yaxis=dict(
+                gridcolor='rgba(148, 163, 184, 0.1)',
+                tickfont=dict(size=12, color='#e2e8f0'),
+                showline=False
+            ),
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='center',
+                x=0.5,
+                font=dict(size=11, color='#e2e8f0'),
+                bgcolor='rgba(0,0,0,0)'
+            ),
+            height=400,
+            margin=dict(t=60, b=40, l=120, r=80),
+            bargap=0.35,
+            bargroupgap=0.15,
+            hoverlabel=dict(
+                bgcolor='#1e293b',
+                font_size=12,
+                font_family='Inter, sans-serif'
+            )
         )
         
         st.plotly_chart(fig_pipe, use_container_width=True)
         
         # Data table
-        with st.expander("📋 View Pipeline Breakdown Table"):
-            display_pipe = pipeline_combined.sort_values('Total Pipeline', ascending=False).copy()
+        with st.expander("📋 View Full Pipeline Breakdown Table"):
+            display_pipe = pipeline_combined.sort_values('YTD_Plan', ascending=False).copy()
+            display_pipe = display_pipe.rename(columns={'YTD_Plan': 'YTD Plan', 'Total Pipeline': 'Total (with Pipeline)'})
+            display_pipe['YTD Plan'] = display_pipe['YTD Plan'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Actuals'] = display_pipe['Actuals'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Pending'] = display_pipe['Pending'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Deals'] = display_pipe['Deals'].apply(lambda x: f"${x:,.0f}")
-            display_pipe['Total Pipeline'] = display_pipe['Total Pipeline'].apply(lambda x: f"${x:,.0f}")
-            st.dataframe(display_pipe, use_container_width=True, hide_index=True)
+            display_pipe['Total (with Pipeline)'] = display_pipe['Total (with Pipeline)'].apply(lambda x: f"${x:,.0f}")
+            display_pipe['Variance'] = display_pipe['Variance'].apply(lambda x: f"${x:+,.0f}")
+            display_pipe['Attainment'] = display_pipe['Attainment'].apply(lambda x: f"{x:.1f}%")
+            st.dataframe(display_pipe[['Pipeline', 'YTD Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
+                        use_container_width=True, hide_index=True)
     else:
         st.info("No pipeline data available")
     
