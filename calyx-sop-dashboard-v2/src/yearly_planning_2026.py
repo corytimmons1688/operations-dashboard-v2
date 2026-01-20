@@ -7443,49 +7443,32 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             </td>
         </tr>"""
     
-    # Concentrate analysis section
+    # Concentrate breakdown section (simplified - just show 4mL/7mL split)
     concentrate_section = ""
-    if pairing_info.get('total_conc_bases', 0) > 0 or pairing_info.get('dml_total', 0) > 0:
+    if pairing_info.get('total_conc_bases', 0) > 0:
         concentrate_section = f"""
         <div class="section">
             <div class="section-header">
                 <div class="section-icon" style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);">🔬</div>
                 <div>
-                    <div class="section-title">Concentrate & DML Lid Analysis</div>
-                    <div class="section-subtitle">DML Universal lids can be used for 4mL, 7mL concentrates OR 15D drams</div>
+                    <div class="section-title">Concentrate Forecast Breakdown</div>
+                    <div class="section-subtitle">Based on glass base quantities (lids match 1:1 with bases)</div>
                 </div>
             </div>
             
             <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
                 <div class="metric-card">
-                    <div class="metric-value" style="color: var(--primary);">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
-                    <div class="metric-label">Concentrate Bases</div>
-                    <div style="font-size: 0.8rem; color: #64748b; margin-top: 8px;">
-                        4mL: {pairing_info.get('4mL_bases', 0):,.0f}<br>
-                        7mL: {pairing_info.get('7mL_bases', 0):,.0f}
-                    </div>
+                    <div class="metric-value" style="color: var(--primary);">{pairing_info.get('4mL_bases', 0):,.0f}</div>
+                    <div class="metric-label">4mL Glass Base</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-value" style="color: var(--success);">{pairing_info.get('dedicated_lids', 0):,.0f}</div>
-                    <div class="metric-label">Dedicated Conc Lids</div>
-                    <div style="font-size: 0.8rem; color: #f59e0b; margin-top: 8px;">
-                        Lid Deficit: {pairing_info.get('lid_deficit', 0):,.0f}
-                    </div>
+                    <div class="metric-value" style="color: #8b5cf6;">{pairing_info.get('7mL_bases', 0):,.0f}</div>
+                    <div class="metric-label">7mL Glass Base</div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value" style="color: #8b5cf6;">{pairing_info.get('dml_total', 0):,.0f}</div>
-                    <div class="metric-label">DML Universal Lids</div>
-                    <div style="font-size: 0.8rem; color: #64748b; margin-top: 8px;">
-                        Used for Conc: {pairing_info.get('dml_used_for_conc', 0):,.0f}<br>
-                        Available for 15D: {pairing_info.get('dml_remaining', 0):,.0f}
-                    </div>
+                <div class="metric-card" style="background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); border: 1px solid #10b981;">
+                    <div class="metric-value" style="color: white;">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
+                    <div class="metric-label" style="color: #10b981;">Total Concentrates</div>
                 </div>
-            </div>
-            
-            <div style="background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); padding: 16px 20px; border-radius: 10px; margin-top: 20px; border: 1px solid #10b981;">
-                <span style="color: #10b981; font-weight: 700;">✓ Total Concentrate Forecast:</span>
-                <span style="color: white; font-size: 1.2rem; font-weight: 700; margin-left: 10px;">{pairing_info.get('total_conc_bases', 0):,.0f} units</span>
-                <span style="color: #94a3b8; margin-left: 10px;">(based on base quantities - lids will match)</span>
             </div>
         </div>
         """
@@ -8356,6 +8339,33 @@ def render_product_forecasting_tool():
     _, pairing_info = apply_dml_pairing_for_forecast(filtered_df)
     
     # =========================================================================
+    # CONCENTRATE BASE-ONLY FILTERING
+    # For accurate quantity forecasting, only count base SKUs for Concentrates
+    # (exclude lids, labels, etc. which are components, not units)
+    # =========================================================================
+    def filter_concentrate_bases_only(df):
+        """
+        For Concentrates category, only keep base SKUs (4mL/7mL Glass Base).
+        This gives accurate unit counts without double-counting components.
+        """
+        if df.empty or 'Product Category' not in df.columns:
+            return df
+        
+        df = df.copy()
+        
+        # Identify concentrate rows that are NOT bases (lids, labels, etc.)
+        is_concentrate = df['Product Category'] == 'Concentrates'
+        is_base = df['Product Subcategory'].str.contains('Base', case=False, na=False)
+        
+        # Keep: all non-concentrates + concentrate bases only
+        filtered = df[~is_concentrate | (is_concentrate & is_base)]
+        
+        return filtered
+    
+    # Create forecast-ready dataframe (concentrates = bases only)
+    forecast_df = filter_concentrate_bases_only(filtered_df)
+    
+    # =========================================================================
     # CALCULATE PENDING ORDERS & YTD ACTUALS METRICS
     # =========================================================================
     
@@ -8374,6 +8384,9 @@ def render_product_forecasting_tool():
             # Apply category filter if selected
             if selected_categories and len(selected_categories) > 0 and 'Product Category' in pending_orders_df.columns:
                 pending_orders_df = pending_orders_df[pending_orders_df['Product Category'].isin(selected_categories)]
+            
+            # Apply concentrate base-only filter
+            pending_orders_df = filter_concentrate_bases_only(pending_orders_df)
             
             # Calculate pending totals
             if 'Quantity Ordered' in pending_orders_df.columns and 'Quantity Fulfilled' in pending_orders_df.columns:
@@ -8425,18 +8438,18 @@ def render_product_forecasting_tool():
         </div>
     """, unsafe_allow_html=True)
     
-    # Calculate pipeline metrics
-    total_quantity = filtered_df['Quantity'].sum()
-    unique_skus = filtered_df['SKU'].nunique()
-    unique_deals = filtered_df['Deal ID'].nunique() if 'Deal ID' in filtered_df.columns else len(filtered_df)
-    unique_categories = filtered_df['Product Category'].nunique()
+    # Calculate pipeline metrics (using forecast_df which has concentrate bases only)
+    total_quantity = forecast_df['Quantity'].sum()
+    unique_skus = forecast_df['SKU'].nunique()
+    unique_deals = forecast_df['Deal ID'].nunique() if 'Deal ID' in forecast_df.columns else len(forecast_df)
+    unique_categories = forecast_df['Product Category'].nunique()
     
     # Open pipeline quantities by status
-    if 'Close Status' in filtered_df.columns:
-        commit_qty = filtered_df[filtered_df['Close Status'] == 'Commit']['Quantity'].sum()
-        expect_qty = filtered_df[filtered_df['Close Status'] == 'Expect']['Quantity'].sum()
-        bestcase_qty = filtered_df[filtered_df['Close Status'] == 'Best Case']['Quantity'].sum()
-        opportunity_qty = filtered_df[filtered_df['Close Status'] == 'Opportunity']['Quantity'].sum()
+    if 'Close Status' in forecast_df.columns:
+        commit_qty = forecast_df[forecast_df['Close Status'] == 'Commit']['Quantity'].sum()
+        expect_qty = forecast_df[forecast_df['Close Status'] == 'Expect']['Quantity'].sum()
+        bestcase_qty = forecast_df[forecast_df['Close Status'] == 'Best Case']['Quantity'].sum()
+        opportunity_qty = forecast_df[forecast_df['Close Status'] == 'Opportunity']['Quantity'].sum()
     else:
         commit_qty = expect_qty = bestcase_qty = opportunity_qty = 0
     
@@ -8567,12 +8580,12 @@ def render_product_forecasting_tool():
         """, unsafe_allow_html=True)
     
     # =========================================================================
-    # CONCENTRATE DML PAIRING ANALYSIS (if data exists)
+    # CONCENTRATE BREAKDOWN (showing 4mL/7mL split)
     # =========================================================================
-    if pairing_info.get('total_conc_bases', 0) > 0 or pairing_info.get('dml_total', 0) > 0:
+    if pairing_info.get('total_conc_bases', 0) > 0:
         st.markdown("---")
-        st.markdown("### 🔬 Concentrate & DML Lid Analysis")
-        st.caption("DML Universal lids can be used for 4mL, 7mL concentrates OR 15D drams. This shows how they pair with concentrate bases.")
+        st.markdown("### 🔬 Concentrate Forecast Breakdown")
+        st.caption("Concentrate forecasts are based on glass base quantities (4mL + 7mL). Lids are matched 1:1 with bases.")
         
         col_conc1, col_conc2, col_conc3 = st.columns(3)
         
@@ -8584,12 +8597,9 @@ def render_product_forecasting_tool():
                     border-radius: 12px;
                     border-left: 4px solid #3b82f6;
                 ">
-                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Concentrate Bases</div>
-                    <div style="color: #f1f5f9; font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
-                    <div style="color: #64748b; font-size: 0.85rem;">
-                        4mL: {pairing_info.get('4mL_bases', 0):,.0f}<br>
-                        7mL: {pairing_info.get('7mL_bases', 0):,.0f}
-                    </div>
+                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">4mL Glass Base</div>
+                    <div style="color: #60a5fa; font-size: 1.8rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('4mL_bases', 0):,.0f}</div>
+                    <div style="color: #64748b; font-size: 0.85rem;">units forecasted</div>
                 </div>
             """, unsafe_allow_html=True)
         
@@ -8599,55 +8609,35 @@ def render_product_forecasting_tool():
                     background: #1e293b;
                     padding: 20px;
                     border-radius: 12px;
-                    border-left: 4px solid #10b981;
+                    border-left: 4px solid #8b5cf6;
                 ">
-                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Dedicated Conc Lids</div>
-                    <div style="color: #f1f5f9; font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('dedicated_lids', 0):,.0f}</div>
-                    <div style="color: #64748b; font-size: 0.85rem;">
-                        Lid Deficit: <span style="color: #f59e0b;">{pairing_info.get('lid_deficit', 0):,.0f}</span>
-                    </div>
+                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">7mL Glass Base</div>
+                    <div style="color: #a78bfa; font-size: 1.8rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('7mL_bases', 0):,.0f}</div>
+                    <div style="color: #64748b; font-size: 0.85rem;">units forecasted</div>
                 </div>
             """, unsafe_allow_html=True)
         
         with col_conc3:
             st.markdown(f"""
                 <div style="
-                    background: #1e293b;
+                    background: linear-gradient(135deg, #064e3b 0%, #065f46 100%);
                     padding: 20px;
                     border-radius: 12px;
-                    border-left: 4px solid #8b5cf6;
+                    border: 1px solid #10b981;
                 ">
-                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">DML Universal Lids</div>
-                    <div style="color: #f1f5f9; font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('dml_total', 0):,.0f}</div>
-                    <div style="color: #64748b; font-size: 0.85rem;">
-                        Used for Conc: <span style="color: #10b981;">{pairing_info.get('dml_used_for_conc', 0):,.0f}</span><br>
-                        Available for 15D: <span style="color: #3b82f6;">{pairing_info.get('dml_remaining', 0):,.0f}</span>
-                    </div>
+                    <div style="color: #10b981; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Total Concentrates</div>
+                    <div style="color: white; font-size: 1.8rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
+                    <div style="color: #94a3b8; font-size: 0.85rem;">4mL + 7mL combined</div>
                 </div>
             """, unsafe_allow_html=True)
-        
-        # Summary callout
-        st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, #064e3b 0%, #065f46 100%);
-                padding: 16px 20px;
-                border-radius: 10px;
-                margin-top: 1rem;
-                border: 1px solid #10b981;
-            ">
-                <span style="color: #10b981; font-weight: 700;">✓ Total Concentrate Forecast:</span>
-                <span style="color: white; font-size: 1.2rem; font-weight: 700; margin-left: 10px;">{pairing_info.get('total_conc_bases', 0):,.0f} units</span>
-                <span style="color: #94a3b8; margin-left: 10px;">(based on base quantities - lids will match)</span>
-            </div>
-        """, unsafe_allow_html=True)
     
     # =========================================================================
     # DOWNLOAD BUTTON
     # =========================================================================
     st.markdown("---")
     
-    # Generate HTML report
-    html_report = create_product_forecast_html(filtered_df, date_label, selected_rep, pairing_info)
+    # Generate HTML report (using forecast_df with concentrate bases only)
+    html_report = create_product_forecast_html(forecast_df, date_label, selected_rep, pairing_info)
     
     st.download_button(
         label="📥 Download Product Forecast Report (HTML)",
@@ -8658,34 +8648,24 @@ def render_product_forecasting_tool():
     )
     
     # =========================================================================
-    # CATEGORY BREAKDOWN (Quantity-Focused with Concentrate Rollup)
+    # CATEGORY BREAKDOWN (Quantity-Focused - Concentrate bases only)
     # =========================================================================
     st.markdown("---")
     st.markdown("### 📦 Category Breakdown by Quantity")
+    st.caption("Note: Concentrates shows base quantities only (4mL + 7mL bases) for accurate unit forecasting")
     
-    # Build category summary
-    category_summary = filtered_df.groupby('Product Category').agg({
+    # Build category summary (using forecast_df which has concentrate bases only)
+    category_summary = forecast_df.groupby('Product Category').agg({
         'Quantity': 'sum',
         'SKU': 'nunique',
-        'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
+        'Deal ID': 'nunique' if 'Deal ID' in forecast_df.columns else 'count'
     }).reset_index()
     category_summary.columns = ['Category', 'Quantity', 'Unique SKUs', 'Deals']
     
-    # Apply concentrate rollup - use base quantity as the concentrate total
-    if pairing_info.get('total_conc_bases', 0) > 0:
-        # Update Concentrates row to show base quantity (which represents actual product count)
-        conc_mask = category_summary['Category'] == 'Concentrates'
-        if conc_mask.any():
-            category_summary.loc[conc_mask, 'Quantity'] = pairing_info['total_conc_bases']
-        
-        # Remove or reduce DML Universal to show only remaining after concentrate allocation
-        dml_mask = category_summary['Category'] == 'DML (Universal)'
-        if dml_mask.any():
-            if pairing_info['dml_remaining'] > 0:
-                category_summary.loc[dml_mask, 'Quantity'] = pairing_info['dml_remaining']
-            else:
-                # Remove DML row if fully allocated to concentrates
-                category_summary = category_summary[~dml_mask]
+    # Remove DML Universal (lids are paired, not separate forecast items)
+    dml_mask = category_summary['Category'] == 'DML (Universal)'
+    if dml_mask.any():
+        category_summary = category_summary[~dml_mask]
     
     # Recalculate total and percentages
     adjusted_total = category_summary['Quantity'].sum()
@@ -8722,11 +8702,11 @@ def render_product_forecasting_tool():
     # =========================================================================
     # PIPELINE BY STATUS (Quantity-Focused)
     # =========================================================================
-    if 'Close Status' in filtered_df.columns:
+    if 'Close Status' in forecast_df.columns:
         st.markdown("---")
         st.markdown("### 📈 Quantity by Pipeline Status")
         
-        status_summary = filtered_df.groupby('Close Status').agg({
+        status_summary = forecast_df.groupby('Close Status').agg({
             'Quantity': 'sum',
             'SKU': 'nunique'
         }).reset_index()
@@ -8780,9 +8760,9 @@ def render_product_forecasting_tool():
     st.markdown("---")
     st.markdown("### 🏆 Top SKUs by Quantity")
     
-    sku_summary = filtered_df.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
+    sku_summary = forecast_df.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
         'Quantity': 'sum',
-        'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
+        'Deal ID': 'nunique' if 'Deal ID' in forecast_df.columns else 'count'
     }).reset_index()
     sku_summary.columns = ['SKU', 'Description', 'Category', 'Quantity', 'Deal Count']
     sku_summary = sku_summary.sort_values('Quantity', ascending=False)
@@ -8798,8 +8778,9 @@ def render_product_forecasting_tool():
     # =========================================================================
     st.markdown("---")
     st.markdown("### 📋 Subcategory Details")
+    st.caption("Concentrates: showing base SKUs only (4mL/7mL Glass Base)")
     
-    subcat_summary = filtered_df.groupby(['Product Category', 'Product Subcategory']).agg({
+    subcat_summary = forecast_df.groupby(['Product Category', 'Product Subcategory']).agg({
         'Quantity': 'sum',
         'SKU': 'nunique'
     }).reset_index()
@@ -8817,12 +8798,12 @@ def render_product_forecasting_tool():
     st.markdown("---")
     st.markdown("### 🏢 Top Customers by Forecasted Quantity")
     
-    company_col = 'Company Name' if 'Company Name' in filtered_df.columns else 'Primary Associated Company'
-    if company_col in filtered_df.columns:
-        company_summary = filtered_df.groupby(company_col).agg({
+    company_col = 'Company Name' if 'Company Name' in forecast_df.columns else 'Primary Associated Company'
+    if company_col in forecast_df.columns:
+        company_summary = forecast_df.groupby(company_col).agg({
             'Quantity': 'sum',
             'SKU': 'nunique',
-            'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
+            'Deal ID': 'nunique' if 'Deal ID' in forecast_df.columns else 'count'
         }).reset_index()
         company_summary.columns = ['Customer', 'Quantity', 'Unique SKUs', 'Deals']
         company_summary = company_summary.sort_values('Quantity', ascending=False).head(20)
@@ -9002,14 +8983,14 @@ def render_product_forecasting_tool():
                 st.plotly_chart(fig, use_container_width=True, key="monthly_trend")
     
     # =========================================================================
-    # DEAL DETAILS EXPANDER (No Amount column)
+    # DEAL DETAILS EXPANDER (Shows forecast items only - concentrate bases only)
     # =========================================================================
-    with st.expander("📋 View All Deal Line Items"):
+    with st.expander("📋 View All Deal Line Items (Forecast Items Only)"):
         display_cols = ['Deal Name', 'SKU', 'SKU Description', 'Quantity', 
                         'Close Date', 'Close Status', 'Company Name', 'Deal Owner']
-        display_cols = [c for c in display_cols if c in filtered_df.columns]
+        display_cols = [c for c in display_cols if c in forecast_df.columns]
         
-        detail_df = filtered_df[display_cols].copy()
+        detail_df = forecast_df[display_cols].copy()
         
         if 'Quantity' in detail_df.columns:
             detail_df['Quantity'] = detail_df['Quantity'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
