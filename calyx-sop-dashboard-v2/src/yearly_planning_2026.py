@@ -7448,6 +7448,40 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 historical_by_category = historical_df.groupby('Product Category')['Quantity'].sum().to_dict()
     
     # =========================================================================
+    # 2025 HISTORICAL DEMAND (for validation)
+    # =========================================================================
+    conc_2025_total = 0
+    conc_2025_monthly_avg = 0
+    conc_2025_months_count = 0
+    conc_2024_total = 0
+    conc_yoy_growth = 0
+    
+    if not historical_df.empty and 'Product Category' in historical_df.columns and 'Date' in historical_df.columns:
+        # Filter to concentrates
+        conc_all_hist = historical_df[historical_df['Product Category'] == 'Concentrates'].copy()
+        
+        if not conc_all_hist.empty and 'Quantity' in conc_all_hist.columns:
+            # 2025 data
+            conc_2025 = conc_all_hist[conc_all_hist['Date'].dt.year == 2025]
+            if not conc_2025.empty:
+                conc_2025_total = conc_2025['Quantity'].sum()
+                conc_2025_months_count = conc_2025['Date'].dt.to_period('M').nunique()
+                if conc_2025_months_count > 0:
+                    conc_2025_monthly_avg = conc_2025_total / conc_2025_months_count
+            
+            # 2024 data for YoY comparison
+            conc_2024 = conc_all_hist[conc_all_hist['Date'].dt.year == 2024]
+            if not conc_2024.empty:
+                conc_2024_total = conc_2024['Quantity'].sum()
+                if conc_2024_total > 0 and conc_2025_total > 0:
+                    # Annualize 2025 if partial year
+                    if conc_2025_months_count < 12:
+                        conc_2025_annualized = (conc_2025_total / conc_2025_months_count) * 12
+                    else:
+                        conc_2025_annualized = conc_2025_total
+                    conc_yoy_growth = ((conc_2025_annualized - conc_2024_total) / conc_2024_total) * 100
+    
+    # =========================================================================
     # CONCENTRATE SUPPLY PLANNING
     # =========================================================================
     conc_pipeline = pairing_info.get('total_conc_bases', 0)
@@ -7480,6 +7514,32 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     
     # Recommended order quantity (cover 6 months of demand)
     conc_recommended_order = max(0, (conc_monthly_avg * 6) - conc_total_available + conc_supply_gap)
+    
+    # =========================================================================
+    # HISTORICAL VALIDATION METRICS
+    # Compare recommendation against 2025 actuals
+    # =========================================================================
+    # How many months of 2025 demand does the recommended order cover?
+    conc_order_months_of_2025 = 0
+    if conc_2025_monthly_avg > 0:
+        conc_order_months_of_2025 = conc_recommended_order / conc_2025_monthly_avg
+    
+    # What % of 2025 total demand is this order?
+    conc_order_pct_of_2025 = 0
+    if conc_2025_total > 0:
+        conc_order_pct_of_2025 = (conc_recommended_order / conc_2025_total) * 100
+    
+    # Projected 2026 demand (apply growth rate to 2025)
+    conc_2026_projected = 0
+    if conc_2025_monthly_avg > 0:
+        # Use 2025 monthly avg * 12, adjusted for YoY growth
+        growth_factor = 1 + (conc_yoy_growth / 100) if conc_yoy_growth > 0 else 1
+        conc_2026_projected = conc_2025_monthly_avg * 12 * growth_factor
+    
+    # Does order + available cover projected 2026?
+    conc_2026_coverage = 0
+    if conc_2026_projected > 0:
+        conc_2026_coverage = ((conc_total_available + conc_recommended_order) / conc_2026_projected) * 100
     
     # =========================================================================
     # CATEGORY BREAKDOWN
@@ -7609,6 +7669,23 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     
     if conc_recommended_order > 0:
         recommendations.append(f"📦 <strong>Recommended Order:</strong> Place an order for {conc_recommended_order:,.0f} concentrate units to maintain 6-month supply coverage. With {conc_lead_time} week lead time, order should be placed soon.")
+    
+    # Historical validation recommendations
+    if conc_2025_total > 0 and conc_recommended_order > 0:
+        if conc_order_months_of_2025 >= 5 and conc_order_months_of_2025 <= 7:
+            recommendations.append(f"✅ <strong>Historical Validation:</strong> Recommended order ({conc_recommended_order:,.0f}) equals {conc_order_months_of_2025:.1f} months of 2025 demand - aligns well with 6-month coverage target.")
+        elif conc_order_months_of_2025 < 4:
+            recommendations.append(f"⚠️ <strong>Historical Check:</strong> Recommended order only covers {conc_order_months_of_2025:.1f} months of 2025 demand. Consider increasing order size if growth is expected.")
+        elif conc_order_months_of_2025 > 8:
+            recommendations.append(f"💡 <strong>Order Size Note:</strong> Recommended order covers {conc_order_months_of_2025:.1f} months of 2025 demand. This is aggressive - ensure storage capacity and cash flow support this.")
+    
+    if conc_yoy_growth > 20:
+        recommendations.append(f"📈 <strong>High Growth Alert:</strong> Concentrate demand grew {conc_yoy_growth:.0f}% YoY. Factor accelerating demand into order planning.")
+    elif conc_yoy_growth < -10:
+        recommendations.append(f"📉 <strong>Declining Demand:</strong> Concentrate demand declined {abs(conc_yoy_growth):.0f}% YoY. Recommended order may be conservative.")
+    
+    if conc_2026_projected > 0 and conc_2026_coverage < 50:
+        recommendations.append(f"⚠️ <strong>2026 Coverage Risk:</strong> Even with recommended order, you'll only cover {conc_2026_coverage:.0f}% of projected 2026 demand. Plan for additional orders.")
     
     # General recommendations
     if commit_qty > 0:
@@ -7986,6 +8063,54 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                     <div>
                         <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase;">Recommended Order</div>
                         <div style="font-size: 1.5rem; font-weight: 700; color: #3b82f6;">{conc_recommended_order:,.0f}</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Historical Validation Section -->
+            <div style="margin-top: 25px; background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); border-radius: 12px; padding: 25px; color: white;">
+                <div style="font-size: 0.85rem; color: #a5b4fc; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; font-weight: 600;">
+                    📊 Historical Validation (2025 Actuals)
+                </div>
+                
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 20px;">
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.7rem; color: #a5b4fc; text-transform: uppercase;">2025 Total Shipped</div>
+                        <div style="font-size: 1.4rem; font-weight: 700; color: #818cf8;">{conc_2025_total:,.0f}</div>
+                        <div style="font-size: 0.75rem; color: #6366f1;">({conc_2025_months_count} months)</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.7rem; color: #a5b4fc; text-transform: uppercase;">2025 Monthly Avg</div>
+                        <div style="font-size: 1.4rem; font-weight: 700; color: #818cf8;">{conc_2025_monthly_avg:,.0f}</div>
+                        <div style="font-size: 0.75rem; color: #6366f1;">per month</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.7rem; color: #a5b4fc; text-transform: uppercase;">YoY Growth</div>
+                        <div style="font-size: 1.4rem; font-weight: 700; color: {'#4ade80' if conc_yoy_growth > 0 else '#f87171'};">{'+' if conc_yoy_growth > 0 else ''}{conc_yoy_growth:.1f}%</div>
+                        <div style="font-size: 0.75rem; color: #6366f1;">vs 2024</div>
+                    </div>
+                    <div style="text-align: center;">
+                        <div style="font-size: 0.7rem; color: #a5b4fc; text-transform: uppercase;">2026 Projected</div>
+                        <div style="font-size: 1.4rem; font-weight: 700; color: #818cf8;">{conc_2026_projected:,.0f}</div>
+                        <div style="font-size: 0.75rem; color: #6366f1;">annual demand</div>
+                    </div>
+                </div>
+                
+                <div style="border-top: 1px solid #4338ca; padding-top: 15px; margin-top: 10px;">
+                    <div style="font-size: 0.75rem; color: #a5b4fc; margin-bottom: 10px;">Recommendation Validation:</div>
+                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                        <div style="background: rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                            <div style="font-size: 0.7rem; color: #c7d2fe;">Order = Months of 2025 Demand</div>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: white;">{conc_order_months_of_2025:.1f} mo</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                            <div style="font-size: 0.7rem; color: #c7d2fe;">Order as % of 2025 Total</div>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: white;">{conc_order_pct_of_2025:.0f}%</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.1); border-radius: 8px; padding: 12px; text-align: center;">
+                            <div style="font-size: 0.7rem; color: #c7d2fe;">Order + Available Covers 2026</div>
+                            <div style="font-size: 1.2rem; font-weight: 700; color: {'#4ade80' if conc_2026_coverage >= 50 else '#fbbf24'};">{conc_2026_coverage:.0f}%</div>
+                        </div>
                     </div>
                 </div>
             </div>
