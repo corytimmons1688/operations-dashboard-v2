@@ -7331,6 +7331,15 @@ def render_yearly_planning_2026():
         </div>
     """, unsafe_allow_html=True)
     
+    # Context box for leadership
+    st.markdown("""
+        <div style="background: rgba(59, 130, 246, 0.1); border-left: 4px solid #3b82f6; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #60a5fa;">📊 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Realized (invoiced) revenue vs. the 2026 Forecast plan. This is money we've already billed customers.</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Source: Invoice Line Items from NetSuite</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
     if selected_year != 2026:
         st.info(f"📅 **Note:** Showing {selected_year} actuals data for comparison. Switch to 2026 in sidebar when 2026 data is available.")
     
@@ -7439,6 +7448,15 @@ def render_yearly_planning_2026():
         </div>
     """, unsafe_allow_html=True)
     
+    # Context box for leadership
+    st.markdown("""
+        <div style="background: rgba(139, 92, 246, 0.1); border-left: 4px solid #8b5cf6; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #a78bfa;">🎯 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Invoiced revenue broken down by sales motion (how we acquired/grew the customer).</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Source: Invoice Line Items joined to HubSpot Pipeline via NetSuite Invoice records</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
     # Calculate pipeline coverage
     if not line_items_df.empty and 'Forecast Pipeline' in line_items_df.columns:
         year_filtered = line_items_df[line_items_df['Date'].dt.year == selected_year] if 'Date' in line_items_df.columns else line_items_df
@@ -7460,21 +7478,6 @@ def render_yearly_planning_2026():
         (comparison['Pipeline'] != 'Unmapped') &
         (comparison['Pipeline'].isin(FORECAST_PIPELINES))
     ].copy()
-    
-    # Debug: show what's actually in the comparison for pipeline totals
-    with st.expander("🔧 Pipeline Debug Info", expanded=False):
-        st.write("**All rows in comparison where Category='Total':**")
-        cat_total_rows = comparison[comparison['Category'] == 'Total']
-        st.dataframe(cat_total_rows)
-        
-        st.write("**Unique Pipelines in ytd_actuals:**")
-        if not ytd_actuals.empty:
-            st.write(ytd_actuals['Pipeline'].unique().tolist())
-        
-        st.write("**Pipeline totals in ytd_actuals:**")
-        if not ytd_actuals.empty:
-            pipeline_totals_debug = ytd_actuals[ytd_actuals['Category'] == 'Total']
-            st.dataframe(pipeline_totals_debug)
     
     if not pipeline_data.empty:
         # Create pipeline cards in a row
@@ -7516,20 +7519,22 @@ def render_yearly_planning_2026():
         pipeline_chart = create_pipeline_comparison_chart(pipeline_data, "")
         st.plotly_chart(pipeline_chart, use_container_width=True)
     else:
-        # Debug: show what pipelines exist in actuals
-        st.warning("No pipeline data found in comparison. Checking actuals...")
-        if not ytd_actuals.empty:
-            unique_pipelines = ytd_actuals['Pipeline'].unique().tolist()
-            st.write(f"Pipelines in actuals: {unique_pipelines}")
-            pipeline_totals_check = ytd_actuals[ytd_actuals['Category'] == 'Total']
-            st.write("Pipeline totals in actuals:")
-            st.dataframe(pipeline_totals_check)
+        st.info("📊 Pipeline breakdown will populate as invoices are linked to HubSpot deals.")
     
     # Category Breakdown
     st.markdown("""
         <div class="section-header">
             <span class="section-icon">📦</span>
             <span class="section-title">Category Breakdown</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Context box for leadership
+    st.markdown("""
+        <div style="background: rgba(16, 185, 129, 0.1); border-left: 4px solid #10b981; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #34d399;">📦 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Invoiced revenue by product category. All revenue is categorized (100% coverage).</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Source: Invoice Line Items categorized by Item/SKU from NetSuite</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -7560,47 +7565,48 @@ def render_yearly_planning_2026():
         category_chart = create_category_comparison_chart(category_data, "")
         st.plotly_chart(category_chart, use_container_width=True)
         
-        # Styled table
+        # Use st.dataframe with column formatting instead of HTML
         with st.expander("📋 View Category Details"):
-            # Create HTML table
-            table_html = """
-            <table class="styled-table">
-                <thead>
-                    <tr>
-                        <th>Category</th>
-                        <th>YTD Plan</th>
-                        <th>YTD Actual</th>
-                        <th>Variance</th>
-                        <th>Attainment</th>
-                        <th>Annual Goal</th>
-                    </tr>
-                </thead>
-                <tbody>
-            """
+            display_df = category_data[['Category', 'YTD_Plan', 'Actual', 'Variance', 'Attainment_Pct', 'Annual_Total']].copy()
             
-            for _, row in category_data.iterrows():
-                variance_color = "#34d399" if row['Variance'] >= 0 else "#f87171"
-                att_color = "#34d399" if row['Attainment_Pct'] >= 100 else "#fbbf24" if row['Attainment_Pct'] >= 80 else "#f87171"
-                
-                table_html += f"""
-                    <tr>
-                        <td><strong>{row['Category']}</strong></td>
-                        <td>${row['YTD_Plan']:,.0f}</td>
-                        <td>${row['Actual']:,.0f}</td>
-                        <td style="color: {variance_color};">${row['Variance']:+,.0f}</td>
-                        <td style="color: {att_color};">{row['Attainment_Pct']:.1f}%</td>
-                        <td>${row['Annual_Total']:,.0f}</td>
-                    </tr>
-                """
+            # Format for display
+            display_df['YTD Plan'] = display_df['YTD_Plan'].apply(lambda x: f"${x:,.0f}")
+            display_df['YTD Actual'] = display_df['Actual'].apply(lambda x: f"${x:,.0f}")
+            display_df['Variance'] = display_df['Variance'].apply(lambda x: f"${x:+,.0f}")
+            display_df['Attainment'] = display_df['Attainment_Pct'].apply(lambda x: f"{x:.1f}%")
+            display_df['Annual Goal'] = display_df['Annual_Total'].apply(lambda x: f"${x:,.0f}")
             
-            table_html += "</tbody></table>"
-            st.markdown(table_html, unsafe_allow_html=True)
+            # Select only display columns
+            display_df = display_df[['Category', 'YTD Plan', 'YTD Actual', 'Variance', 'Attainment', 'Annual Goal']]
+            
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Category": st.column_config.TextColumn("Category", width="medium"),
+                    "YTD Plan": st.column_config.TextColumn("YTD Plan", width="small"),
+                    "YTD Actual": st.column_config.TextColumn("YTD Actual", width="small"),
+                    "Variance": st.column_config.TextColumn("Variance", width="small"),
+                    "Attainment": st.column_config.TextColumn("Attainment", width="small"),
+                    "Annual Goal": st.column_config.TextColumn("Annual Goal", width="small"),
+                }
+            )
     
     # Monthly Trend
     st.markdown("""
         <div class="section-header">
             <span class="section-icon">📅</span>
             <span class="section-title">Monthly Trend</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Context box
+    st.markdown("""
+        <div style="background: rgba(6, 182, 212, 0.1); border-left: 4px solid #06b6d4; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #22d3ee;">📈 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Cumulative invoiced revenue over time compared to plan. Monthly bars show individual month performance.</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Use the filters to drill down by Pipeline or Category</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -7616,11 +7622,19 @@ def render_yearly_planning_2026():
         if trend_chart:
             st.plotly_chart(trend_chart, use_container_width=True)
     
-    # Pipeline Health
+    # Pipeline Health (Forward-Looking Indicators)
     st.markdown("""
         <div class="section-header">
             <span class="section-icon">💼</span>
-            <span class="section-title">Pipeline Health</span>
+            <span class="section-title">Forward-Looking Pipeline</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Context box explaining the difference
+    st.markdown("""
+        <div style="background: rgba(245, 158, 11, 0.1); border-left: 4px solid #f59e0b; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #fbbf24;">🔮 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Revenue that hasn't been invoiced yet but is in the pipeline. These are leading indicators of future revenue.</span>
         </div>
     """, unsafe_allow_html=True)
     
@@ -7640,16 +7654,25 @@ def render_yearly_planning_2026():
             
             st.markdown(f"""
                 <div class="glass-card">
-                    <div class="metric-label">Pending Orders (Not Yet Invoiced)</div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                        <span style="font-size: 1.5rem;">📋</span>
+                        <div>
+                            <div class="metric-label">Pending Sales Orders</div>
+                            <div style="color: #64748b; font-size: 0.75rem;">Booked but not yet invoiced</div>
+                        </div>
+                    </div>
                     <div class="metric-value">${pending_total:,.0f}</div>
-                    <div class="metric-delta neutral">{pending_count:,} orders in queue</div>
+                    <div class="metric-delta neutral">{pending_count:,} orders awaiting fulfillment</div>
+                    <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(148,163,184,0.1);">
+                        <span style="color: #64748b; font-size: 0.8rem;">⏱️ High confidence — typically converts to invoice within 2-4 weeks</span>
+                    </div>
                 </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
                 <div class="glass-card">
-                    <div class="metric-label">Pending Orders</div>
-                    <div class="metric-value neutral">No data</div>
+                    <div class="metric-label">Pending Sales Orders</div>
+                    <div class="metric-value neutral">No data available</div>
                 </div>
             """, unsafe_allow_html=True)
     
@@ -7665,18 +7688,53 @@ def render_yearly_planning_2026():
             
             st.markdown(f"""
                 <div class="glass-card">
-                    <div class="metric-label">Open HubSpot Deals</div>
+                    <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem;">
+                        <span style="font-size: 1.5rem;">🎯</span>
+                        <div>
+                            <div class="metric-label">Open HubSpot Deals</div>
+                            <div style="color: #64748b; font-size: 0.75rem;">Active opportunities in pipeline</div>
+                        </div>
+                    </div>
                     <div class="metric-value">${pipeline_total:,.0f}</div>
-                    <div class="metric-delta neutral">{deal_count:,} active deals</div>
+                    <div class="metric-delta neutral">{deal_count:,} deals in active stages</div>
+                    <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(148,163,184,0.1);">
+                        <span style="color: #64748b; font-size: 0.8rem;">📊 Variable confidence — depends on deal stage and close date</span>
+                    </div>
                 </div>
             """, unsafe_allow_html=True)
         else:
             st.markdown("""
                 <div class="glass-card">
                     <div class="metric-label">Open HubSpot Deals</div>
-                    <div class="metric-value neutral">No data</div>
+                    <div class="metric-value neutral">No data available</div>
                 </div>
             """, unsafe_allow_html=True)
+    
+    # Add a visual showing the revenue progression
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+        <div style="background: rgba(30, 41, 59, 0.5); border-radius: 12px; padding: 1.25rem; margin-top: 1rem;">
+            <div style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 1rem; text-align: center;">
+                <strong>Revenue Progression Flow</strong>
+            </div>
+            <div style="display: flex; align-items: center; justify-content: center; gap: 1rem; flex-wrap: wrap;">
+                <div style="text-align: center; padding: 0.75rem;">
+                    <div style="color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;">HubSpot Deals</div>
+                    <div style="color: #8b5cf6; font-size: 1.1rem; font-weight: 600;">Opportunity</div>
+                </div>
+                <div style="color: #475569;">→</div>
+                <div style="text-align: center; padding: 0.75rem;">
+                    <div style="color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;">Sales Orders</div>
+                    <div style="color: #f59e0b; font-size: 1.1rem; font-weight: 600;">Booked</div>
+                </div>
+                <div style="color: #475569;">→</div>
+                <div style="text-align: center; padding: 0.75rem;">
+                    <div style="color: #64748b; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 1px;">Invoices</div>
+                    <div style="color: #10b981; font-size: 1.1rem; font-weight: 600;">Realized ✓</div>
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
     
     # Data Quality Check
     st.markdown("""
