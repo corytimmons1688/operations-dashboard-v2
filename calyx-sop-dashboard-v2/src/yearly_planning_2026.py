@@ -7432,23 +7432,29 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     
     # =========================================================================
     # HISTORICAL METRICS (YTD Actuals from Invoice Line Items)
+    # Filter to current year for YTD display
     # =========================================================================
     historical_total_qty = 0
     historical_total_revenue = 0
     historical_by_category = {}
     
-    if not historical_df.empty:
-        if 'Quantity' in historical_df.columns:
-            historical_total_qty = historical_df['Quantity'].sum()
-        if 'Amount' in historical_df.columns:
-            historical_total_revenue = historical_df['Amount'].sum()
+    if not historical_df.empty and 'Date' in historical_df.columns:
+        # Filter to current year for YTD metrics
+        ytd_df = historical_df[historical_df['Date'].dt.year == current_year].copy()
         
-        if 'Product Category' in historical_df.columns:
-            if 'Quantity' in historical_df.columns:
-                historical_by_category = historical_df.groupby('Product Category')['Quantity'].sum().to_dict()
+        if not ytd_df.empty:
+            if 'Quantity' in ytd_df.columns:
+                historical_total_qty = ytd_df['Quantity'].sum()
+            if 'Amount' in ytd_df.columns:
+                historical_total_revenue = ytd_df['Amount'].sum()
+            
+            if 'Product Category' in ytd_df.columns:
+                if 'Quantity' in ytd_df.columns:
+                    historical_by_category = ytd_df.groupby('Product Category')['Quantity'].sum().to_dict()
     
     # =========================================================================
     # 2025 HISTORICAL DEMAND (for validation)
+    # Uses ALL concentrates to match dashboard display
     # =========================================================================
     conc_2025_total = 0
     conc_2025_monthly_avg = 0
@@ -7457,7 +7463,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     conc_yoy_growth = 0
     
     if not historical_df.empty and 'Product Category' in historical_df.columns and 'Date' in historical_df.columns:
-        # Filter to concentrates
+        # Filter to ALL concentrates (bases + lids + labels) to match dashboard
         conc_all_hist = historical_df[historical_df['Product Category'] == 'Concentrates'].copy()
         
         if not conc_all_hist.empty and 'Quantity' in conc_all_hist.columns:
@@ -7488,10 +7494,11 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     conc_pending = pending_by_category.get('Concentrates', 0)
     conc_historical_ytd = historical_by_category.get('Concentrates', 0)
     
-    # Calculate monthly historical average for concentrates
+    # Calculate monthly historical average for ALL concentrates
     conc_monthly_avg = 0
     if not historical_df.empty and 'Product Category' in historical_df.columns and 'Date' in historical_df.columns:
-        conc_hist = historical_df[historical_df['Product Category'] == 'Concentrates']
+        conc_hist = historical_df[historical_df['Product Category'] == 'Concentrates'].copy()
+        
         if not conc_hist.empty and 'Quantity' in conc_hist.columns:
             months_in_data = conc_hist['Date'].dt.to_period('M').nunique()
             if months_in_data > 0:
@@ -9000,13 +9007,14 @@ def render_product_forecasting_tool():
     st.markdown("---")
     
     # Generate HTML report (using all data sources)
+    # Pass full invoice_line_items_df for historical validation - it has all years and categories
     html_report = create_product_forecast_html(
         product_data=forecast_df, 
         date_label=date_label, 
         rep_name=selected_rep, 
         pairing_info=pairing_info,
         pending_orders_df=pending_orders_df,
-        historical_df=ytd_actuals_df,
+        historical_df=invoice_line_items_df,  # Full history for 2024/2025 validation
         concentrate_inventory=concentrate_inventory
     )
     
