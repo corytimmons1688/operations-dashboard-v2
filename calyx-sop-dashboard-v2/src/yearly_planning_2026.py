@@ -7995,13 +7995,13 @@ def render_product_forecasting_tool():
     else:
         rep_list = ["All Reps"]
     
-    categories = ["All Categories"] + sorted(deals_line_items_df['Product Category'].dropna().unique().tolist())
+    categories = sorted(deals_line_items_df['Product Category'].dropna().unique().tolist())
     
     # Close Status options
     if 'Close Status' in deals_line_items_df.columns:
-        status_options = ["All Statuses"] + sorted(deals_line_items_df['Close Status'].dropna().unique().tolist())
+        status_options = sorted(deals_line_items_df['Close Status'].dropna().unique().tolist())
     else:
-        status_options = ["All Statuses"]
+        status_options = []
     
     col1, col2, col3 = st.columns(3)
     
@@ -8009,10 +8009,20 @@ def render_product_forecasting_tool():
         selected_rep = st.selectbox("SALES REP", rep_list, key="pf_rep_selector")
     
     with col2:
-        selected_category = st.selectbox("PRODUCT CATEGORY", categories, key="pf_category_selector")
+        selected_categories = st.multiselect(
+            "PRODUCT CATEGORY", 
+            categories, 
+            placeholder="All Categories",
+            key="pf_category_selector"
+        )
     
     with col3:
-        selected_status = st.selectbox("DEAL STATUS", status_options, key="pf_status_selector")
+        selected_statuses = st.multiselect(
+            "DEAL STATUS", 
+            status_options, 
+            placeholder="All Statuses",
+            key="pf_status_selector"
+        )
     
     # Date Filter
     st.markdown("""
@@ -8129,13 +8139,13 @@ def render_product_forecasting_tool():
     if selected_rep != "All Reps" and 'Deal Owner' in filtered_df.columns:
         filtered_df = filtered_df[filtered_df['Deal Owner'] == selected_rep]
     
-    # Category filter
-    if selected_category != "All Categories":
-        filtered_df = filtered_df[filtered_df['Product Category'] == selected_category]
+    # Category filter (multiselect - empty list means all)
+    if selected_categories and len(selected_categories) > 0:
+        filtered_df = filtered_df[filtered_df['Product Category'].isin(selected_categories)]
     
-    # Status filter
-    if selected_status != "All Statuses" and 'Close Status' in filtered_df.columns:
-        filtered_df = filtered_df[filtered_df['Close Status'] == selected_status]
+    # Status filter (multiselect - empty list means all)
+    if selected_statuses and len(selected_statuses) > 0 and 'Close Status' in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df['Close Status'].isin(selected_statuses)]
     
     # Date filter (based on Close Date)
     if start_date is not None and 'Close Date' in filtered_df.columns:
