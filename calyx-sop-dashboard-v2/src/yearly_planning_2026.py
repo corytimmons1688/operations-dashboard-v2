@@ -7374,48 +7374,64 @@ def categorize_sku_for_pipeline(sku, description):
     return category, sub_category
 
 
-def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps"):
-    """Generate a professional HTML report for product forecasting"""
+def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps", pairing_info=None):
+    """Generate a professional HTML report for product forecasting (Quantity-focused)"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
     
     if product_data.empty:
         return "<html><body><h1>No product data available</h1></body></html>"
     
-    # Calculate summary metrics
-    total_pipeline_value = product_data['Amount'].sum()
+    if pairing_info is None:
+        pairing_info = {}
+    
+    # Calculate summary metrics (quantity-focused)
     total_quantity = product_data['Quantity'].sum()
     unique_skus = product_data['SKU'].nunique()
     unique_deals = product_data['Deal ID'].nunique() if 'Deal ID' in product_data.columns else 0
+    unique_categories = product_data['Product Category'].nunique()
     
     # Status breakdown
     open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
     if 'Close Status' in product_data.columns:
-        open_pipeline = product_data[product_data['Close Status'].isin(open_statuses)]
-        open_value = open_pipeline['Amount'].sum()
-        open_qty = open_pipeline['Quantity'].sum()
+        commit_qty = product_data[product_data['Close Status'] == 'Commit']['Quantity'].sum()
+        expect_qty = product_data[product_data['Close Status'] == 'Expect']['Quantity'].sum()
+        bestcase_qty = product_data[product_data['Close Status'] == 'Best Case']['Quantity'].sum()
+        opportunity_qty = product_data[product_data['Close Status'] == 'Opportunity']['Quantity'].sum()
     else:
-        open_value = total_pipeline_value
-        open_qty = total_quantity
+        commit_qty = expect_qty = bestcase_qty = opportunity_qty = 0
     
-    # Category breakdown
+    # Category breakdown (quantity-focused)
     category_summary = product_data.groupby('Product Category').agg({
-        'Amount': 'sum',
         'Quantity': 'sum',
         'SKU': 'nunique'
     }).reset_index()
-    category_summary.columns = ['Category', 'Revenue', 'Quantity', 'SKU Count']
-    category_summary = category_summary.sort_values('Revenue', ascending=False)
+    category_summary.columns = ['Category', 'Quantity', 'SKU Count']
+    
+    # Apply concentrate rollup if pairing_info exists
+    if pairing_info.get('total_conc_bases', 0) > 0:
+        conc_mask = category_summary['Category'] == 'Concentrates'
+        if conc_mask.any():
+            category_summary.loc[conc_mask, 'Quantity'] = pairing_info['total_conc_bases']
+        
+        dml_mask = category_summary['Category'] == 'DML (Universal)'
+        if dml_mask.any():
+            if pairing_info.get('dml_remaining', 0) > 0:
+                category_summary.loc[dml_mask, 'Quantity'] = pairing_info['dml_remaining']
+            else:
+                category_summary = category_summary[~dml_mask]
+    
+    adjusted_total = category_summary['Quantity'].sum()
+    category_summary = category_summary.sort_values('Quantity', ascending=False)
     
     # Generate category rows
     category_rows = ""
     for _, row in category_summary.iterrows():
-        pct = (row['Revenue'] / total_pipeline_value * 100) if total_pipeline_value > 0 else 0
+        pct = (row['Quantity'] / adjusted_total * 100) if adjusted_total > 0 else 0
         category_rows += f"""
         <tr>
             <td style="font-weight: 600; padding: 12px; text-align: left;">{row['Category']}</td>
-            <td style="text-align: right; padding: 12px; color: #059669; font-weight: 600;">${row['Revenue']:,.0f}</td>
-            <td style="text-align: right; padding: 12px;">{row['Quantity']:,.0f}</td>
+            <td style="text-align: right; padding: 12px; color: #059669; font-weight: 600;">{row['Quantity']:,.0f}</td>
             <td style="text-align: right; padding: 12px;">{row['SKU Count']}</td>
             <td style="text-align: right; padding: 12px;">
                 <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
@@ -7427,14 +7443,60 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             </td>
         </tr>"""
     
-    # Top SKUs table
+    # Concentrate analysis section
+    concentrate_section = ""
+    if pairing_info.get('total_conc_bases', 0) > 0 or pairing_info.get('dml_total', 0) > 0:
+        concentrate_section = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon" style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);">🔬</div>
+                <div>
+                    <div class="section-title">Concentrate & DML Lid Analysis</div>
+                    <div class="section-subtitle">DML Universal lids can be used for 4mL, 7mL concentrates OR 15D drams</div>
+                </div>
+            </div>
+            
+            <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
+                <div class="metric-card">
+                    <div class="metric-value" style="color: var(--primary);">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
+                    <div class="metric-label">Concentrate Bases</div>
+                    <div style="font-size: 0.8rem; color: #64748b; margin-top: 8px;">
+                        4mL: {pairing_info.get('4mL_bases', 0):,.0f}<br>
+                        7mL: {pairing_info.get('7mL_bases', 0):,.0f}
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" style="color: var(--success);">{pairing_info.get('dedicated_lids', 0):,.0f}</div>
+                    <div class="metric-label">Dedicated Conc Lids</div>
+                    <div style="font-size: 0.8rem; color: #f59e0b; margin-top: 8px;">
+                        Lid Deficit: {pairing_info.get('lid_deficit', 0):,.0f}
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value" style="color: #8b5cf6;">{pairing_info.get('dml_total', 0):,.0f}</div>
+                    <div class="metric-label">DML Universal Lids</div>
+                    <div style="font-size: 0.8rem; color: #64748b; margin-top: 8px;">
+                        Used for Conc: {pairing_info.get('dml_used_for_conc', 0):,.0f}<br>
+                        Available for 15D: {pairing_info.get('dml_remaining', 0):,.0f}
+                    </div>
+                </div>
+            </div>
+            
+            <div style="background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); padding: 16px 20px; border-radius: 10px; margin-top: 20px; border: 1px solid #10b981;">
+                <span style="color: #10b981; font-weight: 700;">✓ Total Concentrate Forecast:</span>
+                <span style="color: white; font-size: 1.2rem; font-weight: 700; margin-left: 10px;">{pairing_info.get('total_conc_bases', 0):,.0f} units</span>
+                <span style="color: #94a3b8; margin-left: 10px;">(based on base quantities - lids will match)</span>
+            </div>
+        </div>
+        """
+    
+    # Top SKUs table (quantity-focused)
     sku_summary = product_data.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
-        'Amount': 'sum',
         'Quantity': 'sum',
         'Deal ID': 'nunique' if 'Deal ID' in product_data.columns else 'count'
     }).reset_index()
-    sku_summary.columns = ['SKU', 'Description', 'Category', 'Revenue', 'Quantity', 'Deal Count']
-    sku_summary = sku_summary.sort_values('Revenue', ascending=False).head(20)
+    sku_summary.columns = ['SKU', 'Description', 'Category', 'Quantity', 'Deal Count']
+    sku_summary = sku_summary.sort_values('Quantity', ascending=False).head(20)
     
     sku_rows = ""
     for _, row in sku_summary.iterrows():
@@ -7444,8 +7506,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             <td style="font-weight: 600; padding: 10px; font-family: monospace; font-size: 0.85rem;">{row['SKU']}</td>
             <td style="padding: 10px; color: #64748b; font-size: 0.85rem;">{desc}</td>
             <td style="padding: 10px;">{row['Category']}</td>
-            <td style="text-align: right; padding: 10px; color: #059669; font-weight: 600;">${row['Revenue']:,.0f}</td>
-            <td style="text-align: right; padding: 10px;">{row['Quantity']:,.0f}</td>
+            <td style="text-align: right; padding: 10px; color: #059669; font-weight: 600;">{row['Quantity']:,.0f}</td>
             <td style="text-align: center; padding: 10px;">{row['Deal Count']}</td>
         </tr>"""
     
@@ -7453,11 +7514,10 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     pipeline_rows = ""
     if 'Close Status' in product_data.columns:
         stage_summary = product_data.groupby('Close Status').agg({
-            'Amount': 'sum',
             'Quantity': 'sum',
             'SKU': 'nunique'
         }).reset_index()
-        stage_summary.columns = ['Status', 'Revenue', 'Quantity', 'SKU Count']
+        stage_summary.columns = ['Status', 'Quantity', 'SKU Count']
         
         # Define order
         status_order = {'Commit': 0, 'Expect': 1, 'Best Case': 2, 'Opportunity': 3, 'Closed Won': 4, 'Closed Lost': 5}
@@ -7481,8 +7541,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                         {row['Status']}
                     </span>
                 </td>
-                <td style="text-align: right; padding: 12px; font-weight: 600;">${row['Revenue']:,.0f}</td>
-                <td style="text-align: right; padding: 12px;">{row['Quantity']:,.0f}</td>
+                <td style="text-align: right; padding: 12px; font-weight: 600;">{row['Quantity']:,.0f}</td>
                 <td style="text-align: right; padding: 12px;">{row['SKU Count']}</td>
             </tr>"""
     
@@ -7757,8 +7816,8 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         <div class="cover">
             <div class="cover-content">
                 <div class="cover-icon">📦</div>
-                <div class="cover-title">Product Forecast Report</div>
-                <div class="cover-subtitle">Product Pipeline & SKU-Level Analysis</div>
+                <div class="cover-title">Product Quantity Forecast</div>
+                <div class="cover-subtitle">Quantity-Based Pipeline & SKU-Level Analysis</div>
                 <div class="cover-meta">
                     <div class="meta-pill">📅 {generated_date}</div>
                     <div class="meta-pill">👤 {rep_name}</div>
@@ -7772,20 +7831,16 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 <div class="section-icon">📊</div>
                 <div>
                     <div class="section-title">Executive Summary</div>
-                    <div class="section-subtitle">Product forecast overview and key metrics</div>
+                    <div class="section-subtitle">Quantity forecast overview and key metrics</div>
                 </div>
             </div>
             
             <div class="metrics-grid">
                 <div class="metric-card highlight">
-                    <div class="metric-value">${total_pipeline_value:,.0f}</div>
-                    <div class="metric-label">Total Pipeline Value</div>
+                    <div class="metric-value">{total_quantity:,.0f}</div>
+                    <div class="metric-label">Total Forecasted Units</div>
                 </div>
                 <div class="metric-card green">
-                    <div class="metric-value">{total_quantity:,.0f}</div>
-                    <div class="metric-label">Total Units</div>
-                </div>
-                <div class="metric-card">
                     <div class="metric-value">{unique_skus}</div>
                     <div class="metric-label">Unique SKUs</div>
                 </div>
@@ -7793,26 +7848,40 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                     <div class="metric-value">{unique_deals}</div>
                     <div class="metric-label">Active Deals</div>
                 </div>
+                <div class="metric-card">
+                    <div class="metric-value">{unique_categories}</div>
+                    <div class="metric-label">Product Categories</div>
+                </div>
             </div>
             
-            <div class="metrics-grid" style="grid-template-columns: repeat(2, 1fr);">
-                <div class="metric-card" style="background: linear-gradient(135deg, #3b82f620 0%, #1d4ed820 100%); border: 2px solid var(--primary);">
-                    <div class="metric-value" style="color: var(--primary);">${open_value:,.0f}</div>
-                    <div class="metric-label">Open Pipeline (Forecasted)</div>
+            <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr);">
+                <div class="metric-card" style="background: linear-gradient(135deg, #10b98120 0%, #05966920 100%); border: 2px solid #10b981;">
+                    <div class="metric-value" style="color: #10b981;">{commit_qty:,.0f}</div>
+                    <div class="metric-label">Commit</div>
+                </div>
+                <div class="metric-card" style="background: linear-gradient(135deg, #3b82f620 0%, #1d4ed820 100%); border: 2px solid #3b82f6;">
+                    <div class="metric-value" style="color: #3b82f6;">{expect_qty:,.0f}</div>
+                    <div class="metric-label">Expect</div>
+                </div>
+                <div class="metric-card" style="background: linear-gradient(135deg, #f59e0b20 0%, #d9770620 100%); border: 2px solid #f59e0b;">
+                    <div class="metric-value" style="color: #f59e0b;">{bestcase_qty:,.0f}</div>
+                    <div class="metric-label">Best Case</div>
                 </div>
                 <div class="metric-card" style="background: linear-gradient(135deg, #8b5cf620 0%, #7c3aed20 100%); border: 2px solid #8b5cf6;">
-                    <div class="metric-value" style="color: #8b5cf6;">{open_qty:,.0f}</div>
-                    <div class="metric-label">Open Pipeline Units</div>
+                    <div class="metric-value" style="color: #8b5cf6;">{opportunity_qty:,.0f}</div>
+                    <div class="metric-label">Opportunity</div>
                 </div>
             </div>
         </div>
+        
+        {concentrate_section}
         
         <div class="section">
             <div class="section-header">
                 <div class="section-icon green">📦</div>
                 <div>
                     <div class="section-title">Category Breakdown</div>
-                    <div class="section-subtitle">Product pipeline by category</div>
+                    <div class="section-subtitle">Product pipeline quantities by category</div>
                 </div>
             </div>
             
@@ -7820,7 +7889,6 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 <thead>
                     <tr>
                         <th style="text-align: left;">Category</th>
-                        <th style="text-align: right;">Revenue</th>
                         <th style="text-align: right;">Quantity</th>
                         <th style="text-align: right;">SKUs</th>
                         <th style="text-align: right;">Share</th>
@@ -7837,8 +7905,8 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             <div class="section-header">
                 <div class="section-icon amber">📈</div>
                 <div>
-                    <div class="section-title">Pipeline by Status</div>
-                    <div class="section-subtitle">Deal stages and expected close rates</div>
+                    <div class="section-title">Quantity by Pipeline Status</div>
+                    <div class="section-subtitle">Deal stages and expected close timing</div>
                 </div>
             </div>
             
@@ -7846,7 +7914,6 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 <thead>
                     <tr>
                         <th style="text-align: left;">Status</th>
-                        <th style="text-align: right;">Revenue</th>
                         <th style="text-align: right;">Quantity</th>
                         <th style="text-align: right;">SKUs</th>
                     </tr>
@@ -7862,8 +7929,8 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             <div class="section-header">
                 <div class="section-icon purple">🏆</div>
                 <div>
-                    <div class="section-title">Top SKUs</div>
-                    <div class="section-subtitle">Highest value products in pipeline</div>
+                    <div class="section-title">Top SKUs by Quantity</div>
+                    <div class="section-subtitle">Highest volume products in pipeline</div>
                 </div>
             </div>
             
@@ -7873,7 +7940,6 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                         <th style="text-align: left;">SKU</th>
                         <th style="text-align: left;">Description</th>
                         <th style="text-align: left;">Category</th>
-                        <th style="text-align: right;">Revenue</th>
                         <th style="text-align: right;">Qty</th>
                         <th style="text-align: center;">Deals</th>
                     </tr>
@@ -7886,7 +7952,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         
         <div class="footer">
             <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 10px;">
-                Product Forecast Report
+                Product Quantity Forecast
             </div>
             <div style="font-size: 0.9rem; opacity: 0.6;">
                 Generated on {generated_date}
@@ -7906,7 +7972,7 @@ def render_product_forecasting_tool():
     """Main render function for Product Forecasting Tool"""
     
     st.title("📦 Product Forecasting Tool")
-    st.caption("Glass forecast and SKU-level pipeline analysis")
+    st.caption("Quantity-based product pipeline analysis")
     
     # Load data
     with st.spinner("Loading pipeline data..."):
@@ -8158,7 +8224,72 @@ def render_product_forecasting_tool():
         return
     
     # =========================================================================
-    # SUMMARY METRICS
+    # DML LID PAIRING LOGIC FOR CONCENTRATES
+    # =========================================================================
+    def apply_dml_pairing_for_forecast(df):
+        """
+        Apply DML lid pairing logic for concentrate forecasting.
+        
+        Logic:
+        - 4mL + 7mL Glass Bases define total concentrate units
+        - Universal Lid (4mL/7mL) covers some of those bases
+        - DML Universal fills the deficit
+        - Final concentrate qty = total bases (4mL + 7mL)
+        
+        Returns a modified summary with proper concentrate rollup.
+        """
+        if df.empty:
+            return df, {}
+        
+        # Calculate raw quantities by subcategory
+        subcat_qtys = df.groupby(['Product Category', 'Product Subcategory'])['Quantity'].sum().reset_index()
+        
+        # Get concentrate components
+        conc_4ml_base = subcat_qtys[
+            (subcat_qtys['Product Category'] == 'Concentrates') & 
+            (subcat_qtys['Product Subcategory'].str.contains('4mL.*Base', case=False, regex=True))
+        ]['Quantity'].sum()
+        
+        conc_7ml_base = subcat_qtys[
+            (subcat_qtys['Product Category'] == 'Concentrates') & 
+            (subcat_qtys['Product Subcategory'].str.contains('7mL.*Base', case=False, regex=True))
+        ]['Quantity'].sum()
+        
+        conc_dedicated_lids = subcat_qtys[
+            (subcat_qtys['Product Category'] == 'Concentrates') & 
+            (subcat_qtys['Product Subcategory'].str.contains('Lid|Universal', case=False, regex=True))
+        ]['Quantity'].sum()
+        
+        # Get DML Universal quantity
+        dml_universal_qty = subcat_qtys[
+            subcat_qtys['Product Category'] == 'DML (Universal)'
+        ]['Quantity'].sum()
+        
+        # Calculate concentrate totals
+        total_conc_bases = conc_4ml_base + conc_7ml_base
+        lid_deficit = max(0, total_conc_bases - conc_dedicated_lids)
+        dml_used_for_conc = min(lid_deficit, dml_universal_qty)
+        dml_remaining = dml_universal_qty - dml_used_for_conc
+        
+        # Build pairing info dict
+        pairing_info = {
+            '4mL_bases': conc_4ml_base,
+            '7mL_bases': conc_7ml_base,
+            'total_conc_bases': total_conc_bases,
+            'dedicated_lids': conc_dedicated_lids,
+            'lid_deficit': lid_deficit,
+            'dml_total': dml_universal_qty,
+            'dml_used_for_conc': dml_used_for_conc,
+            'dml_remaining': dml_remaining
+        }
+        
+        return df, pairing_info
+    
+    # Apply DML pairing analysis
+    _, pairing_info = apply_dml_pairing_for_forecast(filtered_df)
+    
+    # =========================================================================
+    # SUMMARY METRICS (Quantity-Focused)
     # =========================================================================
     st.markdown("---")
     st.markdown(f"""
@@ -8168,44 +8299,44 @@ def render_product_forecasting_tool():
             border-radius: 12px;
             margin-bottom: 1rem;
         ">
-            <h1 style="color: white; margin: 0; font-size: 2rem;">📦 Product Forecast Overview</h1>
+            <h1 style="color: white; margin: 0; font-size: 2rem;">📦 Product Quantity Forecast</h1>
             <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
                 {selected_rep} | {date_label} | Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
             </p>
         </div>
     """, unsafe_allow_html=True)
     
-    # Calculate metrics
-    total_pipeline = filtered_df['Amount'].sum()
+    # Calculate metrics (quantity-focused)
     total_quantity = filtered_df['Quantity'].sum()
     unique_skus = filtered_df['SKU'].nunique()
     unique_deals = filtered_df['Deal ID'].nunique() if 'Deal ID' in filtered_df.columns else len(filtered_df)
+    unique_categories = filtered_df['Product Category'].nunique()
     
-    # Open pipeline (forecasted)
+    # Open pipeline quantities by status
     open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
     if 'Close Status' in filtered_df.columns:
-        open_pipeline_df = filtered_df[filtered_df['Close Status'].isin(open_statuses)]
-        open_value = open_pipeline_df['Amount'].sum()
-        open_qty = open_pipeline_df['Quantity'].sum()
-        commit_value = filtered_df[filtered_df['Close Status'] == 'Commit']['Amount'].sum()
+        commit_qty = filtered_df[filtered_df['Close Status'] == 'Commit']['Quantity'].sum()
+        expect_qty = filtered_df[filtered_df['Close Status'] == 'Expect']['Quantity'].sum()
+        bestcase_qty = filtered_df[filtered_df['Close Status'] == 'Best Case']['Quantity'].sum()
+        opportunity_qty = filtered_df[filtered_df['Close Status'] == 'Opportunity']['Quantity'].sum()
     else:
-        open_value = total_pipeline
-        open_qty = total_quantity
-        commit_value = 0
+        commit_qty = expect_qty = bestcase_qty = opportunity_qty = 0
     
-    st.markdown("### 📊 Summary Metrics")
+    st.markdown("### 📊 Quantity Summary")
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Pipeline Value", f"${total_pipeline:,.0f}")
+        st.metric("Total Forecasted Units", f"{total_quantity:,.0f}")
     with col2:
-        st.metric("Total Units", f"{total_quantity:,.0f}")
-    with col3:
         st.metric("Unique SKUs", f"{unique_skus}")
-    with col4:
+    with col3:
         st.metric("Active Deals", f"{unique_deals}")
+    with col4:
+        st.metric("Product Categories", f"{unique_categories}")
     
+    # Status breakdown cards
+    st.markdown("#### 📈 Quantity by Pipeline Stage")
     col5, col6, col7, col8 = st.columns(4)
     
     with col5:
@@ -8216,8 +8347,8 @@ def render_product_forecasting_tool():
                 border-radius: 12px;
                 text-align: center;
             ">
-                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Commit Pipeline</div>
-                <div style="color: white; font-size: 1.8rem; font-weight: 700;">${commit_value:,.0f}</div>
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Commit</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">{commit_qty:,.0f}</div>
             </div>
         """, unsafe_allow_html=True)
     
@@ -8229,12 +8360,25 @@ def render_product_forecasting_tool():
                 border-radius: 12px;
                 text-align: center;
             ">
-                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Open Pipeline</div>
-                <div style="color: white; font-size: 1.8rem; font-weight: 700;">${open_value:,.0f}</div>
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Expect</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">{expect_qty:,.0f}</div>
             </div>
         """, unsafe_allow_html=True)
     
     with col7:
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+                padding: 16px;
+                border-radius: 12px;
+                text-align: center;
+            ">
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Best Case</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">{bestcase_qty:,.0f}</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with col8:
         st.markdown(f"""
             <div style="
                 background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
@@ -8242,14 +8386,85 @@ def render_product_forecasting_tool():
                 border-radius: 12px;
                 text-align: center;
             ">
-                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Open Units</div>
-                <div style="color: white; font-size: 1.8rem; font-weight: 700;">{open_qty:,.0f}</div>
+                <div style="color: white; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; opacity: 0.9;">Opportunity</div>
+                <div style="color: white; font-size: 1.8rem; font-weight: 700;">{opportunity_qty:,.0f}</div>
             </div>
         """, unsafe_allow_html=True)
     
-    avg_deal = total_pipeline / unique_deals if unique_deals > 0 else 0
-    with col8:
-        st.metric("Avg Deal Value", f"${avg_deal:,.0f}")
+    # =========================================================================
+    # CONCENTRATE DML PAIRING ANALYSIS (if data exists)
+    # =========================================================================
+    if pairing_info.get('total_conc_bases', 0) > 0 or pairing_info.get('dml_total', 0) > 0:
+        st.markdown("---")
+        st.markdown("### 🔬 Concentrate & DML Lid Analysis")
+        st.caption("DML Universal lids can be used for 4mL, 7mL concentrates OR 15D drams. This shows how they pair with concentrate bases.")
+        
+        col_conc1, col_conc2, col_conc3 = st.columns(3)
+        
+        with col_conc1:
+            st.markdown(f"""
+                <div style="
+                    background: #1e293b;
+                    padding: 20px;
+                    border-radius: 12px;
+                    border-left: 4px solid #3b82f6;
+                ">
+                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Concentrate Bases</div>
+                    <div style="color: #f1f5f9; font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
+                    <div style="color: #64748b; font-size: 0.85rem;">
+                        4mL: {pairing_info.get('4mL_bases', 0):,.0f}<br>
+                        7mL: {pairing_info.get('7mL_bases', 0):,.0f}
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col_conc2:
+            st.markdown(f"""
+                <div style="
+                    background: #1e293b;
+                    padding: 20px;
+                    border-radius: 12px;
+                    border-left: 4px solid #10b981;
+                ">
+                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">Dedicated Conc Lids</div>
+                    <div style="color: #f1f5f9; font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('dedicated_lids', 0):,.0f}</div>
+                    <div style="color: #64748b; font-size: 0.85rem;">
+                        Lid Deficit: <span style="color: #f59e0b;">{pairing_info.get('lid_deficit', 0):,.0f}</span>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col_conc3:
+            st.markdown(f"""
+                <div style="
+                    background: #1e293b;
+                    padding: 20px;
+                    border-radius: 12px;
+                    border-left: 4px solid #8b5cf6;
+                ">
+                    <div style="color: #94a3b8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase;">DML Universal Lids</div>
+                    <div style="color: #f1f5f9; font-size: 1.6rem; font-weight: 700; margin: 8px 0;">{pairing_info.get('dml_total', 0):,.0f}</div>
+                    <div style="color: #64748b; font-size: 0.85rem;">
+                        Used for Conc: <span style="color: #10b981;">{pairing_info.get('dml_used_for_conc', 0):,.0f}</span><br>
+                        Available for 15D: <span style="color: #3b82f6;">{pairing_info.get('dml_remaining', 0):,.0f}</span>
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        # Summary callout
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #064e3b 0%, #065f46 100%);
+                padding: 16px 20px;
+                border-radius: 10px;
+                margin-top: 1rem;
+                border: 1px solid #10b981;
+            ">
+                <span style="color: #10b981; font-weight: 700;">✓ Total Concentrate Forecast:</span>
+                <span style="color: white; font-size: 1.2rem; font-weight: 700; margin-left: 10px;">{pairing_info.get('total_conc_bases', 0):,.0f} units</span>
+                <span style="color: #94a3b8; margin-left: 10px;">(based on base quantities - lids will match)</span>
+            </div>
+        """, unsafe_allow_html=True)
     
     # =========================================================================
     # DOWNLOAD BUTTON
@@ -8257,7 +8472,7 @@ def render_product_forecasting_tool():
     st.markdown("---")
     
     # Generate HTML report
-    html_report = create_product_forecast_html(filtered_df, date_label, selected_rep)
+    html_report = create_product_forecast_html(filtered_df, date_label, selected_rep, pairing_info)
     
     st.download_button(
         label="📥 Download Product Forecast Report (HTML)",
@@ -8268,20 +8483,39 @@ def render_product_forecasting_tool():
     )
     
     # =========================================================================
-    # CATEGORY BREAKDOWN
+    # CATEGORY BREAKDOWN (Quantity-Focused with Concentrate Rollup)
     # =========================================================================
     st.markdown("---")
-    st.markdown("### 📦 Category Breakdown")
+    st.markdown("### 📦 Category Breakdown by Quantity")
     
+    # Build category summary
     category_summary = filtered_df.groupby('Product Category').agg({
-        'Amount': 'sum',
         'Quantity': 'sum',
         'SKU': 'nunique',
         'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
     }).reset_index()
-    category_summary.columns = ['Category', 'Revenue', 'Quantity', 'Unique SKUs', 'Deals']
-    category_summary = category_summary.sort_values('Revenue', ascending=False)
-    category_summary['% of Revenue'] = (category_summary['Revenue'] / total_pipeline * 100).round(1)
+    category_summary.columns = ['Category', 'Quantity', 'Unique SKUs', 'Deals']
+    
+    # Apply concentrate rollup - use base quantity as the concentrate total
+    if pairing_info.get('total_conc_bases', 0) > 0:
+        # Update Concentrates row to show base quantity (which represents actual product count)
+        conc_mask = category_summary['Category'] == 'Concentrates'
+        if conc_mask.any():
+            category_summary.loc[conc_mask, 'Quantity'] = pairing_info['total_conc_bases']
+        
+        # Remove or reduce DML Universal to show only remaining after concentrate allocation
+        dml_mask = category_summary['Category'] == 'DML (Universal)'
+        if dml_mask.any():
+            if pairing_info['dml_remaining'] > 0:
+                category_summary.loc[dml_mask, 'Quantity'] = pairing_info['dml_remaining']
+            else:
+                # Remove DML row if fully allocated to concentrates
+                category_summary = category_summary[~dml_mask]
+    
+    # Recalculate total and percentages
+    adjusted_total = category_summary['Quantity'].sum()
+    category_summary = category_summary.sort_values('Quantity', ascending=False)
+    category_summary['% of Total'] = (category_summary['Quantity'] / adjusted_total * 100).round(1)
     
     col_chart, col_table = st.columns([1, 1])
     
@@ -8290,14 +8524,14 @@ def render_product_forecasting_tool():
         colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#14b8a6']
         fig = go.Figure(data=[go.Pie(
             labels=category_summary['Category'],
-            values=category_summary['Revenue'],
+            values=category_summary['Quantity'],
             hole=0.45,
             marker=dict(colors=colors[:len(category_summary)]),
             textposition='outside',
             textinfo='label+percent'
         )])
         fig.update_layout(
-            title="Revenue by Category",
+            title="Quantity by Category",
             showlegend=False,
             height=400,
             margin=dict(t=60, b=40, l=40, r=40)
@@ -8306,24 +8540,22 @@ def render_product_forecasting_tool():
     
     with col_table:
         display_df = category_summary.copy()
-        display_df['Revenue'] = display_df['Revenue'].apply(lambda x: f"${x:,.0f}")
         display_df['Quantity'] = display_df['Quantity'].apply(lambda x: f"{x:,.0f}")
-        display_df['% of Revenue'] = display_df['% of Revenue'].apply(lambda x: f"{x:.1f}%")
+        display_df['% of Total'] = display_df['% of Total'].apply(lambda x: f"{x:.1f}%")
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     
     # =========================================================================
-    # PIPELINE BY STATUS
+    # PIPELINE BY STATUS (Quantity-Focused)
     # =========================================================================
     if 'Close Status' in filtered_df.columns:
         st.markdown("---")
-        st.markdown("### 📈 Pipeline by Status")
+        st.markdown("### 📈 Quantity by Pipeline Status")
         
         status_summary = filtered_df.groupby('Close Status').agg({
-            'Amount': 'sum',
             'Quantity': 'sum',
             'SKU': 'nunique'
         }).reset_index()
-        status_summary.columns = ['Status', 'Revenue', 'Quantity', 'Unique SKUs']
+        status_summary.columns = ['Status', 'Quantity', 'Unique SKUs']
         
         # Define order
         status_order = {'Commit': 0, 'Expect': 1, 'Best Case': 2, 'Opportunity': 3, 'Closed Won': 4, 'Closed Lost': 5}
@@ -8345,107 +8577,98 @@ def render_product_forecasting_tool():
             fig = go.Figure(data=[
                 go.Bar(
                     x=status_summary['Status'],
-                    y=status_summary['Revenue'],
+                    y=status_summary['Quantity'],
                     marker=dict(color=[status_colors.get(s, '#64748b') for s in status_summary['Status']]),
-                    text=[f'${x:,.0f}' for x in status_summary['Revenue']],
+                    text=[f'{x:,.0f}' for x in status_summary['Quantity']],
                     textposition='outside'
                 )
             ])
-            max_val = status_summary['Revenue'].max()
+            max_val = status_summary['Quantity'].max() if not status_summary.empty else 1
             fig.update_layout(
-                title="Revenue by Deal Status",
+                title="Quantity by Deal Status",
                 xaxis_title="",
-                yaxis_title="Revenue",
-                yaxis=dict(range=[0, max_val * 1.15], tickformat='$,.0f'),
+                yaxis_title="Units",
+                yaxis=dict(range=[0, max_val * 1.15], tickformat=',.0f'),
                 height=400,
                 showlegend=False
             )
             st.plotly_chart(fig, use_container_width=True, key="status_bar")
         
         with col_status_table:
-            display_status = status_summary[['Status', 'Revenue', 'Quantity', 'Unique SKUs']].copy()
-            display_status['Revenue'] = display_status['Revenue'].apply(lambda x: f"${x:,.0f}")
+            display_status = status_summary[['Status', 'Quantity', 'Unique SKUs']].copy()
             display_status['Quantity'] = display_status['Quantity'].apply(lambda x: f"{x:,.0f}")
             st.dataframe(display_status, use_container_width=True, hide_index=True)
     
     # =========================================================================
-    # TOP SKUS
+    # TOP SKUS BY QUANTITY
     # =========================================================================
     st.markdown("---")
-    st.markdown("### 🏆 Top SKUs by Revenue")
+    st.markdown("### 🏆 Top SKUs by Quantity")
     
     sku_summary = filtered_df.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
-        'Amount': 'sum',
         'Quantity': 'sum',
         'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
     }).reset_index()
-    sku_summary.columns = ['SKU', 'Description', 'Category', 'Revenue', 'Quantity', 'Deal Count']
-    sku_summary = sku_summary.sort_values('Revenue', ascending=False)
+    sku_summary.columns = ['SKU', 'Description', 'Category', 'Quantity', 'Deal Count']
+    sku_summary = sku_summary.sort_values('Quantity', ascending=False)
     
     # Show top 25
     top_skus = sku_summary.head(25).copy()
-    top_skus['Revenue'] = top_skus['Revenue'].apply(lambda x: f"${x:,.0f}")
     top_skus['Quantity'] = top_skus['Quantity'].apply(lambda x: f"{x:,.0f}")
     
     st.dataframe(top_skus, use_container_width=True, hide_index=True)
     
     # =========================================================================
-    # SUBCATEGORY BREAKDOWN
+    # SUBCATEGORY BREAKDOWN (Quantity-Focused)
     # =========================================================================
     st.markdown("---")
     st.markdown("### 📋 Subcategory Details")
     
     subcat_summary = filtered_df.groupby(['Product Category', 'Product Subcategory']).agg({
-        'Amount': 'sum',
         'Quantity': 'sum',
         'SKU': 'nunique'
     }).reset_index()
-    subcat_summary.columns = ['Category', 'Subcategory', 'Revenue', 'Quantity', 'Unique SKUs']
-    subcat_summary = subcat_summary.sort_values(['Category', 'Revenue'], ascending=[True, False])
+    subcat_summary.columns = ['Category', 'Subcategory', 'Quantity', 'Unique SKUs']
+    subcat_summary = subcat_summary.sort_values(['Category', 'Quantity'], ascending=[True, False])
     
     display_subcat = subcat_summary.copy()
-    display_subcat['Revenue'] = display_subcat['Revenue'].apply(lambda x: f"${x:,.0f}")
     display_subcat['Quantity'] = display_subcat['Quantity'].apply(lambda x: f"{x:,.0f}")
     
     st.dataframe(display_subcat, use_container_width=True, hide_index=True)
     
     # =========================================================================
-    # COMPANY BREAKDOWN
+    # COMPANY BREAKDOWN (Quantity-Focused)
     # =========================================================================
     st.markdown("---")
-    st.markdown("### 🏢 Top Customers by Forecasted Value")
+    st.markdown("### 🏢 Top Customers by Forecasted Quantity")
     
     company_col = 'Company Name' if 'Company Name' in filtered_df.columns else 'Primary Associated Company'
     if company_col in filtered_df.columns:
         company_summary = filtered_df.groupby(company_col).agg({
-            'Amount': 'sum',
             'Quantity': 'sum',
             'SKU': 'nunique',
             'Deal ID': 'nunique' if 'Deal ID' in filtered_df.columns else 'count'
         }).reset_index()
-        company_summary.columns = ['Customer', 'Revenue', 'Quantity', 'Unique SKUs', 'Deals']
-        company_summary = company_summary.sort_values('Revenue', ascending=False).head(20)
-        company_summary['% of Total'] = (company_summary['Revenue'] / total_pipeline * 100).round(1)
+        company_summary.columns = ['Customer', 'Quantity', 'Unique SKUs', 'Deals']
+        company_summary = company_summary.sort_values('Quantity', ascending=False).head(20)
+        company_summary['% of Total'] = (company_summary['Quantity'] / total_quantity * 100).round(1)
         
         display_company = company_summary.copy()
-        display_company['Revenue'] = display_company['Revenue'].apply(lambda x: f"${x:,.0f}")
         display_company['Quantity'] = display_company['Quantity'].apply(lambda x: f"{x:,.0f}")
         display_company['% of Total'] = display_company['% of Total'].apply(lambda x: f"{x:.1f}%")
         
         st.dataframe(display_company, use_container_width=True, hide_index=True)
     
     # =========================================================================
-    # DEAL DETAILS EXPANDER
+    # DEAL DETAILS EXPANDER (No Amount column)
     # =========================================================================
     with st.expander("📋 View All Deal Line Items"):
-        display_cols = ['Deal Name', 'SKU', 'SKU Description', 'Quantity', 'Amount', 
+        display_cols = ['Deal Name', 'SKU', 'SKU Description', 'Quantity', 
                         'Close Date', 'Close Status', 'Company Name', 'Deal Owner']
         display_cols = [c for c in display_cols if c in filtered_df.columns]
         
         detail_df = filtered_df[display_cols].copy()
         
-        if 'Amount' in detail_df.columns:
-            detail_df['Amount'] = detail_df['Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "-")
         if 'Quantity' in detail_df.columns:
             detail_df['Quantity'] = detail_df['Quantity'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
         if 'Close Date' in detail_df.columns:
