@@ -7363,67 +7363,15 @@ def process_deals_line_items(df):
     return df
 
 
-def categorize_sku(sku, description):
-    """Categorize SKU into product categories based on SKU patterns and description"""
-    sku = str(sku).upper()
-    description = str(description).upper()
-    
-    # Glass/Dram categories
-    if any(x in sku for x in ['DRAM', 'DRM', '-D-', 'DR-']):
-        if any(x in description for x in ['CHILD', 'CR', 'CRC']):
-            return 'Drams', 'Child-Resistant Drams'
-        return 'Drams', 'Standard Drams'
-    
-    # Concentrate containers
-    if any(x in sku for x in ['CONC', 'CNCT', 'JAR', 'JR-', '-J-']):
-        if any(x in description for x in ['SILICONE', 'SIL']):
-            return 'Concentrates', 'Silicone Containers'
-        if any(x in description for x in ['GLASS', 'GLS']):
-            return 'Concentrates', 'Glass Containers'
-        return 'Concentrates', 'Concentrate Containers'
-    
-    # Tubes
-    if any(x in sku for x in ['TUBE', 'TB-', '-TB-', 'TUB-']):
-        if any(x in description for x in ['PRE-ROLL', 'PREROLL', 'PR']):
-            return 'Tubes', 'Pre-Roll Tubes'
-        return 'Tubes', 'Standard Tubes'
-    
-    # Bottles
-    if any(x in sku for x in ['BOTTLE', 'BTL', 'BT-', '-BT-']):
-        if any(x in description for x in ['TINCTURE', 'TINC']):
-            return 'Bottles', 'Tincture Bottles'
-        if any(x in description for x in ['DROPPER', 'DROP']):
-            return 'Bottles', 'Dropper Bottles'
-        return 'Bottles', 'Standard Bottles'
-    
-    # Bags/Pouches
-    if any(x in sku for x in ['BAG', 'POUCH', 'PCH', 'MYL']):
-        if any(x in description for x in ['MYLAR', 'MYL']):
-            return 'Bags & Pouches', 'Mylar Bags'
-        return 'Bags & Pouches', 'Exit Bags'
-    
-    # Caps/Closures
-    if any(x in sku for x in ['CAP', 'LID', 'CLOSURE', 'CLS']):
-        return 'Closures', 'Caps & Lids'
-    
-    # Labels
-    if any(x in sku for x in ['LABEL', 'LBL', 'STICKER']):
-        return 'Labels', 'Labels & Stickers'
-    
-    # Vape/Cartridges
-    if any(x in sku for x in ['VAPE', 'CART', 'CRT', '510']):
-        return 'Vape', 'Cartridges & Vape'
-    
-    # Packaging/Boxes
-    if any(x in sku for x in ['BOX', 'CARTON', 'PKG']):
-        return 'Packaging', 'Boxes & Cartons'
-    
-    # Fees/Services
-    if any(x in sku for x in ['FEE', 'SERVICE', 'FREIGHT', 'SHIP', 'RUSH']):
-        return 'Services', 'Fees & Services'
-    
-    # Default to Other/Unknown
-    return 'Other', 'Other Products'
+def categorize_sku_for_pipeline(sku, description):
+    """
+    Categorize SKU for pipeline data using the same logic as QBR.
+    Uses the existing categorize_product function with SKU as item_name and description as item_description.
+    Returns (category, sub_category) tuple.
+    """
+    # Use the existing categorize_product function
+    category, sub_category, _ = categorize_product(sku, description, "")
+    return category, sub_category
 
 
 def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps"):
@@ -7809,7 +7757,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         <div class="cover">
             <div class="cover-content">
                 <div class="cover-icon">📦</div>
-                <div class="cover-title">Glass Forecast Report</div>
+                <div class="cover-title">Product Forecast Report</div>
                 <div class="cover-subtitle">Product Pipeline & SKU-Level Analysis</div>
                 <div class="cover-meta">
                     <div class="meta-pill">📅 {generated_date}</div>
@@ -7938,7 +7886,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         
         <div class="footer">
             <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 10px;">
-                Glass Forecast Report
+                Product Forecast Report
             </div>
             <div style="font-size: 0.9rem; opacity: 0.6;">
                 Generated on {generated_date}
@@ -7973,9 +7921,9 @@ def render_product_forecasting_tool():
         st.info("Make sure the 'Deals Line Item' tab exists and has headers in Row 2.")
         return
     
-    # Apply product categorization
+    # Apply product categorization (using same logic as QBR)
     deals_line_items_df[['Product Category', 'Product Subcategory']] = deals_line_items_df.apply(
-        lambda row: pd.Series(categorize_sku(row.get('SKU', ''), row.get('SKU Description', ''))),
+        lambda row: pd.Series(categorize_sku_for_pipeline(row.get('SKU', ''), row.get('SKU Description', ''))),
         axis=1
     )
     
@@ -8210,7 +8158,7 @@ def render_product_forecasting_tool():
             border-radius: 12px;
             margin-bottom: 1rem;
         ">
-            <h1 style="color: white; margin: 0; font-size: 2rem;">📦 Glass Forecast Overview</h1>
+            <h1 style="color: white; margin: 0; font-size: 2rem;">📦 Product Forecast Overview</h1>
             <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
                 {selected_rep} | {date_label} | Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
             </p>
@@ -8302,9 +8250,9 @@ def render_product_forecasting_tool():
     html_report = create_product_forecast_html(filtered_df, date_label, selected_rep)
     
     st.download_button(
-        label="📥 Download Glass Forecast Report (HTML)",
+        label="📥 Download Product Forecast Report (HTML)",
         data=html_report,
-        file_name=f"glass_forecast_{date_label.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+        file_name=f"product_forecast_{date_label.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
         mime="text/html",
         key="download_product_forecast"
     )
