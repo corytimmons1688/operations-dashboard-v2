@@ -7473,6 +7473,139 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         </div>
         """
     
+    # =========================================================================
+    # 2026 MONTHLY & QUARTERLY FORECAST FOR HTML
+    # =========================================================================
+    monthly_quarterly_section = ""
+    if 'Close Date' in product_data.columns:
+        forecast_2026 = product_data[
+            (product_data['Close Date'].dt.year == 2026) & 
+            (product_data['Close Date'].notna())
+        ].copy()
+        
+        if not forecast_2026.empty:
+            forecast_2026['Quarter'] = forecast_2026['Close Date'].dt.quarter.apply(lambda x: f"Q{x}")
+            forecast_2026['Month_Num'] = forecast_2026['Close Date'].dt.month
+            
+            # Monthly breakdown
+            monthly_forecast = forecast_2026.groupby('Month_Num')['Quantity'].sum().reset_index()
+            monthly_forecast.columns = ['Month_Num', 'Quantity']
+            
+            month_names = {1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'May', 6: 'Jun',
+                          7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'}
+            
+            # Build monthly rows
+            monthly_rows = ""
+            for _, row in monthly_forecast.iterrows():
+                month_name = month_names.get(row['Month_Num'], 'Unknown')
+                monthly_rows += f"""
+                <tr>
+                    <td style="padding: 10px; font-weight: 600;">{month_name} 2026</td>
+                    <td style="text-align: right; padding: 10px; color: #3b82f6; font-weight: 600;">{row['Quantity']:,.0f}</td>
+                </tr>"""
+            
+            # Quarterly breakdown
+            quarterly_forecast = forecast_2026.groupby('Quarter')['Quantity'].sum().reset_index()
+            quarterly_forecast.columns = ['Quarter', 'Quantity']
+            
+            q1_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q1']['Quantity'].sum() if 'Q1' in quarterly_forecast['Quarter'].values else 0
+            q2_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q2']['Quantity'].sum() if 'Q2' in quarterly_forecast['Quarter'].values else 0
+            q3_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q3']['Quantity'].sum() if 'Q3' in quarterly_forecast['Quarter'].values else 0
+            q4_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q4']['Quantity'].sum() if 'Q4' in quarterly_forecast['Quarter'].values else 0
+            
+            # Category by quarter
+            cat_quarter = forecast_2026.groupby(['Product Category', 'Quarter'])['Quantity'].sum().unstack(fill_value=0)
+            for q in ['Q1', 'Q2', 'Q3', 'Q4']:
+                if q not in cat_quarter.columns:
+                    cat_quarter[q] = 0
+            cat_quarter = cat_quarter[['Q1', 'Q2', 'Q3', 'Q4']]
+            cat_quarter['Total'] = cat_quarter.sum(axis=1)
+            cat_quarter = cat_quarter.sort_values('Total', ascending=False)
+            
+            # Remove DML Universal
+            if 'DML (Universal)' in cat_quarter.index:
+                cat_quarter = cat_quarter.drop('DML (Universal)')
+            
+            cat_quarter_rows = ""
+            for cat_name, row in cat_quarter.iterrows():
+                cat_quarter_rows += f"""
+                <tr>
+                    <td style="padding: 10px; font-weight: 600;">{cat_name}</td>
+                    <td style="text-align: right; padding: 10px;">{row['Q1']:,.0f}</td>
+                    <td style="text-align: right; padding: 10px;">{row['Q2']:,.0f}</td>
+                    <td style="text-align: right; padding: 10px;">{row['Q3']:,.0f}</td>
+                    <td style="text-align: right; padding: 10px;">{row['Q4']:,.0f}</td>
+                    <td style="text-align: right; padding: 10px; color: #3b82f6; font-weight: 700;">{row['Total']:,.0f}</td>
+                </tr>"""
+            
+            monthly_quarterly_section = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">📅</div>
+                <div>
+                    <div class="section-title">2026 Forecast by Month & Quarter</div>
+                    <div class="section-subtitle">Pipeline quantities by expected close date</div>
+                </div>
+            </div>
+            
+            <!-- Quarterly Summary Cards -->
+            <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 30px;">
+                <div class="metric-card" style="border: 2px solid #3b82f6;">
+                    <div class="metric-value" style="color: #3b82f6;">{q1_qty:,.0f}</div>
+                    <div class="metric-label">Q1 2026</div>
+                </div>
+                <div class="metric-card" style="border: 2px solid #10b981;">
+                    <div class="metric-value" style="color: #10b981;">{q2_qty:,.0f}</div>
+                    <div class="metric-label">Q2 2026</div>
+                </div>
+                <div class="metric-card" style="border: 2px solid #f59e0b;">
+                    <div class="metric-value" style="color: #f59e0b;">{q3_qty:,.0f}</div>
+                    <div class="metric-label">Q3 2026</div>
+                </div>
+                <div class="metric-card" style="border: 2px solid #8b5cf6;">
+                    <div class="metric-value" style="color: #8b5cf6;">{q4_qty:,.0f}</div>
+                    <div class="metric-label">Q4 2026</div>
+                </div>
+            </div>
+            
+            <!-- Monthly Breakdown Table -->
+            <div style="margin-bottom: 30px;">
+                <h4 style="color: #f1f5f9; margin-bottom: 15px; font-size: 1rem;">Monthly Breakdown</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="text-align: left;">Month</th>
+                            <th style="text-align: right;">Quantity</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {monthly_rows}
+                    </tbody>
+                </table>
+            </div>
+            
+            <!-- Category by Quarter Table -->
+            <div>
+                <h4 style="color: #f1f5f9; margin-bottom: 15px; font-size: 1rem;">Category by Quarter</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="text-align: left;">Category</th>
+                            <th style="text-align: right;">Q1</th>
+                            <th style="text-align: right;">Q2</th>
+                            <th style="text-align: right;">Q3</th>
+                            <th style="text-align: right;">Q4</th>
+                            <th style="text-align: right;">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {cat_quarter_rows}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        """
+    
     # Top SKUs table (quantity-focused)
     sku_summary = product_data.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
         'Quantity': 'sum',
@@ -7859,6 +7992,8 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         
         {concentrate_section}
         
+        {monthly_quarterly_section}
+        
         <div class="section">
             <div class="section-header">
                 <div class="section-icon green">📦</div>
@@ -7965,69 +8100,103 @@ def render_product_forecasting_tool():
     # Also load regular deals for comparison
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     
-    # Initialize dataframes
-    sales_orders_df = pd.DataFrame()
-    invoices_df = pd.DataFrame()
+    # Initialize line item dataframes
+    sales_order_line_items_df = pd.DataFrame()
+    invoice_line_items_df = pd.DataFrame()
     
-    # Load Sales Orders (for Pending Orders analysis)
-    with st.spinner("Loading sales orders..."):
-        sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AG", version=CACHE_VERSION)
-        if not sales_orders_df.empty:
-            # Clean data
-            if sales_orders_df.columns.duplicated().any():
-                sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
+    # =========================================================================
+    # LOAD SALES ORDER LINE ITEMS (for Pending Orders by SKU)
+    # Columns: Internal ID, Document Number, Item, Amount, Item Rate, Quantity Ordered,
+    #          Quantity Fulfilled, Purchase Order, Invoice, Calyx || Product Type,
+    #          Transaction Discount, Income Account, Class, Quote, Pending Fulfillment Date,
+    #          Actual Ship Date, Date Created, Date Billed, Date Closed, Customer Companyname,
+    #          HubSpot Pipeline, Calyx | Item Type, Status
+    # =========================================================================
+    with st.spinner("Loading sales order line items..."):
+        sales_order_line_items_df = load_google_sheets_data("Sales Order Line Item", "A:Z", version=CACHE_VERSION, silent=True)
+        
+        if not sales_order_line_items_df.empty:
+            # Remove duplicate columns
+            if sales_order_line_items_df.columns.duplicated().any():
+                sales_order_line_items_df = sales_order_line_items_df.loc[:, ~sales_order_line_items_df.columns.duplicated()]
             
             # Clean numeric columns
-            for col in ['Amount', 'Amount (Transaction Total)', 'Quantity Ordered', 'Quantity Fulfilled']:
-                if col in sales_orders_df.columns:
-                    sales_orders_df[col] = sales_orders_df[col].apply(clean_numeric)
+            if 'Amount' in sales_order_line_items_df.columns:
+                sales_order_line_items_df['Amount'] = sales_order_line_items_df['Amount'].apply(clean_numeric)
+            if 'Item Rate' in sales_order_line_items_df.columns:
+                sales_order_line_items_df['Item Rate'] = sales_order_line_items_df['Item Rate'].apply(clean_numeric)
+            if 'Quantity Ordered' in sales_order_line_items_df.columns:
+                sales_order_line_items_df['Quantity Ordered'] = sales_order_line_items_df['Quantity Ordered'].apply(clean_numeric)
+            if 'Quantity Fulfilled' in sales_order_line_items_df.columns:
+                sales_order_line_items_df['Quantity Fulfilled'] = sales_order_line_items_df['Quantity Fulfilled'].apply(clean_numeric)
             
-            # Handle Amount column naming
-            if 'Amount (Transaction Total)' in sales_orders_df.columns and 'Amount' not in sales_orders_df.columns:
-                sales_orders_df = sales_orders_df.rename(columns={'Amount (Transaction Total)': 'Amount'})
+            # Calculate quantity remaining
+            if 'Quantity Ordered' in sales_order_line_items_df.columns and 'Quantity Fulfilled' in sales_order_line_items_df.columns:
+                sales_order_line_items_df['Qty Remaining'] = (
+                    sales_order_line_items_df['Quantity Ordered'].fillna(0) - 
+                    sales_order_line_items_df['Quantity Fulfilled'].fillna(0)
+                )
             
             # Clean date columns
-            for col in ['Order Start Date', 'Actual Ship Date', 'Customer Promise Date', 'Customer Promise Last Date to Ship']:
-                if col in sales_orders_df.columns:
-                    sales_orders_df[col] = pd.to_datetime(sales_orders_df[col], errors='coerce')
+            for col in ['Pending Fulfillment Date', 'Actual Ship Date', 'Date Created', 'Date Billed', 'Date Closed']:
+                if col in sales_order_line_items_df.columns:
+                    sales_order_line_items_df[col] = pd.to_datetime(sales_order_line_items_df[col], errors='coerce')
             
-            # Apply product categorization
-            if 'Item' in sales_orders_df.columns:
-                sales_orders_df[['Product Category', 'Product Subcategory']] = sales_orders_df.apply(
+            # Clean text fields
+            for col in ['Item', 'Customer Companyname', 'Status', 'Calyx | Item Type', 'Calyx || Product Type']:
+                if col in sales_order_line_items_df.columns:
+                    sales_order_line_items_df[col] = sales_order_line_items_df[col].astype(str).str.strip()
+                    sales_order_line_items_df[col] = sales_order_line_items_df[col].replace('nan', '')
+            
+            # Apply product categorization using Item column
+            if 'Item' in sales_order_line_items_df.columns:
+                sales_order_line_items_df[['Product Category', 'Product Subcategory']] = sales_order_line_items_df.apply(
                     lambda row: pd.Series(categorize_sku_for_pipeline(
                         row.get('Item', ''), 
-                        row.get('Item Description', row.get('Description', ''))
+                        row.get('Calyx || Product Type', row.get('Calyx | Item Type', ''))
                     )),
                     axis=1
                 )
     
-    # Load Invoices (for YTD Actuals)
-    with st.spinner("Loading invoice data..."):
-        invoices_df = load_google_sheets_data("_NS_Invoices_Data", "A:U", version=CACHE_VERSION)
-        if not invoices_df.empty:
-            # Clean data
-            if invoices_df.columns.duplicated().any():
-                invoices_df = invoices_df.loc[:, ~invoices_df.columns.duplicated()]
+    # =========================================================================
+    # LOAD INVOICE LINE ITEMS (for YTD Actuals by SKU)
+    # Same pattern as QBR section - reference load_qbr_data() logic
+    # =========================================================================
+    with st.spinner("Loading invoice line items..."):
+        invoice_line_items_df = load_google_sheets_data("Invoice Line Item", "A:Z", version=CACHE_VERSION, silent=True)
+        
+        if not invoice_line_items_df.empty:
+            # Remove duplicate columns
+            if invoice_line_items_df.columns.duplicated().any():
+                invoice_line_items_df = invoice_line_items_df.loc[:, ~invoice_line_items_df.columns.duplicated()]
             
-            # Handle Amount column naming
-            if 'Amount (Transaction Total)' in invoices_df.columns and 'Amount' not in invoices_df.columns:
-                invoices_df = invoices_df.rename(columns={'Amount (Transaction Total)': 'Amount'})
+            # Clean numeric data - Amount is line-level revenue
+            if 'Amount' in invoice_line_items_df.columns:
+                invoice_line_items_df['Amount'] = invoice_line_items_df['Amount'].apply(clean_numeric)
             
-            # Clean numeric columns
-            for col in ['Amount', 'Amount Remaining', 'Quantity']:
-                if col in invoices_df.columns:
-                    invoices_df[col] = invoices_df[col].apply(clean_numeric)
+            # Quantity is unit-level volume
+            if 'Quantity' in invoice_line_items_df.columns:
+                invoice_line_items_df['Quantity'] = invoice_line_items_df['Quantity'].apply(clean_numeric)
             
-            # Clean date columns
-            if 'Date' in invoices_df.columns:
-                invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
+            # Clean date data
+            if 'Date' in invoice_line_items_df.columns:
+                invoice_line_items_df['Date'] = pd.to_datetime(invoice_line_items_df['Date'], errors='coerce')
+            if 'Due Date' in invoice_line_items_df.columns:
+                invoice_line_items_df['Due Date'] = pd.to_datetime(invoice_line_items_df['Due Date'], errors='coerce')
             
-            # Apply product categorization
-            if 'Item' in invoices_df.columns:
-                invoices_df[['Product Category', 'Product Subcategory']] = invoices_df.apply(
+            # Clean text fields - use Correct Customer and Rep Master as authoritative
+            for col in ['Correct Customer', 'Rep Master', 'Status', 'Item', 'Item Description', 
+                        'Calyx | Item Type', 'Calyx || Product Type']:
+                if col in invoice_line_items_df.columns:
+                    invoice_line_items_df[col] = invoice_line_items_df[col].astype(str).str.strip()
+                    invoice_line_items_df[col] = invoice_line_items_df[col].replace('nan', '')
+            
+            # Apply product categorization using Item column
+            if 'Item' in invoice_line_items_df.columns:
+                invoice_line_items_df[['Product Category', 'Product Subcategory']] = invoice_line_items_df.apply(
                     lambda row: pd.Series(categorize_sku_for_pipeline(
                         row.get('Item', ''), 
-                        row.get('Item Description', row.get('Description', ''))
+                        row.get('Item Description', row.get('Calyx || Product Type', ''))
                     )),
                     axis=1
                 )
@@ -8366,20 +8535,19 @@ def render_product_forecasting_tool():
     forecast_df = filter_concentrate_bases_only(filtered_df)
     
     # =========================================================================
-    # CALCULATE PENDING ORDERS & YTD ACTUALS METRICS
+    # CALCULATE PENDING ORDERS & YTD ACTUALS METRICS (Using Line Item Data)
     # =========================================================================
     
-    # Filter Pending Orders (Pending Approval + Pending Fulfillment)
+    # Filter Pending Orders from Sales Order Line Items (Pending Approval + Pending Fulfillment)
     pending_orders_df = pd.DataFrame()
     pending_orders_qty = 0
     pending_orders_value = 0
     
-    if not sales_orders_df.empty:
+    if not sales_order_line_items_df.empty:
         # Get pending statuses
-        status_col = 'Status' if 'Status' in sales_orders_df.columns else 'Updated Status'
-        if status_col in sales_orders_df.columns:
+        if 'Status' in sales_order_line_items_df.columns:
             pending_statuses = ['Pending Approval', 'Pending Fulfillment']
-            pending_orders_df = sales_orders_df[sales_orders_df[status_col].isin(pending_statuses)].copy()
+            pending_orders_df = sales_order_line_items_df[sales_order_line_items_df['Status'].isin(pending_statuses)].copy()
             
             # Apply category filter if selected
             if selected_categories and len(selected_categories) > 0 and 'Product Category' in pending_orders_df.columns:
@@ -8388,32 +8556,34 @@ def render_product_forecasting_tool():
             # Apply concentrate base-only filter
             pending_orders_df = filter_concentrate_bases_only(pending_orders_df)
             
-            # Calculate pending totals
-            if 'Quantity Ordered' in pending_orders_df.columns and 'Quantity Fulfilled' in pending_orders_df.columns:
-                pending_orders_df['Qty Remaining'] = pending_orders_df['Quantity Ordered'].fillna(0) - pending_orders_df['Quantity Fulfilled'].fillna(0)
+            # Calculate pending totals - Qty Remaining is already calculated during loading
+            if 'Qty Remaining' in pending_orders_df.columns:
                 pending_orders_qty = pending_orders_df['Qty Remaining'].sum()
-            elif 'Quantity' in pending_orders_df.columns:
-                pending_orders_qty = pending_orders_df['Quantity'].sum()
+            elif 'Quantity Ordered' in pending_orders_df.columns:
+                pending_orders_qty = pending_orders_df['Quantity Ordered'].sum()
             
             if 'Amount' in pending_orders_df.columns:
                 pending_orders_value = pending_orders_df['Amount'].sum()
     
-    # Calculate YTD Actuals (Invoiced this year)
+    # Calculate YTD Actuals from Invoice Line Items (Invoiced this year)
     ytd_actuals_df = pd.DataFrame()
     ytd_qty = 0
     ytd_revenue = 0
     
-    if not invoices_df.empty:
+    if not invoice_line_items_df.empty:
         # Filter to current year
         current_year = datetime.now().year
-        if 'Date' in invoices_df.columns:
-            ytd_actuals_df = invoices_df[invoices_df['Date'].dt.year == current_year].copy()
+        if 'Date' in invoice_line_items_df.columns:
+            ytd_actuals_df = invoice_line_items_df[invoice_line_items_df['Date'].dt.year == current_year].copy()
             
             # Apply category filter if selected
             if selected_categories and len(selected_categories) > 0 and 'Product Category' in ytd_actuals_df.columns:
                 ytd_actuals_df = ytd_actuals_df[ytd_actuals_df['Product Category'].isin(selected_categories)]
             
-            # Calculate YTD totals
+            # Apply concentrate base-only filter
+            ytd_actuals_df = filter_concentrate_bases_only(ytd_actuals_df)
+            
+            # Calculate YTD totals from line items
             if 'Quantity' in ytd_actuals_df.columns:
                 ytd_qty = ytd_actuals_df['Quantity'].sum()
             if 'Amount' in ytd_actuals_df.columns:
@@ -8499,7 +8669,7 @@ def render_product_forecasting_tool():
             <div class="summary-card">
                 <div class="summary-card-label">📦 Pending Orders</div>
                 <div class="summary-card-value" style="color: #fbbf24;">{pending_orders_qty:,.0f}</div>
-                <div class="summary-card-sublabel">units to fulfill</div>
+                <div class="summary-card-sublabel">units to fulfill (by SKU)</div>
             </div>
         """, unsafe_allow_html=True)
     
@@ -8508,7 +8678,7 @@ def render_product_forecasting_tool():
             <div class="summary-card">
                 <div class="summary-card-label">✅ YTD Shipped</div>
                 <div class="summary-card-value" style="color: #4ade80;">{ytd_qty:,.0f}</div>
-                <div class="summary-card-sublabel">units invoiced</div>
+                <div class="summary-card-sublabel">units invoiced (by SKU)</div>
             </div>
         """, unsafe_allow_html=True)
     
@@ -8700,6 +8870,142 @@ def render_product_forecasting_tool():
         st.dataframe(display_df, use_container_width=True, hide_index=True)
     
     # =========================================================================
+    # 2026 MONTHLY & QUARTERLY FORECAST BREAKDOWN
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 📅 2026 Forecast by Month & Quarter")
+    st.caption("Pipeline quantities by expected close date (2026 only)")
+    
+    # Filter to 2026 deals only
+    if 'Close Date' in forecast_df.columns:
+        forecast_2026 = forecast_df[
+            (forecast_df['Close Date'].dt.year == 2026) & 
+            (forecast_df['Close Date'].notna())
+        ].copy()
+        
+        if not forecast_2026.empty:
+            # Add month and quarter columns
+            forecast_2026['Month'] = forecast_2026['Close Date'].dt.to_period('M').astype(str)
+            forecast_2026['Month_Num'] = forecast_2026['Close Date'].dt.month
+            forecast_2026['Quarter'] = forecast_2026['Close Date'].dt.quarter.apply(lambda x: f"Q{x}")
+            
+            # Monthly breakdown
+            monthly_forecast = forecast_2026.groupby(['Month', 'Month_Num']).agg({
+                'Quantity': 'sum',
+                'SKU': 'nunique',
+                'Deal ID': 'nunique' if 'Deal ID' in forecast_2026.columns else 'count'
+            }).reset_index().sort_values('Month_Num')
+            monthly_forecast.columns = ['Month', 'Month_Num', 'Quantity', 'SKUs', 'Deals']
+            
+            # Quarterly breakdown
+            quarterly_forecast = forecast_2026.groupby('Quarter').agg({
+                'Quantity': 'sum',
+                'SKU': 'nunique',
+                'Deal ID': 'nunique' if 'Deal ID' in forecast_2026.columns else 'count'
+            }).reset_index()
+            quarterly_forecast.columns = ['Quarter', 'Quantity', 'SKUs', 'Deals']
+            quarterly_forecast = quarterly_forecast.sort_values('Quarter')
+            
+            # Monthly chart
+            st.markdown("#### 📊 Monthly Forecast")
+            
+            # Create month labels
+            month_names = {
+                1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'May', 6: 'Jun',
+                7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'
+            }
+            monthly_forecast['Month_Label'] = monthly_forecast['Month_Num'].map(month_names)
+            
+            col_monthly_chart, col_monthly_table = st.columns([2, 1])
+            
+            with col_monthly_chart:
+                fig = go.Figure()
+                
+                # Add bar chart
+                fig.add_trace(go.Bar(
+                    x=monthly_forecast['Month_Label'],
+                    y=monthly_forecast['Quantity'],
+                    marker=dict(
+                        color=monthly_forecast['Quantity'],
+                        colorscale=[[0, '#3b82f6'], [0.5, '#8b5cf6'], [1, '#10b981']],
+                        showscale=False
+                    ),
+                    text=[f'{x:,.0f}' for x in monthly_forecast['Quantity']],
+                    textposition='outside',
+                    name='Quantity'
+                ))
+                
+                max_val = monthly_forecast['Quantity'].max() if not monthly_forecast.empty else 1
+                fig.update_layout(
+                    title="2026 Forecast by Month",
+                    xaxis_title="",
+                    yaxis_title="Units",
+                    yaxis=dict(range=[0, max_val * 1.2], tickformat=',.0f'),
+                    height=400,
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True, key="monthly_forecast_bar")
+            
+            with col_monthly_table:
+                display_monthly = monthly_forecast[['Month_Label', 'Quantity', 'SKUs', 'Deals']].copy()
+                display_monthly.columns = ['Month', 'Quantity', 'SKUs', 'Deals']
+                display_monthly['Quantity'] = display_monthly['Quantity'].apply(lambda x: f"{x:,.0f}")
+                st.dataframe(display_monthly, use_container_width=True, hide_index=True)
+            
+            # Quarterly summary cards
+            st.markdown("#### 📈 Quarterly Summary")
+            
+            q_cols = st.columns(4)
+            quarter_colors = {'Q1': '#3b82f6', 'Q2': '#10b981', 'Q3': '#f59e0b', 'Q4': '#8b5cf6'}
+            
+            for i, q in enumerate(['Q1', 'Q2', 'Q3', 'Q4']):
+                q_data = quarterly_forecast[quarterly_forecast['Quarter'] == q]
+                q_qty = q_data['Quantity'].sum() if not q_data.empty else 0
+                q_deals = q_data['Deals'].sum() if not q_data.empty else 0
+                
+                with q_cols[i]:
+                    st.markdown(f"""
+                        <div style="
+                            background: linear-gradient(135deg, {quarter_colors[q]}20 0%, {quarter_colors[q]}10 100%);
+                            border: 2px solid {quarter_colors[q]};
+                            border-radius: 12px;
+                            padding: 20px;
+                            text-align: center;
+                        ">
+                            <div style="color: {quarter_colors[q]}; font-size: 1.2rem; font-weight: 700;">{q} 2026</div>
+                            <div style="color: white; font-size: 1.8rem; font-weight: 700; margin: 8px 0;">{q_qty:,.0f}</div>
+                            <div style="color: #94a3b8; font-size: 0.8rem;">units | {q_deals} deals</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+            
+            # Category by Quarter heatmap
+            st.markdown("#### 🗓️ Category by Quarter")
+            
+            cat_quarter = forecast_2026.groupby(['Product Category', 'Quarter'])['Quantity'].sum().unstack(fill_value=0)
+            
+            # Ensure all quarters exist
+            for q in ['Q1', 'Q2', 'Q3', 'Q4']:
+                if q not in cat_quarter.columns:
+                    cat_quarter[q] = 0
+            cat_quarter = cat_quarter[['Q1', 'Q2', 'Q3', 'Q4']]
+            cat_quarter['Total'] = cat_quarter.sum(axis=1)
+            cat_quarter = cat_quarter.sort_values('Total', ascending=False)
+            
+            # Remove DML Universal from display
+            if 'DML (Universal)' in cat_quarter.index:
+                cat_quarter = cat_quarter.drop('DML (Universal)')
+            
+            display_cat_quarter = cat_quarter.copy()
+            for col in display_cat_quarter.columns:
+                display_cat_quarter[col] = display_cat_quarter[col].apply(lambda x: f"{x:,.0f}")
+            
+            st.dataframe(display_cat_quarter, use_container_width=True)
+        else:
+            st.info("No 2026 deals found in the current filter selection.")
+    else:
+        st.warning("Close Date column not available for monthly breakdown.")
+    
+    # =========================================================================
     # PIPELINE BY STATUS (Quantity-Focused)
     # =========================================================================
     if 'Close Status' in forecast_df.columns:
@@ -8829,67 +9135,88 @@ def render_product_forecasting_tool():
                 font-size: 1.1rem;
                 font-weight: 700;
             ">
-                📦 Active Orders (NetSuite Sales Orders)
+                📦 Active Orders by SKU (Sales Order Line Items)
             </div>
         """, unsafe_allow_html=True)
+        st.caption("Line item level pending orders - accurate SKU quantities")
         
         # Summarize by category
         if 'Product Category' in pending_orders_df.columns:
-            pending_by_cat = pending_orders_df.groupby('Product Category').agg({
-                'Qty Remaining': 'sum' if 'Qty Remaining' in pending_orders_df.columns else 'count',
-                'Amount': 'sum' if 'Amount' in pending_orders_df.columns else 'count'
-            }).reset_index()
+            # Build aggregation dict based on available columns
+            agg_dict = {}
+            has_qty_remaining = 'Qty Remaining' in pending_orders_df.columns
+            has_qty_ordered = 'Quantity Ordered' in pending_orders_df.columns
+            has_amount = 'Amount' in pending_orders_df.columns
             
-            if 'Qty Remaining' not in pending_orders_df.columns:
-                pending_by_cat = pending_orders_df.groupby('Product Category').agg({
-                    'Quantity Ordered': 'sum' if 'Quantity Ordered' in pending_orders_df.columns else 'count',
-                    'Amount': 'sum' if 'Amount' in pending_orders_df.columns else 'count'
-                }).reset_index()
-                pending_by_cat.columns = ['Category', 'Qty Remaining', 'Amount']
-            else:
-                pending_by_cat.columns = ['Category', 'Qty Remaining', 'Amount']
+            if has_qty_remaining:
+                agg_dict['Qty Remaining'] = 'sum'
+            elif has_qty_ordered:
+                agg_dict['Quantity Ordered'] = 'sum'
             
-            pending_by_cat = pending_by_cat.sort_values('Qty Remaining', ascending=False)
+            if has_amount:
+                agg_dict['Amount'] = 'sum'
             
-            # Display table
-            display_pending = pending_by_cat.copy()
-            display_pending['Qty Remaining'] = display_pending['Qty Remaining'].apply(lambda x: f"{x:,.0f}")
-            display_pending['Amount'] = display_pending['Amount'].apply(lambda x: f"${x:,.0f}")
-            
-            col_pending_chart, col_pending_table = st.columns([1, 1])
-            
-            with col_pending_chart:
-                # Bar chart
-                fig = go.Figure(data=[
-                    go.Bar(
-                        x=pending_by_cat['Category'],
-                        y=pending_by_cat['Qty Remaining'],
-                        marker=dict(color='#f59e0b'),
-                        text=[f'{x:,.0f}' for x in pending_by_cat['Qty Remaining']],
-                        textposition='outside'
+            if agg_dict:
+                pending_by_cat = pending_orders_df.groupby('Product Category').agg(agg_dict).reset_index()
+                
+                # Standardize column names
+                col_names = ['Category']
+                if has_qty_remaining:
+                    col_names.append('Qty Remaining')
+                elif has_qty_ordered:
+                    col_names.append('Qty Remaining')  # Rename for display
+                if has_amount:
+                    col_names.append('Amount')
+                
+                pending_by_cat.columns = col_names
+                
+                # Ensure we have both columns for display
+                if 'Qty Remaining' not in pending_by_cat.columns:
+                    pending_by_cat['Qty Remaining'] = 0
+                if 'Amount' not in pending_by_cat.columns:
+                    pending_by_cat['Amount'] = 0
+                
+                pending_by_cat = pending_by_cat.sort_values('Qty Remaining', ascending=False)
+                
+                # Display table
+                display_pending = pending_by_cat.copy()
+                display_pending['Qty Remaining'] = display_pending['Qty Remaining'].apply(lambda x: f"{x:,.0f}")
+                display_pending['Amount'] = display_pending['Amount'].apply(lambda x: f"${x:,.0f}")
+                
+                col_pending_chart, col_pending_table = st.columns([1, 1])
+                
+                with col_pending_chart:
+                    # Bar chart
+                    fig = go.Figure(data=[
+                        go.Bar(
+                            x=pending_by_cat['Category'],
+                            y=pending_by_cat['Qty Remaining'],
+                            marker=dict(color='#f59e0b'),
+                            text=[f'{x:,.0f}' for x in pending_by_cat['Qty Remaining']],
+                            textposition='outside'
+                        )
+                    ])
+                    fig.update_layout(
+                        title="Pending Quantity by Category",
+                        xaxis_title="",
+                        yaxis_title="Units",
+                        height=350,
+                        showlegend=False
                     )
-                ])
-                fig.update_layout(
-                    title="Pending Quantity by Category",
-                    xaxis_title="",
-                    yaxis_title="Units",
-                    height=350,
-                    showlegend=False
-                )
-                st.plotly_chart(fig, use_container_width=True, key="pending_orders_bar")
-            
-            with col_pending_table:
-                st.dataframe(display_pending, use_container_width=True, hide_index=True)
+                    st.plotly_chart(fig, use_container_width=True, key="pending_orders_bar")
+                
+                with col_pending_table:
+                    st.dataframe(display_pending, use_container_width=True, hide_index=True)
         
-        # Detailed pending orders expander
-        with st.expander("📋 View Pending Order Details"):
-            display_cols = ['Document Number', 'Item', 'Item Description', 'Corrected Customer Name', 
-                           'Quantity Ordered', 'Quantity Fulfilled', 'Amount', 'Status', 'Rep Master']
+        # Detailed pending orders expander (using Sales Order Line Item columns)
+        with st.expander("📋 View Pending Order Details by SKU"):
+            display_cols = ['Document Number', 'Item', 'Customer Companyname', 
+                           'Quantity Ordered', 'Quantity Fulfilled', 'Qty Remaining', 'Amount', 'Status']
             display_cols = [c for c in display_cols if c in pending_orders_df.columns]
             
             pending_detail = pending_orders_df[display_cols].copy()
             
-            for col in ['Quantity Ordered', 'Quantity Fulfilled']:
+            for col in ['Quantity Ordered', 'Quantity Fulfilled', 'Qty Remaining']:
                 if col in pending_detail.columns:
                     pending_detail[col] = pending_detail[col].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
             if 'Amount' in pending_detail.columns:
@@ -8911,55 +9238,80 @@ def render_product_forecasting_tool():
                 font-size: 1.1rem;
                 font-weight: 700;
             ">
-                ✅ YTD Actuals ({datetime.now().year} Invoiced)
+                ✅ YTD Actuals by SKU ({datetime.now().year} Invoice Line Items)
             </div>
         """, unsafe_allow_html=True)
+        st.caption("Line item level invoiced quantities - accurate SKU actuals")
         
         # Summarize by category
         if 'Product Category' in ytd_actuals_df.columns:
-            ytd_by_cat = ytd_actuals_df.groupby('Product Category').agg({
-                'Quantity': 'sum' if 'Quantity' in ytd_actuals_df.columns else 'count',
-                'Amount': 'sum' if 'Amount' in ytd_actuals_df.columns else 'count'
-            }).reset_index()
-            ytd_by_cat.columns = ['Category', 'Quantity', 'Revenue']
-            ytd_by_cat = ytd_by_cat.sort_values('Revenue', ascending=False)
-            ytd_by_cat['% of Total'] = (ytd_by_cat['Revenue'] / ytd_by_cat['Revenue'].sum() * 100).round(1)
+            # Build aggregation dict based on available columns
+            agg_dict = {}
+            has_quantity = 'Quantity' in ytd_actuals_df.columns
+            has_amount = 'Amount' in ytd_actuals_df.columns
             
-            col_ytd_chart, col_ytd_table = st.columns([1, 1])
+            if has_quantity:
+                agg_dict['Quantity'] = 'sum'
+            if has_amount:
+                agg_dict['Amount'] = 'sum'
             
-            with col_ytd_chart:
-                # Pie chart for YTD revenue mix
-                colors = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899']
-                fig = go.Figure(data=[go.Pie(
-                    labels=ytd_by_cat['Category'],
-                    values=ytd_by_cat['Revenue'],
-                    hole=0.45,
-                    marker=dict(colors=colors[:len(ytd_by_cat)]),
-                    textposition='outside',
-                    textinfo='label+percent'
-                )])
-                fig.update_layout(
-                    title="YTD Revenue by Category",
-                    showlegend=False,
-                    height=400,
-                    margin=dict(t=60, b=40, l=40, r=40)
-                )
-                st.plotly_chart(fig, use_container_width=True, key="ytd_pie")
-            
-            with col_ytd_table:
-                display_ytd = ytd_by_cat.copy()
-                display_ytd['Quantity'] = display_ytd['Quantity'].apply(lambda x: f"{x:,.0f}")
-                display_ytd['Revenue'] = display_ytd['Revenue'].apply(lambda x: f"${x:,.0f}")
-                display_ytd['% of Total'] = display_ytd['% of Total'].apply(lambda x: f"{x:.1f}%")
-                st.dataframe(display_ytd, use_container_width=True, hide_index=True)
+            if agg_dict:
+                ytd_by_cat = ytd_actuals_df.groupby('Product Category').agg(agg_dict).reset_index()
+                
+                # Rename columns based on what we have
+                if has_quantity and has_amount:
+                    ytd_by_cat.columns = ['Category', 'Quantity', 'Revenue']
+                elif has_amount:
+                    ytd_by_cat.columns = ['Category', 'Revenue']
+                    ytd_by_cat['Quantity'] = 0  # Placeholder
+                else:
+                    ytd_by_cat.columns = ['Category', 'Quantity']
+                    ytd_by_cat['Revenue'] = 0  # Placeholder
+                
+                if 'Revenue' in ytd_by_cat.columns and ytd_by_cat['Revenue'].sum() > 0:
+                    ytd_by_cat = ytd_by_cat.sort_values('Revenue', ascending=False)
+                    ytd_by_cat['% of Total'] = (ytd_by_cat['Revenue'] / ytd_by_cat['Revenue'].sum() * 100).round(1)
+                else:
+                    ytd_by_cat['% of Total'] = 0
+                
+                col_ytd_chart, col_ytd_table = st.columns([1, 1])
+                
+                with col_ytd_chart:
+                    # Pie chart for YTD revenue mix
+                    colors = ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899']
+                    fig = go.Figure(data=[go.Pie(
+                        labels=ytd_by_cat['Category'],
+                        values=ytd_by_cat['Revenue'],
+                        hole=0.45,
+                        marker=dict(colors=colors[:len(ytd_by_cat)]),
+                        textposition='outside',
+                        textinfo='label+percent'
+                    )])
+                    fig.update_layout(
+                        title="YTD Revenue by Category",
+                        showlegend=False,
+                        height=400,
+                        margin=dict(t=60, b=40, l=40, r=40)
+                    )
+                    st.plotly_chart(fig, use_container_width=True, key="ytd_pie")
+                
+                with col_ytd_table:
+                    display_ytd = ytd_by_cat.copy()
+                    display_ytd['Quantity'] = display_ytd['Quantity'].apply(lambda x: f"{x:,.0f}")
+                    display_ytd['Revenue'] = display_ytd['Revenue'].apply(lambda x: f"${x:,.0f}")
+                    display_ytd['% of Total'] = display_ytd['% of Total'].apply(lambda x: f"{x:.1f}%")
+                    st.dataframe(display_ytd, use_container_width=True, hide_index=True)
         
         # Monthly trend
-        if 'Date' in ytd_actuals_df.columns:
+        if 'Date' in ytd_actuals_df.columns and 'Amount' in ytd_actuals_df.columns:
             ytd_actuals_df['Month'] = ytd_actuals_df['Date'].dt.to_period('M').astype(str)
-            monthly_trend = ytd_actuals_df.groupby('Month').agg({
-                'Amount': 'sum',
-                'Quantity': 'sum'
-            }).reset_index()
+            
+            # Build aggregation dict based on available columns
+            agg_dict = {'Amount': 'sum'}
+            if 'Quantity' in ytd_actuals_df.columns:
+                agg_dict['Quantity'] = 'sum'
+            
+            monthly_trend = ytd_actuals_df.groupby('Month').agg(agg_dict).reset_index()
             
             if not monthly_trend.empty:
                 st.markdown("#### 📅 Monthly Revenue Trend")
@@ -8981,6 +9333,146 @@ def render_product_forecasting_tool():
                     showlegend=False
                 )
                 st.plotly_chart(fig, use_container_width=True, key="monthly_trend")
+    
+    # =========================================================================
+    # HISTORICAL DEMAND ANALYSIS (Using Invoice Line Items)
+    # Shows demand trends over time for supply planning
+    # =========================================================================
+    if not invoice_line_items_df.empty:
+        st.markdown("---")
+        st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+                color: white;
+                padding: 12px 20px;
+                border-radius: 10px 10px 0 0;
+                font-size: 1.1rem;
+                font-weight: 700;
+            ">
+                📈 Historical Demand Analysis (Invoice Line Items)
+            </div>
+        """, unsafe_allow_html=True)
+        st.caption("Historical invoiced quantities by SKU - useful for demand forecasting and supply planning")
+        
+        # Apply category filter and concentrate base-only filter
+        historical_df = invoice_line_items_df.copy()
+        if selected_categories and len(selected_categories) > 0 and 'Product Category' in historical_df.columns:
+            historical_df = historical_df[historical_df['Product Category'].isin(selected_categories)]
+        historical_df = filter_concentrate_bases_only(historical_df)
+        
+        if not historical_df.empty and 'Date' in historical_df.columns:
+            # Add time period columns
+            historical_df['Year'] = historical_df['Date'].dt.year
+            historical_df['Month'] = historical_df['Date'].dt.to_period('M').astype(str)
+            historical_df['Quarter'] = historical_df['Date'].dt.to_period('Q').astype(str)
+            
+            # Check for required columns
+            has_quantity = 'Quantity' in historical_df.columns
+            has_amount = 'Amount' in historical_df.columns
+            
+            if has_quantity or has_amount:
+                # Monthly demand trend (last 12 months)
+                twelve_months_ago = datetime.now() - timedelta(days=365)
+                recent_demand = historical_df[historical_df['Date'] >= twelve_months_ago]
+                
+                if not recent_demand.empty:
+                    # Build aggregation dict
+                    agg_dict = {}
+                    if has_quantity:
+                        agg_dict['Quantity'] = 'sum'
+                    if has_amount:
+                        agg_dict['Amount'] = 'sum'
+                    
+                    monthly_demand = recent_demand.groupby('Month').agg(agg_dict).reset_index()
+                    monthly_demand = monthly_demand.sort_values('Month')
+                    
+                    # Use Amount if Quantity doesn't exist
+                    value_col = 'Quantity' if has_quantity else 'Amount'
+                    value_label = 'Units Invoiced' if has_quantity else 'Revenue'
+                    
+                    st.markdown("#### 📊 Monthly Demand (Last 12 Months)")
+                    
+                    col_demand_chart, col_demand_stats = st.columns([2, 1])
+                    
+                    with col_demand_chart:
+                        fig = go.Figure()
+                        fig.add_trace(go.Bar(
+                            x=monthly_demand['Month'],
+                            y=monthly_demand[value_col],
+                            name=value_col,
+                            marker=dict(color='#8b5cf6'),
+                            text=[f'{x:,.0f}' for x in monthly_demand[value_col]],
+                            textposition='outside'
+                        ))
+                        max_val = monthly_demand[value_col].max() if not monthly_demand.empty else 1
+                        fig.update_layout(
+                            title="Historical Demand by Month",
+                            xaxis_title="",
+                            yaxis_title=value_label,
+                            yaxis=dict(range=[0, max_val * 1.2], tickformat=',.0f'),
+                            height=400,
+                            showlegend=False
+                        )
+                        st.plotly_chart(fig, use_container_width=True, key="historical_demand_bar")
+                    
+                    with col_demand_stats:
+                        avg_monthly = monthly_demand[value_col].mean()
+                        total_12m = monthly_demand[value_col].sum()
+                        max_month = monthly_demand.loc[monthly_demand[value_col].idxmax(), 'Month'] if not monthly_demand.empty else "N/A"
+                        max_qty = monthly_demand[value_col].max()
+                        
+                        st.markdown(f"""
+                            <div style="background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 15px;">
+                                <div style="color: #94a3b8; font-size: 0.8rem;">Avg Monthly {'Demand' if has_quantity else 'Revenue'}</div>
+                                <div style="color: #8b5cf6; font-size: 1.5rem; font-weight: 700;">{avg_monthly:,.0f}</div>
+                            </div>
+                            <div style="background: #1e293b; padding: 20px; border-radius: 10px; margin-bottom: 15px;">
+                                <div style="color: #94a3b8; font-size: 0.8rem;">Total (12 Months)</div>
+                                <div style="color: #10b981; font-size: 1.5rem; font-weight: 700;">{total_12m:,.0f}</div>
+                            </div>
+                            <div style="background: #1e293b; padding: 20px; border-radius: 10px;">
+                                <div style="color: #94a3b8; font-size: 0.8rem;">Peak Month</div>
+                                <div style="color: #f59e0b; font-size: 1.2rem; font-weight: 700;">{max_month}</div>
+                                <div style="color: #64748b; font-size: 0.85rem;">{max_qty:,.0f} {'units' if has_quantity else 'revenue'}</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+            
+                # Top Historical SKUs
+                st.markdown("#### 🏆 Top SKUs by Historical Demand (Last 12 Months)")
+                
+                if 'Item' in recent_demand.columns:
+                    item_col = 'Item'
+                    
+                    # Build aggregation dict
+                    sku_agg_dict = {}
+                    if has_quantity:
+                        sku_agg_dict['Quantity'] = 'sum'
+                    if has_amount:
+                        sku_agg_dict['Amount'] = 'sum'
+                    
+                    if sku_agg_dict:
+                        historical_sku = recent_demand.groupby([item_col]).agg(sku_agg_dict).reset_index()
+                        
+                        # Handle column naming based on what exists
+                        if has_quantity and has_amount:
+                            historical_sku.columns = ['SKU', 'Quantity', 'Revenue']
+                            sort_col = 'Quantity'
+                        elif has_quantity:
+                            historical_sku.columns = ['SKU', 'Quantity']
+                            historical_sku['Revenue'] = 0
+                            sort_col = 'Quantity'
+                        else:
+                            historical_sku.columns = ['SKU', 'Revenue']
+                            historical_sku['Quantity'] = 0
+                            sort_col = 'Revenue'
+                        
+                        historical_sku = historical_sku.sort_values(sort_col, ascending=False).head(20)
+                        
+                        display_hist_sku = historical_sku.copy()
+                        display_hist_sku['Quantity'] = display_hist_sku['Quantity'].apply(lambda x: f"{x:,.0f}")
+                        display_hist_sku['Revenue'] = display_hist_sku['Revenue'].apply(lambda x: f"${x:,.0f}")
+                        
+                        st.dataframe(display_hist_sku, use_container_width=True, hide_index=True)
     
     # =========================================================================
     # DEAL DETAILS EXPANDER (Shows forecast items only - concentrate bases only)
