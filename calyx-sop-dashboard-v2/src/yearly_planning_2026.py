@@ -7374,25 +7374,33 @@ def categorize_sku_for_pipeline(sku, description):
     return category, sub_category
 
 
-def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps", pairing_info=None):
-    """Generate a professional HTML report for product forecasting (Quantity-focused)"""
+def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps", pairing_info=None,
+                                  pending_orders_df=None, historical_df=None, concentrate_inventory=None):
+    """Generate a comprehensive HTML report for product forecasting including Pipeline, Pending Orders, and Historical data"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
+    current_year = datetime.now().year
     
     if product_data.empty:
         return "<html><body><h1>No product data available</h1></body></html>"
     
     if pairing_info is None:
         pairing_info = {}
+    if pending_orders_df is None:
+        pending_orders_df = pd.DataFrame()
+    if historical_df is None:
+        historical_df = pd.DataFrame()
+    if concentrate_inventory is None:
+        concentrate_inventory = {'in_transit': 0, 'seized': 0, 'on_hand': 0, 'lead_time_weeks': 12}
     
-    # Calculate summary metrics (quantity-focused)
-    total_quantity = product_data['Quantity'].sum()
-    unique_skus = product_data['SKU'].nunique()
-    unique_deals = product_data['Deal ID'].nunique() if 'Deal ID' in product_data.columns else 0
-    unique_categories = product_data['Product Category'].nunique()
+    # =========================================================================
+    # PIPELINE METRICS (Forward-looking forecast from HubSpot)
+    # =========================================================================
+    pipeline_total_qty = product_data['Quantity'].sum()
+    pipeline_unique_skus = product_data['SKU'].nunique()
+    pipeline_unique_deals = product_data['Deal ID'].nunique() if 'Deal ID' in product_data.columns else 0
     
     # Status breakdown
-    open_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
     if 'Close Status' in product_data.columns:
         commit_qty = product_data[product_data['Close Status'] == 'Commit']['Quantity'].sum()
         expect_qty = product_data[product_data['Close Status'] == 'Expect']['Quantity'].sum()
@@ -7401,82 +7409,153 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     else:
         commit_qty = expect_qty = bestcase_qty = opportunity_qty = 0
     
-    # Category breakdown (quantity-focused)
+    # =========================================================================
+    # PENDING ORDERS METRICS (Actualized demand from NetSuite Sales Orders)
+    # =========================================================================
+    pending_total_qty = 0
+    pending_total_value = 0
+    pending_by_category = {}
+    
+    if not pending_orders_df.empty:
+        if 'Qty Remaining' in pending_orders_df.columns:
+            pending_total_qty = pending_orders_df['Qty Remaining'].sum()
+        elif 'Quantity Ordered' in pending_orders_df.columns:
+            pending_total_qty = pending_orders_df['Quantity Ordered'].sum()
+        
+        if 'Amount' in pending_orders_df.columns:
+            pending_total_value = pending_orders_df['Amount'].sum()
+        
+        if 'Product Category' in pending_orders_df.columns:
+            qty_col = 'Qty Remaining' if 'Qty Remaining' in pending_orders_df.columns else 'Quantity Ordered'
+            if qty_col in pending_orders_df.columns:
+                pending_by_category = pending_orders_df.groupby('Product Category')[qty_col].sum().to_dict()
+    
+    # =========================================================================
+    # HISTORICAL METRICS (YTD Actuals from Invoice Line Items)
+    # =========================================================================
+    historical_total_qty = 0
+    historical_total_revenue = 0
+    historical_by_category = {}
+    
+    if not historical_df.empty:
+        if 'Quantity' in historical_df.columns:
+            historical_total_qty = historical_df['Quantity'].sum()
+        if 'Amount' in historical_df.columns:
+            historical_total_revenue = historical_df['Amount'].sum()
+        
+        if 'Product Category' in historical_df.columns:
+            if 'Quantity' in historical_df.columns:
+                historical_by_category = historical_df.groupby('Product Category')['Quantity'].sum().to_dict()
+    
+    # =========================================================================
+    # CONCENTRATE SUPPLY PLANNING
+    # =========================================================================
+    conc_pipeline = pairing_info.get('total_conc_bases', 0)
+    conc_pending = pending_by_category.get('Concentrates', 0)
+    conc_historical_ytd = historical_by_category.get('Concentrates', 0)
+    
+    # Calculate monthly historical average for concentrates
+    conc_monthly_avg = 0
+    if not historical_df.empty and 'Product Category' in historical_df.columns and 'Date' in historical_df.columns:
+        conc_hist = historical_df[historical_df['Product Category'] == 'Concentrates']
+        if not conc_hist.empty and 'Quantity' in conc_hist.columns:
+            months_in_data = conc_hist['Date'].dt.to_period('M').nunique()
+            if months_in_data > 0:
+                conc_monthly_avg = conc_hist['Quantity'].sum() / months_in_data
+    
+    # Supply calculations
+    conc_in_transit = concentrate_inventory.get('in_transit', 0)
+    conc_seized = concentrate_inventory.get('seized', 0)
+    conc_on_hand = concentrate_inventory.get('on_hand', 0)
+    conc_lead_time = concentrate_inventory.get('lead_time_weeks', 12)
+    
+    conc_total_available = conc_in_transit + conc_on_hand
+    conc_total_demand = conc_pipeline + conc_pending
+    conc_supply_gap = conc_total_demand - conc_total_available
+    
+    # Months of supply coverage
+    conc_months_coverage = 0
+    if conc_monthly_avg > 0:
+        conc_months_coverage = conc_total_available / conc_monthly_avg
+    
+    # Recommended order quantity (cover 6 months of demand)
+    conc_recommended_order = max(0, (conc_monthly_avg * 6) - conc_total_available + conc_supply_gap)
+    
+    # =========================================================================
+    # CATEGORY BREAKDOWN
+    # =========================================================================
     category_summary = product_data.groupby('Product Category').agg({
         'Quantity': 'sum',
         'SKU': 'nunique'
     }).reset_index()
-    category_summary.columns = ['Category', 'Quantity', 'SKU Count']
+    category_summary.columns = ['Category', 'Pipeline Qty', 'SKU Count']
     
-    # Apply concentrate rollup if pairing_info exists
-    if pairing_info.get('total_conc_bases', 0) > 0:
-        conc_mask = category_summary['Category'] == 'Concentrates'
-        if conc_mask.any():
-            category_summary.loc[conc_mask, 'Quantity'] = pairing_info['total_conc_bases']
-        
-        dml_mask = category_summary['Category'] == 'DML (Universal)'
-        if dml_mask.any():
-            if pairing_info.get('dml_remaining', 0) > 0:
-                category_summary.loc[dml_mask, 'Quantity'] = pairing_info['dml_remaining']
-            else:
-                category_summary = category_summary[~dml_mask]
+    # Add pending and historical quantities
+    category_summary['Pending Qty'] = category_summary['Category'].map(pending_by_category).fillna(0)
+    category_summary['YTD Actual'] = category_summary['Category'].map(historical_by_category).fillna(0)
+    category_summary['Total Demand'] = category_summary['Pipeline Qty'] + category_summary['Pending Qty']
+    category_summary = category_summary.sort_values('Total Demand', ascending=False)
     
-    adjusted_total = category_summary['Quantity'].sum()
-    category_summary = category_summary.sort_values('Quantity', ascending=False)
+    # Remove DML Universal from display
+    category_summary = category_summary[category_summary['Category'] != 'DML (Universal)']
     
     # Generate category rows
     category_rows = ""
     for _, row in category_summary.iterrows():
-        pct = (row['Quantity'] / adjusted_total * 100) if adjusted_total > 0 else 0
         category_rows += f"""
         <tr>
             <td style="font-weight: 600; padding: 12px; text-align: left;">{row['Category']}</td>
-            <td style="text-align: right; padding: 12px; color: #059669; font-weight: 600;">{row['Quantity']:,.0f}</td>
-            <td style="text-align: right; padding: 12px;">{row['SKU Count']}</td>
-            <td style="text-align: right; padding: 12px;">
-                <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end;">
-                    <div style="background: #e2e8f0; border-radius: 4px; height: 10px; width: 100px; overflow: hidden;">
-                        <div style="background: linear-gradient(90deg, #3b82f6, #1d4ed8); height: 100%; width: {pct}%;"></div>
-                    </div>
-                    <span style="font-weight: 500; min-width: 50px;">{pct:.1f}%</span>
-                </div>
-            </td>
+            <td style="text-align: right; padding: 12px; color: #3b82f6;">{row['Pipeline Qty']:,.0f}</td>
+            <td style="text-align: right; padding: 12px; color: #f59e0b;">{row['Pending Qty']:,.0f}</td>
+            <td style="text-align: right; padding: 12px; color: #10b981;">{row['YTD Actual']:,.0f}</td>
+            <td style="text-align: right; padding: 12px; font-weight: 700;">{row['Total Demand']:,.0f}</td>
         </tr>"""
     
-    # Concentrate breakdown section (simplified - just show 4mL/7mL split)
-    concentrate_section = ""
-    if pairing_info.get('total_conc_bases', 0) > 0:
-        concentrate_section = f"""
-        <div class="section">
-            <div class="section-header">
-                <div class="section-icon" style="background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%);">🔬</div>
-                <div>
-                    <div class="section-title">Concentrate Forecast Breakdown</div>
-                    <div class="section-subtitle">Based on glass base quantities (lids match 1:1 with bases)</div>
-                </div>
-            </div>
-            
-            <div class="metrics-grid" style="grid-template-columns: repeat(3, 1fr);">
-                <div class="metric-card">
-                    <div class="metric-value" style="color: var(--primary);">{pairing_info.get('4mL_bases', 0):,.0f}</div>
-                    <div class="metric-label">4mL Glass Base</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value" style="color: #8b5cf6;">{pairing_info.get('7mL_bases', 0):,.0f}</div>
-                    <div class="metric-label">7mL Glass Base</div>
-                </div>
-                <div class="metric-card" style="background: linear-gradient(135deg, #064e3b 0%, #065f46 100%); border: 1px solid #10b981;">
-                    <div class="metric-value" style="color: white;">{pairing_info.get('total_conc_bases', 0):,.0f}</div>
-                    <div class="metric-label" style="color: #10b981;">Total Concentrates</div>
-                </div>
-            </div>
-        </div>
-        """
+    # =========================================================================
+    # TOP PIPELINE SKUS
+    # =========================================================================
+    sku_summary = product_data.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
+        'Quantity': 'sum',
+        'Deal ID': 'nunique' if 'Deal ID' in product_data.columns else 'count'
+    }).reset_index()
+    sku_summary.columns = ['SKU', 'Description', 'Category', 'Quantity', 'Deal Count']
+    sku_summary = sku_summary.sort_values('Quantity', ascending=False).head(15)
+    
+    sku_rows = ""
+    for _, row in sku_summary.iterrows():
+        desc = row['Description'][:40] + '...' if len(str(row['Description'])) > 40 else row['Description']
+        sku_rows += f"""
+        <tr>
+            <td style="font-weight: 600; padding: 10px; font-family: monospace; font-size: 0.85rem;">{row['SKU']}</td>
+            <td style="padding: 10px; color: #64748b; font-size: 0.85rem;">{desc}</td>
+            <td style="padding: 10px;">{row['Category']}</td>
+            <td style="text-align: right; padding: 10px; color: #059669; font-weight: 600;">{row['Quantity']:,.0f}</td>
+        </tr>"""
     
     # =========================================================================
-    # 2026 MONTHLY & QUARTERLY FORECAST FOR HTML
+    # TOP PENDING ORDER SKUS
     # =========================================================================
-    monthly_quarterly_section = ""
+    pending_sku_rows = ""
+    if not pending_orders_df.empty and 'Item' in pending_orders_df.columns:
+        qty_col = 'Qty Remaining' if 'Qty Remaining' in pending_orders_df.columns else 'Quantity Ordered'
+        if qty_col in pending_orders_df.columns:
+            pending_sku_summary = pending_orders_df.groupby('Item').agg({
+                qty_col: 'sum'
+            }).reset_index()
+            pending_sku_summary.columns = ['SKU', 'Quantity']
+            pending_sku_summary = pending_sku_summary.sort_values('Quantity', ascending=False).head(10)
+            
+            for _, row in pending_sku_summary.iterrows():
+                pending_sku_rows += f"""
+                <tr>
+                    <td style="font-weight: 600; padding: 10px; font-family: monospace;">{row['SKU']}</td>
+                    <td style="text-align: right; padding: 10px; color: #f59e0b; font-weight: 600;">{row['Quantity']:,.0f}</td>
+                </tr>"""
+    
+    # =========================================================================
+    # MONTHLY FORECAST BY QUARTER (2026)
+    # =========================================================================
+    quarterly_section = ""
     if 'Close Date' in product_data.columns:
         forecast_2026 = product_data[
             (product_data['Close Date'].dt.year == 2026) & 
@@ -7485,183 +7564,66 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         
         if not forecast_2026.empty:
             forecast_2026['Quarter'] = forecast_2026['Close Date'].dt.quarter.apply(lambda x: f"Q{x}")
-            forecast_2026['Month_Num'] = forecast_2026['Close Date'].dt.month
+            quarterly_forecast = forecast_2026.groupby('Quarter')['Quantity'].sum().to_dict()
             
-            # Monthly breakdown
-            monthly_forecast = forecast_2026.groupby('Month_Num')['Quantity'].sum().reset_index()
-            monthly_forecast.columns = ['Month_Num', 'Quantity']
+            q1_qty = quarterly_forecast.get('Q1', 0)
+            q2_qty = quarterly_forecast.get('Q2', 0)
+            q3_qty = quarterly_forecast.get('Q3', 0)
+            q4_qty = quarterly_forecast.get('Q4', 0)
             
-            month_names = {1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'May', 6: 'Jun',
-                          7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'}
-            
-            # Build monthly rows
-            monthly_rows = ""
-            for _, row in monthly_forecast.iterrows():
-                month_name = month_names.get(row['Month_Num'], 'Unknown')
-                monthly_rows += f"""
-                <tr>
-                    <td style="padding: 10px; font-weight: 600;">{month_name} 2026</td>
-                    <td style="text-align: right; padding: 10px; color: #3b82f6; font-weight: 600;">{row['Quantity']:,.0f}</td>
-                </tr>"""
-            
-            # Quarterly breakdown
-            quarterly_forecast = forecast_2026.groupby('Quarter')['Quantity'].sum().reset_index()
-            quarterly_forecast.columns = ['Quarter', 'Quantity']
-            
-            q1_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q1']['Quantity'].sum() if 'Q1' in quarterly_forecast['Quarter'].values else 0
-            q2_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q2']['Quantity'].sum() if 'Q2' in quarterly_forecast['Quarter'].values else 0
-            q3_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q3']['Quantity'].sum() if 'Q3' in quarterly_forecast['Quarter'].values else 0
-            q4_qty = quarterly_forecast[quarterly_forecast['Quarter'] == 'Q4']['Quantity'].sum() if 'Q4' in quarterly_forecast['Quarter'].values else 0
-            
-            # Category by quarter
-            cat_quarter = forecast_2026.groupby(['Product Category', 'Quarter'])['Quantity'].sum().unstack(fill_value=0)
-            for q in ['Q1', 'Q2', 'Q3', 'Q4']:
-                if q not in cat_quarter.columns:
-                    cat_quarter[q] = 0
-            cat_quarter = cat_quarter[['Q1', 'Q2', 'Q3', 'Q4']]
-            cat_quarter['Total'] = cat_quarter.sum(axis=1)
-            cat_quarter = cat_quarter.sort_values('Total', ascending=False)
-            
-            # Remove DML Universal
-            if 'DML (Universal)' in cat_quarter.index:
-                cat_quarter = cat_quarter.drop('DML (Universal)')
-            
-            cat_quarter_rows = ""
-            for cat_name, row in cat_quarter.iterrows():
-                cat_quarter_rows += f"""
-                <tr>
-                    <td style="padding: 10px; font-weight: 600;">{cat_name}</td>
-                    <td style="text-align: right; padding: 10px;">{row['Q1']:,.0f}</td>
-                    <td style="text-align: right; padding: 10px;">{row['Q2']:,.0f}</td>
-                    <td style="text-align: right; padding: 10px;">{row['Q3']:,.0f}</td>
-                    <td style="text-align: right; padding: 10px;">{row['Q4']:,.0f}</td>
-                    <td style="text-align: right; padding: 10px; color: #3b82f6; font-weight: 700;">{row['Total']:,.0f}</td>
-                </tr>"""
-            
-            monthly_quarterly_section = f"""
-        <div class="section">
-            <div class="section-header">
-                <div class="section-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">📅</div>
-                <div>
-                    <div class="section-title">2026 Forecast by Month & Quarter</div>
-                    <div class="section-subtitle">Pipeline quantities by expected close date</div>
-                </div>
-            </div>
-            
-            <!-- Quarterly Summary Cards -->
-            <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 30px;">
-                <div class="metric-card" style="border: 2px solid #3b82f6;">
+            quarterly_section = f"""
+            <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr); margin-top: 20px;">
+                <div class="metric-card" style="border-left: 4px solid #3b82f6;">
                     <div class="metric-value" style="color: #3b82f6;">{q1_qty:,.0f}</div>
                     <div class="metric-label">Q1 2026</div>
                 </div>
-                <div class="metric-card" style="border: 2px solid #10b981;">
+                <div class="metric-card" style="border-left: 4px solid #10b981;">
                     <div class="metric-value" style="color: #10b981;">{q2_qty:,.0f}</div>
                     <div class="metric-label">Q2 2026</div>
                 </div>
-                <div class="metric-card" style="border: 2px solid #f59e0b;">
+                <div class="metric-card" style="border-left: 4px solid #f59e0b;">
                     <div class="metric-value" style="color: #f59e0b;">{q3_qty:,.0f}</div>
                     <div class="metric-label">Q3 2026</div>
                 </div>
-                <div class="metric-card" style="border: 2px solid #8b5cf6;">
+                <div class="metric-card" style="border-left: 4px solid #8b5cf6;">
                     <div class="metric-value" style="color: #8b5cf6;">{q4_qty:,.0f}</div>
                     <div class="metric-label">Q4 2026</div>
                 </div>
             </div>
-            
-            <!-- Monthly Breakdown Table -->
-            <div style="margin-bottom: 30px;">
-                <h4 style="color: #f1f5f9; margin-bottom: 15px; font-size: 1rem;">Monthly Breakdown</h4>
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="text-align: left;">Month</th>
-                            <th style="text-align: right;">Quantity</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {monthly_rows}
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- Category by Quarter Table -->
-            <div>
-                <h4 style="color: #f1f5f9; margin-bottom: 15px; font-size: 1rem;">Category by Quarter</h4>
-                <table>
-                    <thead>
-                        <tr>
-                            <th style="text-align: left;">Category</th>
-                            <th style="text-align: right;">Q1</th>
-                            <th style="text-align: right;">Q2</th>
-                            <th style="text-align: right;">Q3</th>
-                            <th style="text-align: right;">Q4</th>
-                            <th style="text-align: right;">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {cat_quarter_rows}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        """
+            """
     
-    # Top SKUs table (quantity-focused)
-    sku_summary = product_data.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
-        'Quantity': 'sum',
-        'Deal ID': 'nunique' if 'Deal ID' in product_data.columns else 'count'
-    }).reset_index()
-    sku_summary.columns = ['SKU', 'Description', 'Category', 'Quantity', 'Deal Count']
-    sku_summary = sku_summary.sort_values('Quantity', ascending=False).head(20)
+    # =========================================================================
+    # RECOMMENDATIONS
+    # =========================================================================
+    recommendations = []
     
-    sku_rows = ""
-    for _, row in sku_summary.iterrows():
-        desc = row['Description'][:50] + '...' if len(str(row['Description'])) > 50 else row['Description']
-        sku_rows += f"""
-        <tr>
-            <td style="font-weight: 600; padding: 10px; font-family: monospace; font-size: 0.85rem;">{row['SKU']}</td>
-            <td style="padding: 10px; color: #64748b; font-size: 0.85rem;">{desc}</td>
-            <td style="padding: 10px;">{row['Category']}</td>
-            <td style="text-align: right; padding: 10px; color: #059669; font-weight: 600;">{row['Quantity']:,.0f}</td>
-            <td style="text-align: center; padding: 10px;">{row['Deal Count']}</td>
-        </tr>"""
+    # Concentrate recommendations
+    if conc_supply_gap > 0:
+        recommendations.append(f"⚠️ <strong>Concentrate Supply Gap:</strong> Total demand ({conc_total_demand:,.0f}) exceeds available supply ({conc_total_available:,.0f}) by {conc_supply_gap:,.0f} units. Consider expediting orders.")
     
-    # Pipeline stage breakdown (if status available)
-    pipeline_rows = ""
-    if 'Close Status' in product_data.columns:
-        stage_summary = product_data.groupby('Close Status').agg({
-            'Quantity': 'sum',
-            'SKU': 'nunique'
-        }).reset_index()
-        stage_summary.columns = ['Status', 'Quantity', 'SKU Count']
-        
-        # Define order
-        status_order = {'Commit': 0, 'Expect': 1, 'Best Case': 2, 'Opportunity': 3, 'Closed Won': 4, 'Closed Lost': 5}
-        stage_summary['Order'] = stage_summary['Status'].map(status_order).fillna(6)
-        stage_summary = stage_summary.sort_values('Order')
-        
-        for _, row in stage_summary.iterrows():
-            status_color = {
-                'Commit': '#10b981',
-                'Expect': '#3b82f6',
-                'Best Case': '#f59e0b',
-                'Opportunity': '#8b5cf6',
-                'Closed Won': '#059669',
-                'Closed Lost': '#ef4444'
-            }.get(row['Status'], '#64748b')
-            
-            pipeline_rows += f"""
-            <tr>
-                <td style="padding: 12px;">
-                    <span style="display: inline-block; padding: 4px 12px; background: {status_color}20; color: {status_color}; border-radius: 20px; font-weight: 600; font-size: 0.85rem;">
-                        {row['Status']}
-                    </span>
-                </td>
-                <td style="text-align: right; padding: 12px; font-weight: 600;">{row['Quantity']:,.0f}</td>
-                <td style="text-align: right; padding: 12px;">{row['SKU Count']}</td>
-            </tr>"""
+    if conc_seized > 0:
+        recommendations.append(f"🚫 <strong>Seized Inventory Impact:</strong> {conc_seized:,.0f} concentrate units are lost due to customs seizure. This represents ${conc_seized * 0.50:,.0f} in potential cost impact (estimated).")
     
-    # Build HTML
+    if conc_months_coverage < 3 and conc_monthly_avg > 0:
+        recommendations.append(f"📉 <strong>Low Coverage:</strong> Current concentrate supply covers only {conc_months_coverage:.1f} months of historical demand. Target 6+ months of coverage.")
+    
+    if conc_recommended_order > 0:
+        recommendations.append(f"📦 <strong>Recommended Order:</strong> Place an order for {conc_recommended_order:,.0f} concentrate units to maintain 6-month supply coverage. With {conc_lead_time} week lead time, order should be placed soon.")
+    
+    # General recommendations
+    if commit_qty > 0:
+        recommendations.append(f"✅ <strong>Commit Pipeline:</strong> {commit_qty:,.0f} units in Commit status represent high-confidence demand. Ensure supply chain is prepared.")
+    
+    if pending_total_qty > pipeline_total_qty and pipeline_total_qty > 0:
+        recommendations.append(f"📊 <strong>Actualized vs Forecast:</strong> Pending orders ({pending_total_qty:,.0f}) exceed pipeline forecast ({pipeline_total_qty:,.0f}). Consider reviewing pipeline accuracy.")
+    
+    recommendation_html = ""
+    for rec in recommendations:
+        recommendation_html += f'<div class="recommendation-item">{rec}</div>'
+    
+    # =========================================================================
+    # BUILD HTML
+    # =========================================================================
     html = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -7670,29 +7632,20 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Product Forecast Report - {date_label}</title>
         <style>
-            * {{
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }}
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
             
             :root {{
                 --primary: #3b82f6;
-                --primary-dark: #1d4ed8;
                 --success: #10b981;
                 --warning: #f59e0b;
                 --danger: #ef4444;
+                --purple: #8b5cf6;
                 --dark: #0f172a;
                 --dark-light: #1e293b;
-                --gray-100: #f8fafc;
-                --gray-200: #e2e8f0;
-                --gray-300: #cbd5e1;
-                --gray-400: #94a3b8;
-                --gray-500: #64748b;
             }}
             
             body {{
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
                 background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
                 color: var(--dark);
                 line-height: 1.6;
@@ -7701,9 +7654,10 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             
             .cover {{
                 background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
-                padding: 60px;
-                border-radius: 24px;
-                margin-bottom: 40px;
+                padding: 50px;
+                border-radius: 20px;
+                margin-bottom: 30px;
+                text-align: center;
                 position: relative;
                 overflow: hidden;
             }}
@@ -7711,295 +7665,352 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             .cover::before {{
                 content: '';
                 position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
+                top: 0; left: 0; right: 0;
                 height: 4px;
-                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--success) 100%);
+                background: linear-gradient(90deg, var(--primary), var(--success), var(--warning));
             }}
             
-            .cover-content {{
-                text-align: center;
-                position: relative;
-                z-index: 2;
-            }}
-            
-            .cover-icon {{
-                font-size: 4rem;
-                margin-bottom: 20px;
-            }}
-            
-            .cover-title {{
-                font-size: 2.5rem;
-                font-weight: 800;
-                color: white;
-                letter-spacing: -1px;
-            }}
-            
-            .cover-subtitle {{
-                font-size: 1.2rem;
-                color: #94a3b8;
-                margin-top: 10px;
-            }}
+            .cover-title {{ font-size: 2.2rem; font-weight: 800; color: white; }}
+            .cover-subtitle {{ font-size: 1.1rem; color: #94a3b8; margin-top: 10px; }}
             
             .cover-meta {{
                 display: flex;
                 justify-content: center;
-                gap: 20px;
-                margin-top: 30px;
+                gap: 15px;
+                margin-top: 25px;
+                flex-wrap: wrap;
             }}
             
             .meta-pill {{
                 background: rgba(255,255,255,0.1);
                 border: 1px solid rgba(255,255,255,0.2);
                 padding: 8px 16px;
-                border-radius: 30px;
+                border-radius: 20px;
                 color: white;
-                font-size: 0.9rem;
+                font-size: 0.85rem;
             }}
             
             .section {{
                 background: white;
-                border-radius: 20px;
-                padding: 40px;
-                margin-bottom: 30px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                border-radius: 16px;
+                padding: 30px;
+                margin-bottom: 25px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.08);
             }}
             
             .section-header {{
                 display: flex;
                 align-items: center;
-                gap: 16px;
-                margin-bottom: 30px;
+                gap: 15px;
+                margin-bottom: 25px;
             }}
             
             .section-icon {{
-                width: 50px;
-                height: 50px;
-                background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-                border-radius: 14px;
+                width: 45px;
+                height: 45px;
+                background: linear-gradient(135deg, var(--primary), #1d4ed8);
+                border-radius: 12px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                font-size: 1.5rem;
+                font-size: 1.3rem;
             }}
             
-            .section-icon.green {{
-                background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
-            }}
+            .section-icon.green {{ background: linear-gradient(135deg, var(--success), #059669); }}
+            .section-icon.amber {{ background: linear-gradient(135deg, var(--warning), #d97706); }}
+            .section-icon.purple {{ background: linear-gradient(135deg, var(--purple), #7c3aed); }}
+            .section-icon.cyan {{ background: linear-gradient(135deg, #06b6d4, #0891b2); }}
             
-            .section-icon.amber {{
-                background: linear-gradient(135deg, var(--warning) 0%, #d97706 100%);
-            }}
-            
-            .section-icon.purple {{
-                background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
-            }}
-            
-            .section-title {{
-                font-size: 1.4rem;
-                font-weight: 700;
-                color: var(--dark);
-            }}
-            
-            .section-subtitle {{
-                font-size: 0.9rem;
-                color: var(--gray-500);
-            }}
+            .section-title {{ font-size: 1.3rem; font-weight: 700; color: var(--dark); }}
+            .section-subtitle {{ font-size: 0.85rem; color: #64748b; }}
             
             .metrics-grid {{
                 display: grid;
-                grid-template-columns: repeat(4, 1fr);
+                grid-template-columns: repeat(3, 1fr);
                 gap: 20px;
-                margin-bottom: 30px;
             }}
             
             .metric-card {{
-                background: var(--gray-100);
-                border-radius: 16px;
-                padding: 24px;
+                background: #f8fafc;
+                border-radius: 12px;
+                padding: 20px;
                 text-align: center;
-                border: 1px solid var(--gray-200);
             }}
             
-            .metric-card.highlight {{
-                background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%);
-                border: none;
+            .metric-value {{ font-size: 1.8rem; font-weight: 700; color: var(--dark); }}
+            .metric-label {{ font-size: 0.8rem; color: #64748b; margin-top: 5px; text-transform: uppercase; letter-spacing: 0.5px; }}
+            
+            .demand-signal {{
+                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+                border-radius: 12px;
+                padding: 25px;
+                margin-bottom: 20px;
             }}
             
-            .metric-card.highlight .metric-value,
-            .metric-card.highlight .metric-label {{
-                color: white !important;
-            }}
-            
-            .metric-card.green {{
-                background: linear-gradient(135deg, var(--success) 0%, #059669 100%);
-                border: none;
-            }}
-            
-            .metric-card.green .metric-value,
-            .metric-card.green .metric-label {{
-                color: white !important;
-            }}
-            
-            .metric-value {{
-                font-size: 2rem;
-                font-weight: 800;
-                color: var(--dark);
-                letter-spacing: -1px;
-            }}
-            
-            .metric-label {{
-                font-size: 0.8rem;
-                color: var(--gray-500);
+            .demand-signal-title {{
+                color: #94a3b8;
+                font-size: 0.75rem;
                 text-transform: uppercase;
-                letter-spacing: 0.5px;
-                margin-top: 8px;
-                font-weight: 600;
+                letter-spacing: 1px;
+                margin-bottom: 8px;
             }}
+            
+            .demand-signal-value {{ font-size: 2rem; font-weight: 700; }}
+            .demand-signal-desc {{ color: #64748b; font-size: 0.85rem; margin-top: 5px; }}
             
             table {{
                 width: 100%;
                 border-collapse: collapse;
-                margin-top: 20px;
+                margin-top: 15px;
             }}
             
             th {{
-                background: var(--dark);
-                color: white;
-                padding: 14px;
+                background: #f1f5f9;
+                padding: 12px;
                 text-align: left;
                 font-weight: 600;
                 font-size: 0.85rem;
-                text-transform: uppercase;
-                letter-spacing: 0.5px;
-            }}
-            
-            th:first-child {{
-                border-radius: 10px 0 0 0;
-            }}
-            
-            th:last-child {{
-                border-radius: 0 10px 0 0;
+                color: #475569;
+                border-bottom: 2px solid #e2e8f0;
             }}
             
             td {{
-                padding: 12px 14px;
-                border-bottom: 1px solid var(--gray-200);
+                padding: 12px;
+                border-bottom: 1px solid #f1f5f9;
+                font-size: 0.9rem;
             }}
             
-            tr:hover td {{
-                background: var(--gray-100);
+            tr:hover {{ background: #f8fafc; }}
+            
+            .recommendation-item {{
+                background: #fffbeb;
+                border-left: 4px solid var(--warning);
+                padding: 15px 20px;
+                margin-bottom: 12px;
+                border-radius: 0 8px 8px 0;
+                font-size: 0.9rem;
+                line-height: 1.5;
             }}
             
-            tr:last-child td:first-child {{
-                border-radius: 0 0 0 10px;
+            .supply-calc {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 30px;
+                margin-top: 20px;
             }}
             
-            tr:last-child td:last-child {{
-                border-radius: 0 0 10px 0;
+            .supply-box {{
+                background: #f8fafc;
+                border-radius: 12px;
+                padding: 20px;
             }}
+            
+            .supply-box-title {{
+                font-size: 0.8rem;
+                color: #64748b;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                margin-bottom: 15px;
+            }}
+            
+            .supply-row {{
+                display: flex;
+                justify-content: space-between;
+                padding: 8px 0;
+                border-bottom: 1px solid #e2e8f0;
+            }}
+            
+            .supply-row:last-child {{ border-bottom: none; font-weight: 700; }}
             
             .footer {{
-                margin-top: 40px;
-                background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
-                padding: 40px;
                 text-align: center;
-                color: white;
-                border-radius: 20px;
-            }}
-            
-            .footer::before {{
-                content: '';
-                display: block;
-                height: 4px;
-                background: linear-gradient(90deg, var(--primary) 0%, #06b6d4 50%, var(--success) 100%);
-                margin: -40px -40px 30px -40px;
-                border-radius: 20px 20px 0 0;
+                padding: 40px;
+                color: #64748b;
             }}
             
             @media print {{
-                body {{
-                    padding: 0;
-                }}
-                .section {{
-                    page-break-inside: avoid;
-                }}
+                body {{ padding: 20px; }}
+                .section {{ page-break-inside: avoid; }}
             }}
         </style>
     </head>
     <body>
+        <!-- COVER -->
         <div class="cover">
-            <div class="cover-content">
-                <div class="cover-icon">📦</div>
-                <div class="cover-title">Product Quantity Forecast</div>
-                <div class="cover-subtitle">Quantity-Based Pipeline & SKU-Level Analysis</div>
-                <div class="cover-meta">
-                    <div class="meta-pill">📅 {generated_date}</div>
-                    <div class="meta-pill">👤 {rep_name}</div>
-                    <div class="meta-pill">📊 {date_label}</div>
-                </div>
+            <div style="font-size: 3rem; margin-bottom: 15px;">📦</div>
+            <div class="cover-title">Product Forecast Report</div>
+            <div class="cover-subtitle">Comprehensive Demand Analysis & Supply Planning</div>
+            <div class="cover-meta">
+                <span class="meta-pill">📅 {date_label}</span>
+                <span class="meta-pill">👤 {rep_name}</span>
+                <span class="meta-pill">🕐 Generated {generated_date}</span>
             </div>
         </div>
         
+        <!-- EXECUTIVE SUMMARY - THREE DEMAND SIGNALS -->
         <div class="section">
             <div class="section-header">
                 <div class="section-icon">📊</div>
                 <div>
                     <div class="section-title">Executive Summary</div>
-                    <div class="section-subtitle">Quantity forecast overview and key metrics</div>
+                    <div class="section-subtitle">Three demand signals: Pipeline → Pending → Shipped</div>
                 </div>
             </div>
             
             <div class="metrics-grid">
-                <div class="metric-card highlight">
-                    <div class="metric-value">{total_quantity:,.0f}</div>
-                    <div class="metric-label">Total Forecasted Units</div>
+                <div class="demand-signal">
+                    <div class="demand-signal-title">📈 Pipeline Forecast</div>
+                    <div class="demand-signal-value" style="color: #60a5fa;">{pipeline_total_qty:,.0f}</div>
+                    <div class="demand-signal-desc">Future demand from {pipeline_unique_deals} deals</div>
                 </div>
-                <div class="metric-card green">
-                    <div class="metric-value">{unique_skus}</div>
-                    <div class="metric-label">Unique SKUs</div>
+                <div class="demand-signal">
+                    <div class="demand-signal-title">📦 Pending Orders</div>
+                    <div class="demand-signal-value" style="color: #fbbf24;">{pending_total_qty:,.0f}</div>
+                    <div class="demand-signal-desc">Awaiting fulfillment (${pending_total_value:,.0f})</div>
                 </div>
-                <div class="metric-card">
-                    <div class="metric-value">{unique_deals}</div>
-                    <div class="metric-label">Active Deals</div>
-                </div>
-                <div class="metric-card">
-                    <div class="metric-value">{unique_categories}</div>
-                    <div class="metric-label">Product Categories</div>
+                <div class="demand-signal">
+                    <div class="demand-signal-title">✅ YTD Shipped</div>
+                    <div class="demand-signal-value" style="color: #4ade80;">{historical_total_qty:,.0f}</div>
+                    <div class="demand-signal-desc">{current_year} invoiced (${historical_total_revenue:,.0f})</div>
                 </div>
             </div>
             
-            <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr);">
-                <div class="metric-card" style="background: linear-gradient(135deg, #10b98120 0%, #05966920 100%); border: 2px solid #10b981;">
-                    <div class="metric-value" style="color: #10b981;">{commit_qty:,.0f}</div>
-                    <div class="metric-label">Commit</div>
+            <!-- Pipeline Status Breakdown -->
+            <div style="margin-top: 25px;">
+                <div style="font-size: 0.85rem; color: #64748b; margin-bottom: 10px; font-weight: 600;">Pipeline by Status:</div>
+                <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr);">
+                    <div class="metric-card" style="border-top: 3px solid #10b981;">
+                        <div class="metric-value" style="color: #10b981; font-size: 1.4rem;">{commit_qty:,.0f}</div>
+                        <div class="metric-label">Commit</div>
+                    </div>
+                    <div class="metric-card" style="border-top: 3px solid #3b82f6;">
+                        <div class="metric-value" style="color: #3b82f6; font-size: 1.4rem;">{expect_qty:,.0f}</div>
+                        <div class="metric-label">Expect</div>
+                    </div>
+                    <div class="metric-card" style="border-top: 3px solid #f59e0b;">
+                        <div class="metric-value" style="color: #f59e0b; font-size: 1.4rem;">{bestcase_qty:,.0f}</div>
+                        <div class="metric-label">Best Case</div>
+                    </div>
+                    <div class="metric-card" style="border-top: 3px solid #8b5cf6;">
+                        <div class="metric-value" style="color: #8b5cf6; font-size: 1.4rem;">{opportunity_qty:,.0f}</div>
+                        <div class="metric-label">Opportunity</div>
+                    </div>
                 </div>
-                <div class="metric-card" style="background: linear-gradient(135deg, #3b82f620 0%, #1d4ed820 100%); border: 2px solid #3b82f6;">
-                    <div class="metric-value" style="color: #3b82f6;">{expect_qty:,.0f}</div>
-                    <div class="metric-label">Expect</div>
+            </div>
+            
+            {quarterly_section}
+        </div>
+        
+        <!-- CONCENTRATE SUPPLY PLANNING -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon cyan">🔬</div>
+                <div>
+                    <div class="section-title">Concentrate Supply Planning</div>
+                    <div class="section-subtitle">Inventory position, demand, and order recommendations</div>
                 </div>
-                <div class="metric-card" style="background: linear-gradient(135deg, #f59e0b20 0%, #d9770620 100%); border: 2px solid #f59e0b;">
-                    <div class="metric-value" style="color: #f59e0b;">{bestcase_qty:,.0f}</div>
-                    <div class="metric-label">Best Case</div>
+            </div>
+            
+            <!-- Concentrate Demand -->
+            <div class="metrics-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom: 25px;">
+                <div class="metric-card" style="border-left: 4px solid #3b82f6;">
+                    <div class="metric-value" style="color: #3b82f6;">{conc_pipeline:,.0f}</div>
+                    <div class="metric-label">Pipeline</div>
                 </div>
-                <div class="metric-card" style="background: linear-gradient(135deg, #8b5cf620 0%, #7c3aed20 100%); border: 2px solid #8b5cf6;">
-                    <div class="metric-value" style="color: #8b5cf6;">{opportunity_qty:,.0f}</div>
-                    <div class="metric-label">Opportunity</div>
+                <div class="metric-card" style="border-left: 4px solid #f59e0b;">
+                    <div class="metric-value" style="color: #f59e0b;">{conc_pending:,.0f}</div>
+                    <div class="metric-label">Pending Orders</div>
+                </div>
+                <div class="metric-card" style="border-left: 4px solid #10b981;">
+                    <div class="metric-value" style="color: #10b981;">{conc_historical_ytd:,.0f}</div>
+                    <div class="metric-label">YTD Shipped</div>
+                </div>
+                <div class="metric-card" style="border-left: 4px solid #8b5cf6;">
+                    <div class="metric-value" style="color: #8b5cf6;">{conc_monthly_avg:,.0f}</div>
+                    <div class="metric-label">Avg/Month</div>
+                </div>
+            </div>
+            
+            <div class="supply-calc">
+                <div class="supply-box">
+                    <div class="supply-box-title">📦 Supply Position</div>
+                    <div class="supply-row">
+                        <span>On Hand</span>
+                        <span style="color: #10b981;">{conc_on_hand:,.0f}</span>
+                    </div>
+                    <div class="supply-row">
+                        <span>In Transit</span>
+                        <span style="color: #3b82f6;">{conc_in_transit:,.0f}</span>
+                    </div>
+                    <div class="supply-row" style="color: #ef4444;">
+                        <span>Seized/Lost</span>
+                        <span>({conc_seized:,.0f})</span>
+                    </div>
+                    <div class="supply-row" style="background: #f0fdf4; margin: 10px -20px -20px; padding: 15px 20px; border-radius: 0 0 12px 12px;">
+                        <span style="color: #059669;">Total Available</span>
+                        <span style="color: #059669;">{conc_total_available:,.0f}</span>
+                    </div>
+                </div>
+                
+                <div class="supply-box">
+                    <div class="supply-box-title">📊 Demand vs Supply</div>
+                    <div class="supply-row">
+                        <span>Pipeline Demand</span>
+                        <span>{conc_pipeline:,.0f}</span>
+                    </div>
+                    <div class="supply-row">
+                        <span>Pending Demand</span>
+                        <span>{conc_pending:,.0f}</span>
+                    </div>
+                    <div class="supply-row">
+                        <span>Total Demand</span>
+                        <span style="font-weight: 700;">{conc_total_demand:,.0f}</span>
+                    </div>
+                    <div class="supply-row" style="background: {'#fef2f2' if conc_supply_gap > 0 else '#f0fdf4'}; margin: 10px -20px -20px; padding: 15px 20px; border-radius: 0 0 12px 12px;">
+                        <span style="color: {'#dc2626' if conc_supply_gap > 0 else '#059669'};">Supply {'Gap' if conc_supply_gap > 0 else 'Surplus'}</span>
+                        <span style="color: {'#dc2626' if conc_supply_gap > 0 else '#059669'};">{abs(conc_supply_gap):,.0f}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div style="margin-top: 25px; background: #f8fafc; border-radius: 12px; padding: 20px;">
+                <div style="display: flex; justify-content: space-between; flex-wrap: wrap; gap: 20px;">
+                    <div>
+                        <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase;">Months of Coverage</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: {'#ef4444' if conc_months_coverage < 3 else '#10b981'};">{conc_months_coverage:.1f}</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase;">Lead Time</div>
+                        <div style="font-size: 1.5rem; font-weight: 700;">{conc_lead_time} weeks</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75rem; color: #64748b; text-transform: uppercase;">Recommended Order</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #3b82f6;">{conc_recommended_order:,.0f}</div>
+                    </div>
                 </div>
             </div>
         </div>
         
-        {concentrate_section}
+        <!-- RECOMMENDATIONS -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon amber">💡</div>
+                <div>
+                    <div class="section-title">Recommendations & Alerts</div>
+                    <div class="section-subtitle">Action items based on demand and supply analysis</div>
+                </div>
+            </div>
+            
+            {recommendation_html if recommendation_html else '<div style="color: #64748b; text-align: center; padding: 20px;">✅ No critical alerts at this time</div>'}
+        </div>
         
-        {monthly_quarterly_section}
-        
+        <!-- CATEGORY BREAKDOWN -->
         <div class="section">
             <div class="section-header">
                 <div class="section-icon green">📦</div>
                 <div>
                     <div class="section-title">Category Breakdown</div>
-                    <div class="section-subtitle">Product pipeline quantities by category</div>
+                    <div class="section-subtitle">Pipeline, Pending, and YTD by product category</div>
                 </div>
             </div>
             
@@ -8007,9 +8018,10 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 <thead>
                     <tr>
                         <th style="text-align: left;">Category</th>
-                        <th style="text-align: right;">Quantity</th>
-                        <th style="text-align: right;">SKUs</th>
-                        <th style="text-align: right;">Share</th>
+                        <th style="text-align: right; color: #3b82f6;">Pipeline</th>
+                        <th style="text-align: right; color: #f59e0b;">Pending</th>
+                        <th style="text-align: right; color: #10b981;">YTD Actual</th>
+                        <th style="text-align: right;">Total Demand</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -8018,37 +8030,13 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             </table>
         </div>
         
-        {f'''
-        <div class="section">
-            <div class="section-header">
-                <div class="section-icon amber">📈</div>
-                <div>
-                    <div class="section-title">Quantity by Pipeline Status</div>
-                    <div class="section-subtitle">Deal stages and expected close timing</div>
-                </div>
-            </div>
-            
-            <table>
-                <thead>
-                    <tr>
-                        <th style="text-align: left;">Status</th>
-                        <th style="text-align: right;">Quantity</th>
-                        <th style="text-align: right;">SKUs</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {pipeline_rows}
-                </tbody>
-            </table>
-        </div>
-        ''' if pipeline_rows else ''}
-        
+        <!-- TOP PIPELINE SKUS -->
         <div class="section">
             <div class="section-header">
                 <div class="section-icon purple">🏆</div>
                 <div>
-                    <div class="section-title">Top SKUs by Quantity</div>
-                    <div class="section-subtitle">Highest volume products in pipeline</div>
+                    <div class="section-title">Top Pipeline SKUs</div>
+                    <div class="section-subtitle">Highest volume products in forecast</div>
                 </div>
             </div>
             
@@ -8058,8 +8046,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                         <th style="text-align: left;">SKU</th>
                         <th style="text-align: left;">Description</th>
                         <th style="text-align: left;">Category</th>
-                        <th style="text-align: right;">Qty</th>
-                        <th style="text-align: center;">Deals</th>
+                        <th style="text-align: right;">Quantity</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -8068,14 +8055,40 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             </table>
         </div>
         
+        {f'''
+        <!-- TOP PENDING ORDER SKUS -->
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon amber">📋</div>
+                <div>
+                    <div class="section-title">Top Pending Order SKUs</div>
+                    <div class="section-subtitle">SKUs awaiting fulfillment</div>
+                </div>
+            </div>
+            
+            <table>
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">SKU</th>
+                        <th style="text-align: right;">Qty Pending</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {pending_sku_rows}
+                </tbody>
+            </table>
+        </div>
+        ''' if pending_sku_rows else ''}
+        
+        <!-- FOOTER -->
         <div class="footer">
-            <div style="font-size: 1.4rem; font-weight: 700; margin-bottom: 10px;">
-                Product Quantity Forecast
+            <div style="font-size: 1.2rem; font-weight: 700; margin-bottom: 10px;">
+                Product Forecast Report
             </div>
-            <div style="font-size: 0.9rem; opacity: 0.6;">
-                Generated on {generated_date}
+            <div style="font-size: 0.85rem; opacity: 0.6;">
+                Generated on {generated_date} | {date_label} | {rep_name}
             </div>
-            <div style="margin-top: 20px; font-size: 0.8rem; opacity: 0.4; text-transform: uppercase; letter-spacing: 2px;">
+            <div style="margin-top: 20px; font-size: 0.75rem; opacity: 0.4; text-transform: uppercase; letter-spacing: 2px;">
                 Calyx Containers
             </div>
         </div>
@@ -8802,12 +8815,75 @@ def render_product_forecasting_tool():
             """, unsafe_allow_html=True)
     
     # =========================================================================
+    # CONCENTRATE SUPPLY PLANNING INPUTS
+    # =========================================================================
+    st.markdown("---")
+    st.markdown("### 🚢 Concentrate Supply Planning")
+    st.caption("Enter current inventory status for concentrate supply calculations")
+    
+    col_inv1, col_inv2, col_inv3, col_inv4 = st.columns(4)
+    
+    with col_inv1:
+        conc_in_transit = st.number_input(
+            "📦 In Transit (units)",
+            min_value=0,
+            value=300000,
+            step=10000,
+            help="Concentrate units currently being shipped from international supplier"
+        )
+    
+    with col_inv2:
+        conc_seized = st.number_input(
+            "🚫 Seized/Lost (units)",
+            min_value=0,
+            value=400000,
+            step=10000,
+            help="Concentrate units seized at customs or otherwise unrecoverable"
+        )
+    
+    with col_inv3:
+        conc_on_hand = st.number_input(
+            "📍 On Hand (units)",
+            min_value=0,
+            value=0,
+            step=10000,
+            help="Concentrate units currently in warehouse"
+        )
+    
+    with col_inv4:
+        conc_lead_time = st.number_input(
+            "⏱️ Lead Time (weeks)",
+            min_value=1,
+            value=12,
+            step=1,
+            help="Typical lead time for new concentrate orders"
+        )
+    
+    # Build concentrate inventory dict
+    concentrate_inventory = {
+        'in_transit': conc_in_transit,
+        'seized': conc_seized,
+        'on_hand': conc_on_hand,
+        'lead_time_weeks': conc_lead_time,
+        'total_available': conc_in_transit + conc_on_hand,
+        'total_lost': conc_seized
+    }
+    
+    # =========================================================================
     # DOWNLOAD BUTTON
     # =========================================================================
     st.markdown("---")
     
-    # Generate HTML report (using forecast_df with concentrate bases only)
-    html_report = create_product_forecast_html(forecast_df, date_label, selected_rep, pairing_info)
+    # Generate HTML report (using all data sources)
+    html_report = create_product_forecast_html(
+        product_data=forecast_df, 
+        date_label=date_label, 
+        rep_name=selected_rep, 
+        pairing_info=pairing_info,
+        pending_orders_df=pending_orders_df,
+        historical_df=ytd_actuals_df,
+        concentrate_inventory=concentrate_inventory
+    )
     
     st.download_button(
         label="📥 Download Product Forecast Report (HTML)",
