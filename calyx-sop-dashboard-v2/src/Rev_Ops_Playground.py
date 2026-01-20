@@ -8022,6 +8022,383 @@ def render_yearly_planning_2026():
         </div>
     """, unsafe_allow_html=True)
     
+    # =========================================================================
+    # COMPREHENSIVE REVENUE BREAKDOWN - Actuals + Pending + Deals
+    # =========================================================================
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">📊</span>
+            <span class="section-title">Comprehensive Revenue Breakdown</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Context box
+    st.markdown("""
+        <div style="background: rgba(99, 102, 241, 0.1); border-left: 4px solid #6366f1; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #a5b4fc;">📊 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Combined view of Realized Revenue + Pending Orders + HubSpot Pipeline, broken down by Category and Pipeline.</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Use the filters to adjust which HubSpot deal stages to include.</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # HubSpot Deal Stage Filter
+    st.markdown("**HubSpot Deal Stage Filter:**")
+    
+    # Available stages - check what's in the data (try both column names)
+    available_stages = []
+    stage_column = None
+    
+    if not deals_df.empty:
+        if 'Close Status' in deals_df.columns:
+            stage_column = 'Close Status'
+            available_stages = deals_df['Close Status'].dropna().unique().tolist()
+        elif 'Deal Stage' in deals_df.columns:
+            stage_column = 'Deal Stage'
+            available_stages = deals_df['Deal Stage'].dropna().unique().tolist()
+    
+    # Common stage names to look for (in priority order)
+    priority_stages = ['Commit', 'Best Case', 'Expect', 'Opportunity']
+    stage_options = [s for s in priority_stages if s in available_stages]
+    # Add any other stages not in priority list
+    other_stages = [s for s in available_stages if s not in priority_stages and 'Closed' not in str(s) and 'Won' not in str(s) and 'Lost' not in str(s)]
+    stage_options.extend(other_stages)
+    
+    if stage_options:
+        selected_stages = st.multiselect(
+            "Select deal stages to include:",
+            options=stage_options,
+            default=[s for s in ['Commit', 'Best Case', 'Expect'] if s in stage_options],  # Default to higher confidence stages
+            key="revenue_breakdown_stages",
+            help="Select which HubSpot deal stages to include in the pipeline view"
+        )
+    else:
+        selected_stages = []
+        st.info("No HubSpot deal stages available")
+    
+    # Calculate data for each source
+    # 1. Actuals (from line_items_df)
+    actuals_by_category = pd.DataFrame()
+    actuals_by_pipeline = pd.DataFrame()
+    
+    if not line_items_df.empty:
+        year_filtered = line_items_df.copy()
+        if 'Date' in year_filtered.columns:
+            year_filtered = year_filtered[year_filtered['Date'].dt.year == selected_year]
+        
+        if 'Forecast Category' in year_filtered.columns:
+            actuals_by_category = year_filtered.groupby('Forecast Category')['Amount'].sum().reset_index()
+            actuals_by_category.columns = ['Category', 'Actuals']
+        
+        if 'Forecast Pipeline' in year_filtered.columns:
+            actuals_by_pipeline = year_filtered.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+            actuals_by_pipeline.columns = ['Pipeline', 'Actuals']
+    
+    # 2. Pending Sales Orders
+    pending_by_category = pd.DataFrame()
+    pending_by_pipeline = pd.DataFrame()
+    
+    if not sales_orders_df.empty:
+        pending_orders = sales_orders_df.copy()
+        if 'Status' in pending_orders.columns:
+            pending_orders = pending_orders[
+                pending_orders['Status'].str.contains('Pending|Partial', case=False, na=False)
+            ]
+        
+        if 'Forecast Category' in pending_orders.columns:
+            pending_by_category = pending_orders.groupby('Forecast Category')['Amount'].sum().reset_index()
+            pending_by_category.columns = ['Category', 'Pending']
+        
+        if 'Forecast Pipeline' in pending_orders.columns:
+            pending_by_pipeline = pending_orders.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+            pending_by_pipeline.columns = ['Pipeline', 'Pending']
+    
+    # 3. HubSpot Deals (filtered by selected stages)
+    deals_by_category = pd.DataFrame()
+    deals_by_pipeline = pd.DataFrame()
+    
+    if not deals_df.empty and selected_stages and stage_column:
+        filtered_deals = deals_df.copy()
+        
+        # Filter by selected stages using the detected column
+        stage_mask = filtered_deals[stage_column].isin(selected_stages)
+        filtered_deals = filtered_deals[stage_mask]
+        
+        if 'Forecast Category' in filtered_deals.columns:
+            deals_by_category = filtered_deals.groupby('Forecast Category')['Amount'].sum().reset_index()
+            deals_by_category.columns = ['Category', 'Deals']
+        
+        if 'Forecast Pipeline' in filtered_deals.columns:
+            deals_by_pipeline = filtered_deals.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+            deals_by_pipeline.columns = ['Pipeline', 'Deals']
+    
+    # ===== BREAKDOWN BY CATEGORY =====
+    st.markdown("### By Product Category")
+    
+    # Merge all category data
+    all_categories = list(set(
+        list(actuals_by_category['Category'].unique() if not actuals_by_category.empty else []) +
+        list(pending_by_category['Category'].unique() if not pending_by_category.empty else []) +
+        list(deals_by_category['Category'].unique() if not deals_by_category.empty else [])
+    ))
+    
+    if all_categories:
+        category_combined = pd.DataFrame({'Category': all_categories})
+        
+        if not actuals_by_category.empty:
+            category_combined = category_combined.merge(actuals_by_category, on='Category', how='left')
+        else:
+            category_combined['Actuals'] = 0
+            
+        if not pending_by_category.empty:
+            category_combined = category_combined.merge(pending_by_category, on='Category', how='left')
+        else:
+            category_combined['Pending'] = 0
+            
+        if not deals_by_category.empty:
+            category_combined = category_combined.merge(deals_by_category, on='Category', how='left')
+        else:
+            category_combined['Deals'] = 0
+        
+        category_combined = category_combined.fillna(0)
+        category_combined['Total Pipeline'] = category_combined['Actuals'] + category_combined['Pending'] + category_combined['Deals']
+        category_combined = category_combined.sort_values('Total Pipeline', ascending=False)
+        
+        # Create stacked bar chart
+        fig_cat = go.Figure()
+        
+        fig_cat.add_trace(go.Bar(
+            name='Actuals (Invoiced)',
+            x=category_combined['Category'],
+            y=category_combined['Actuals'],
+            marker_color='#10b981',
+            text=[f"${x:,.0f}" for x in category_combined['Actuals']],
+            textposition='inside',
+            textfont=dict(color='white', size=10),
+            hovertemplate='<b>%{x}</b><br>Actuals: $%{y:,.0f}<extra></extra>'
+        ))
+        
+        fig_cat.add_trace(go.Bar(
+            name='Pending Orders',
+            x=category_combined['Category'],
+            y=category_combined['Pending'],
+            marker_color='#f59e0b',
+            text=[f"${x:,.0f}" if x > 0 else "" for x in category_combined['Pending']],
+            textposition='inside',
+            textfont=dict(color='white', size=10),
+            hovertemplate='<b>%{x}</b><br>Pending: $%{y:,.0f}<extra></extra>'
+        ))
+        
+        fig_cat.add_trace(go.Bar(
+            name=f'HubSpot Deals ({", ".join(selected_stages[:2])}{"..." if len(selected_stages) > 2 else ""})',
+            x=category_combined['Category'],
+            y=category_combined['Deals'],
+            marker_color='#8b5cf6',
+            text=[f"${x:,.0f}" if x > 0 else "" for x in category_combined['Deals']],
+            textposition='inside',
+            textfont=dict(color='white', size=10),
+            hovertemplate='<b>%{x}</b><br>Deals: $%{y:,.0f}<extra></extra>'
+        ))
+        
+        fig_cat.update_layout(
+            barmode='stack',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#94a3b8'),
+            xaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickangle=-45),
+            yaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickformat='$,.0f'),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+            height=400,
+            margin=dict(t=60, b=100, l=80, r=40)
+        )
+        
+        st.plotly_chart(fig_cat, use_container_width=True)
+        
+        # Data table
+        with st.expander("📋 View Category Breakdown Table"):
+            display_cat = category_combined.copy()
+            display_cat['Actuals'] = display_cat['Actuals'].apply(lambda x: f"${x:,.0f}")
+            display_cat['Pending'] = display_cat['Pending'].apply(lambda x: f"${x:,.0f}")
+            display_cat['Deals'] = display_cat['Deals'].apply(lambda x: f"${x:,.0f}")
+            display_cat['Total Pipeline'] = display_cat['Total Pipeline'].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(display_cat, use_container_width=True, hide_index=True)
+    else:
+        st.info("No category data available")
+    
+    # ===== BREAKDOWN BY PIPELINE =====
+    st.markdown("### By Sales Pipeline")
+    
+    # Merge all pipeline data
+    all_pipelines = list(set(
+        list(actuals_by_pipeline['Pipeline'].unique() if not actuals_by_pipeline.empty else []) +
+        list(pending_by_pipeline['Pipeline'].unique() if not pending_by_pipeline.empty else []) +
+        list(deals_by_pipeline['Pipeline'].unique() if not deals_by_pipeline.empty else [])
+    ))
+    
+    # Filter to known pipelines
+    known_pipelines = [p for p in all_pipelines if p in FORECAST_PIPELINES]
+    other_pipelines = [p for p in all_pipelines if p not in FORECAST_PIPELINES and p != 'Unmapped' and pd.notna(p)]
+    
+    if known_pipelines or other_pipelines:
+        pipeline_list = known_pipelines + other_pipelines
+        pipeline_combined = pd.DataFrame({'Pipeline': pipeline_list})
+        
+        if not actuals_by_pipeline.empty:
+            pipeline_combined = pipeline_combined.merge(actuals_by_pipeline, on='Pipeline', how='left')
+        else:
+            pipeline_combined['Actuals'] = 0
+            
+        if not pending_by_pipeline.empty:
+            pipeline_combined = pipeline_combined.merge(pending_by_pipeline, on='Pipeline', how='left')
+        else:
+            pipeline_combined['Pending'] = 0
+            
+        if not deals_by_pipeline.empty:
+            pipeline_combined = pipeline_combined.merge(deals_by_pipeline, on='Pipeline', how='left')
+        else:
+            pipeline_combined['Deals'] = 0
+        
+        pipeline_combined = pipeline_combined.fillna(0)
+        pipeline_combined['Total Pipeline'] = pipeline_combined['Actuals'] + pipeline_combined['Pending'] + pipeline_combined['Deals']
+        pipeline_combined = pipeline_combined.sort_values('Total Pipeline', ascending=True)  # For horizontal bar
+        
+        # Create horizontal stacked bar chart
+        fig_pipe = go.Figure()
+        
+        fig_pipe.add_trace(go.Bar(
+            name='Actuals (Invoiced)',
+            y=pipeline_combined['Pipeline'],
+            x=pipeline_combined['Actuals'],
+            orientation='h',
+            marker_color='#10b981',
+            text=[f"${x:,.0f}" for x in pipeline_combined['Actuals']],
+            textposition='inside',
+            textfont=dict(color='white', size=10),
+            hovertemplate='<b>%{y}</b><br>Actuals: $%{x:,.0f}<extra></extra>'
+        ))
+        
+        fig_pipe.add_trace(go.Bar(
+            name='Pending Orders',
+            y=pipeline_combined['Pipeline'],
+            x=pipeline_combined['Pending'],
+            orientation='h',
+            marker_color='#f59e0b',
+            text=[f"${x:,.0f}" if x > 0 else "" for x in pipeline_combined['Pending']],
+            textposition='inside',
+            textfont=dict(color='white', size=10),
+            hovertemplate='<b>%{y}</b><br>Pending: $%{x:,.0f}<extra></extra>'
+        ))
+        
+        fig_pipe.add_trace(go.Bar(
+            name=f'HubSpot Deals',
+            y=pipeline_combined['Pipeline'],
+            x=pipeline_combined['Deals'],
+            orientation='h',
+            marker_color='#8b5cf6',
+            text=[f"${x:,.0f}" if x > 0 else "" for x in pipeline_combined['Deals']],
+            textposition='inside',
+            textfont=dict(color='white', size=10),
+            hovertemplate='<b>%{y}</b><br>Deals: $%{x:,.0f}<extra></extra>'
+        ))
+        
+        fig_pipe.update_layout(
+            barmode='stack',
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#94a3b8'),
+            xaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickformat='$,.0f'),
+            yaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)'),
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='center', x=0.5),
+            height=350,
+            margin=dict(t=60, b=40, l=120, r=40)
+        )
+        
+        st.plotly_chart(fig_pipe, use_container_width=True)
+        
+        # Data table
+        with st.expander("📋 View Pipeline Breakdown Table"):
+            display_pipe = pipeline_combined.sort_values('Total Pipeline', ascending=False).copy()
+            display_pipe['Actuals'] = display_pipe['Actuals'].apply(lambda x: f"${x:,.0f}")
+            display_pipe['Pending'] = display_pipe['Pending'].apply(lambda x: f"${x:,.0f}")
+            display_pipe['Deals'] = display_pipe['Deals'].apply(lambda x: f"${x:,.0f}")
+            display_pipe['Total Pipeline'] = display_pipe['Total Pipeline'].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(display_pipe, use_container_width=True, hide_index=True)
+    else:
+        st.info("No pipeline data available")
+    
+    # Summary totals
+    st.markdown("### 📈 Summary Totals")
+    
+    total_actuals = actuals_by_category['Actuals'].sum() if not actuals_by_category.empty else 0
+    total_pending = pending_by_category['Pending'].sum() if not pending_by_category.empty else 0
+    total_deals = deals_by_category['Deals'].sum() if not deals_by_category.empty else 0
+    grand_total = total_actuals + total_pending + total_deals
+    
+    sum_col1, sum_col2, sum_col3, sum_col4 = st.columns(4)
+    
+    with sum_col1:
+        st.markdown(f"""
+            <div class="glass-card" style="border-left: 4px solid #10b981;">
+                <div class="metric-label">Actuals (Invoiced)</div>
+                <div class="metric-value" style="color: #10b981;">${total_actuals:,.0f}</div>
+                <div class="metric-delta neutral">Realized revenue</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with sum_col2:
+        st.markdown(f"""
+            <div class="glass-card" style="border-left: 4px solid #f59e0b;">
+                <div class="metric-label">Pending Orders</div>
+                <div class="metric-value" style="color: #f59e0b;">${total_pending:,.0f}</div>
+                <div class="metric-delta neutral">High confidence</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with sum_col3:
+        st.markdown(f"""
+            <div class="glass-card" style="border-left: 4px solid #8b5cf6;">
+                <div class="metric-label">HubSpot Deals</div>
+                <div class="metric-value" style="color: #8b5cf6;">${total_deals:,.0f}</div>
+                <div class="metric-delta neutral">{len(selected_stages)} stage(s) selected</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    with sum_col4:
+        st.markdown(f"""
+            <div class="glass-card" style="border-left: 4px solid #6366f1;">
+                <div class="metric-label">Total Pipeline</div>
+                <div class="metric-value" style="color: #6366f1;">${grand_total:,.0f}</div>
+                <div class="metric-delta neutral">All sources combined</div>
+            </div>
+        """, unsafe_allow_html=True)
+    
+    # Show deal stage breakdown if deals exist
+    if not deals_df.empty and stage_column and selected_stages:
+        with st.expander("📊 HubSpot Deals by Stage"):
+            filtered_deals_for_summary = deals_df[deals_df[stage_column].isin(selected_stages)]
+            if not filtered_deals_for_summary.empty:
+                stage_summary = filtered_deals_for_summary.groupby(stage_column).agg({
+                    'Amount': ['sum', 'count']
+                }).reset_index()
+                stage_summary.columns = ['Stage', 'Total Amount', 'Deal Count']
+                stage_summary = stage_summary.sort_values('Total Amount', ascending=False)
+                
+                # Add confidence indicators
+                confidence_map = {
+                    'Commit': '🟢 High',
+                    'Best Case': '🟡 Medium-High', 
+                    'Expect': '🟠 Medium',
+                    'Opportunity': '🔴 Variable'
+                }
+                stage_summary['Confidence'] = stage_summary['Stage'].map(confidence_map).fillna('⚪ Unknown')
+                
+                # Format for display
+                display_stages = stage_summary.copy()
+                display_stages['Total Amount'] = display_stages['Total Amount'].apply(lambda x: f"${x:,.0f}")
+                display_stages['Deal Count'] = display_stages['Deal Count'].apply(lambda x: f"{int(x):,}")
+                
+                st.dataframe(display_stages[['Stage', 'Confidence', 'Deal Count', 'Total Amount']], 
+                           use_container_width=True, hide_index=True)
+    
     # Data Quality Check
     st.markdown("""
         <div class="section-header">
