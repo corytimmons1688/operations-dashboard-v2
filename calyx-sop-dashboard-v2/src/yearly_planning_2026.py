@@ -7454,7 +7454,7 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     
     # =========================================================================
     # 2025 HISTORICAL DEMAND (for validation)
-    # Uses ALL concentrates to match dashboard display
+    # Filter to concentrate BASES only to match dashboard (not lids/labels)
     # =========================================================================
     conc_2025_total = 0
     conc_2025_monthly_avg = 0
@@ -7463,8 +7463,17 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     conc_yoy_growth = 0
     
     if not historical_df.empty and 'Product Category' in historical_df.columns and 'Date' in historical_df.columns:
-        # Filter to ALL concentrates (bases + lids + labels) to match dashboard
+        # Filter to concentrate BASES only (not lids/labels) to match dashboard
         conc_all_hist = historical_df[historical_df['Product Category'] == 'Concentrates'].copy()
+        
+        # Apply base-only filter - concentrate "units" = glass bases only
+        if 'Product Subcategory' in conc_all_hist.columns and not conc_all_hist.empty:
+            is_base = conc_all_hist['Product Subcategory'].str.contains('Base', case=False, na=False)
+            conc_all_hist = conc_all_hist[is_base]
+        elif 'Item' in conc_all_hist.columns and not conc_all_hist.empty:
+            # Fallback: filter by SKU pattern (GB-4ML, GB-7ML = glass bases)
+            is_base = conc_all_hist['Item'].str.contains(r'GB-\d+ML', case=False, na=False, regex=True)
+            conc_all_hist = conc_all_hist[is_base]
         
         if not conc_all_hist.empty and 'Quantity' in conc_all_hist.columns:
             # 2025 data
@@ -7494,10 +7503,20 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     conc_pending = pending_by_category.get('Concentrates', 0)
     conc_historical_ytd = historical_by_category.get('Concentrates', 0)
     
-    # Calculate monthly historical average for ALL concentrates
+    # Calculate monthly historical average for concentrate BASES only
+    # This matches the dashboard's base-only filter for accurate unit counts
     conc_monthly_avg = 0
     if not historical_df.empty and 'Product Category' in historical_df.columns and 'Date' in historical_df.columns:
         conc_hist = historical_df[historical_df['Product Category'] == 'Concentrates'].copy()
+        
+        # Apply base-only filter
+        if 'Product Subcategory' in conc_hist.columns and not conc_hist.empty:
+            is_base = conc_hist['Product Subcategory'].str.contains('Base', case=False, na=False)
+            conc_hist = conc_hist[is_base]
+        elif 'Item' in conc_hist.columns and not conc_hist.empty:
+            # Fallback: filter by SKU pattern (GB-4ML, GB-7ML = glass bases)
+            is_base = conc_hist['Item'].str.contains(r'GB-\d+ML', case=False, na=False, regex=True)
+            conc_hist = conc_hist[is_base]
         
         if not conc_hist.empty and 'Quantity' in conc_hist.columns:
             months_in_data = conc_hist['Date'].dt.to_period('M').nunique()
