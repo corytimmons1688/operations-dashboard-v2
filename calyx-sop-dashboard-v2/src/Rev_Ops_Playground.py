@@ -6443,7 +6443,7 @@ def load_annual_tracker_data():
 # ===================================================================================
 
 def calculate_ytd_actuals(line_items_df, year=2026):
-    """Calculate YTD actuals by Pipeline and Category"""
+    """Calculate YTD actuals by Pipeline and Category, including Total rows"""
     if line_items_df.empty:
         return pd.DataFrame()
     
@@ -6466,13 +6466,33 @@ def calculate_ytd_actuals(line_items_df, year=2026):
     else:
         df['Forecast Category'] = 'Other'
     
+    # Base grouping: Pipeline x Category
     grouped = df.groupby(['Forecast Pipeline', 'Forecast Category']).agg({
         'Amount': 'sum'
     }).reset_index()
-    
     grouped.columns = ['Pipeline', 'Category', 'Actual']
     
-    return grouped
+    # Create Category='Total' rows for each Pipeline
+    pipeline_totals = df.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+    pipeline_totals.columns = ['Pipeline', 'Actual']
+    pipeline_totals['Category'] = 'Total'
+    
+    # Create Pipeline='Total' rows for each Category
+    category_totals = df.groupby('Forecast Category')['Amount'].sum().reset_index()
+    category_totals.columns = ['Category', 'Actual']
+    category_totals['Pipeline'] = 'Total'
+    
+    # Create grand total row
+    grand_total = pd.DataFrame([{
+        'Pipeline': 'Total',
+        'Category': 'Total',
+        'Actual': df['Amount'].sum()
+    }])
+    
+    # Combine all
+    result = pd.concat([grouped, pipeline_totals, category_totals, grand_total], ignore_index=True)
+    
+    return result
 
 
 def calculate_ytd_actuals_total(line_items_df, year=2026):
@@ -6508,7 +6528,7 @@ def calculate_ytd_actuals_total(line_items_df, year=2026):
 
 
 def calculate_monthly_actuals(line_items_df, year=2026):
-    """Calculate monthly actuals by Pipeline and Category"""
+    """Calculate monthly actuals by Pipeline and Category, including Total rows"""
     if line_items_df.empty:
         return pd.DataFrame()
     
@@ -6533,13 +6553,32 @@ def calculate_monthly_actuals(line_items_df, year=2026):
     else:
         df['Forecast Category'] = 'Other'
     
+    # Base grouping
     grouped = df.groupby(['Forecast Pipeline', 'Forecast Category', 'Month', 'Month_Name']).agg({
         'Amount': 'sum'
     }).reset_index()
-    
     grouped.columns = ['Pipeline', 'Category', 'Month_Num', 'Month', 'Actual']
     
-    return grouped
+    # Pipeline totals (Category='Total')
+    pipeline_monthly = df.groupby(['Forecast Pipeline', 'Month', 'Month_Name'])['Amount'].sum().reset_index()
+    pipeline_monthly.columns = ['Pipeline', 'Month_Num', 'Month', 'Actual']
+    pipeline_monthly['Category'] = 'Total'
+    
+    # Category totals (Pipeline='Total')
+    category_monthly = df.groupby(['Forecast Category', 'Month', 'Month_Name'])['Amount'].sum().reset_index()
+    category_monthly.columns = ['Category', 'Month_Num', 'Month', 'Actual']
+    category_monthly['Pipeline'] = 'Total'
+    
+    # Grand totals by month
+    grand_monthly = df.groupby(['Month', 'Month_Name'])['Amount'].sum().reset_index()
+    grand_monthly.columns = ['Month_Num', 'Month', 'Actual']
+    grand_monthly['Pipeline'] = 'Total'
+    grand_monthly['Category'] = 'Total'
+    
+    # Combine all
+    result = pd.concat([grouped, pipeline_monthly, category_monthly, grand_monthly], ignore_index=True)
+    
+    return result
 
 
 def get_ytd_plan(forecast_df, through_month):
@@ -7422,6 +7461,21 @@ def render_yearly_planning_2026():
         (comparison['Pipeline'].isin(FORECAST_PIPELINES))
     ].copy()
     
+    # Debug: show what's actually in the comparison for pipeline totals
+    with st.expander("🔧 Pipeline Debug Info", expanded=False):
+        st.write("**All rows in comparison where Category='Total':**")
+        cat_total_rows = comparison[comparison['Category'] == 'Total']
+        st.dataframe(cat_total_rows)
+        
+        st.write("**Unique Pipelines in ytd_actuals:**")
+        if not ytd_actuals.empty:
+            st.write(ytd_actuals['Pipeline'].unique().tolist())
+        
+        st.write("**Pipeline totals in ytd_actuals:**")
+        if not ytd_actuals.empty:
+            pipeline_totals_debug = ytd_actuals[ytd_actuals['Category'] == 'Total']
+            st.dataframe(pipeline_totals_debug)
+    
     if not pipeline_data.empty:
         # Create pipeline cards in a row
         cols = st.columns(len(FORECAST_PIPELINES))
@@ -7461,6 +7515,15 @@ def render_yearly_planning_2026():
         st.markdown("<br>", unsafe_allow_html=True)
         pipeline_chart = create_pipeline_comparison_chart(pipeline_data, "")
         st.plotly_chart(pipeline_chart, use_container_width=True)
+    else:
+        # Debug: show what pipelines exist in actuals
+        st.warning("No pipeline data found in comparison. Checking actuals...")
+        if not ytd_actuals.empty:
+            unique_pipelines = ytd_actuals['Pipeline'].unique().tolist()
+            st.write(f"Pipelines in actuals: {unique_pipelines}")
+            pipeline_totals_check = ytd_actuals[ytd_actuals['Category'] == 'Total']
+            st.write("Pipeline totals in actuals:")
+            st.dataframe(pipeline_totals_check)
     
     # Category Breakdown
     st.markdown("""
