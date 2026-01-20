@@ -21,6 +21,10 @@ import io
 import re
 import uuid
 
+# ========== DEBUG: Version Check ==========
+APP_VERSION = "v8_with_product_forecasting"
+print(f"🔧 DEBUG: Loading {APP_VERSION}")
+
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
@@ -8429,13 +8433,23 @@ def render_product_forecasting_tool():
         st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
 
-# ========== ENTRY POINT ==========
-if __name__ == "__main__":
-    st.set_page_config(
-        page_title="Revenue Operations Hub",
-        page_icon="📊",
-        layout="wide"
-    )
+# ========== MAIN APP FUNCTION ==========
+def main_app():
+    """Main application with navigation"""
+    
+    # DEBUG: Show version banner
+    st.markdown("""
+        <div style="
+            background: #dc2626;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            font-weight: bold;
+        ">
+            🔧 DEBUG: Running v8_with_product_forecasting - If you see this, the new code IS running!
+        </div>
+    """, unsafe_allow_html=True)
     
     # =========================================================================
     # TOP NAVIGATION BAR - Prominent at top of page
@@ -8501,3 +8515,15 @@ if __name__ == "__main__":
     
     with tab2:
         render_product_forecasting_tool()
+
+
+# ========== ENTRY POINT ==========
+# This runs regardless of how the file is executed
+st.set_page_config(
+    page_title="Revenue Operations Hub",
+    page_icon="📊",
+    layout="wide"
+)
+
+# Run the main app
+main_app()
