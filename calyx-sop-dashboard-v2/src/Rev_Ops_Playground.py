@@ -6362,6 +6362,7 @@ def load_annual_tracker_data():
     
     # Process Invoices (for pipeline lookup)
     pipeline_lookup = {}
+    raw_pipeline_lookup = {}
     if not invoices_df.empty:
         if invoices_df.columns.duplicated().any():
             invoices_df = invoices_df.loc[:, ~invoices_df.columns.duplicated()]
@@ -6379,14 +6380,54 @@ def load_annual_tracker_data():
             pipeline_col = 'HubSpot Pipeline'
         
         if pipeline_col and 'Document Number' in invoices_df.columns:
+            # Keep both raw pipeline and mapped pipeline for SO Manually Built handling
+            invoices_df['Raw_Pipeline'] = invoices_df[pipeline_col].astype(str).str.strip()
             invoices_df['Forecast Pipeline'] = invoices_df[pipeline_col].apply(map_to_forecast_pipeline)
+            
+            # Create lookups for both
             pipeline_lookup = invoices_df.set_index('Document Number')['Forecast Pipeline'].to_dict()
+            raw_pipeline_lookup = invoices_df.set_index('Document Number')['Raw_Pipeline'].to_dict()
     
     # Join pipeline to line items
-    if not line_items_df.empty and pipeline_lookup:
+    if not line_items_df.empty:
         if 'Document Number' in line_items_df.columns:
             line_items_df['Document Number'] = line_items_df['Document Number'].astype(str).str.strip()
-            line_items_df['Forecast Pipeline'] = line_items_df['Document Number'].map(pipeline_lookup)
+            
+            if pipeline_lookup:
+                line_items_df['Forecast Pipeline'] = line_items_df['Document Number'].map(pipeline_lookup)
+            else:
+                line_items_df['Forecast Pipeline'] = None
+                
+            if raw_pipeline_lookup:
+                line_items_df['Raw_Pipeline'] = line_items_df['Document Number'].map(raw_pipeline_lookup)
+            else:
+                line_items_df['Raw_Pipeline'] = None
+            
+            # Handle "SO Manually Built" based on Rep Master
+            # Brad Sherman, Lance Mitton → Acquisition
+            # Alex Gonzalez, Jake Lynch, Dave Borkowski → Retention
+            acquisition_reps = ['Brad Sherman', 'Lance Mitton']
+            retention_reps = ['Alex Gonzalez', 'Jake Lynch', 'Dave Borkowski']
+            
+            def assign_so_manually_built_pipeline(row):
+                # If already mapped, keep it
+                if pd.notna(row.get('Forecast Pipeline')) and row.get('Forecast Pipeline') != 'Unmapped':
+                    return row['Forecast Pipeline']
+                
+                # Check if this is SO Manually Built
+                raw_pipeline = str(row.get('Raw_Pipeline', '')).strip()
+                if 'SO Manually Built' in raw_pipeline or 'Manually Built' in raw_pipeline:
+                    rep = str(row.get('Rep Master', '')).strip()
+                    
+                    if rep in acquisition_reps:
+                        return 'Acquisition'
+                    elif rep in retention_reps:
+                        return 'Retention'
+                
+                # Return original (could be None/NaN)
+                return row.get('Forecast Pipeline')
+            
+            line_items_df['Forecast Pipeline'] = line_items_df.apply(assign_so_manually_built_pipeline, axis=1)
     
     # Process Sales Orders
     if not sales_orders_df.empty:
