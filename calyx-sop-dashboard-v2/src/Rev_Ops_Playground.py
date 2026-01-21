@@ -9314,13 +9314,147 @@ def render_yearly_planning_2026():
             else:
                 st.info("No category data available for close rate analysis.")
             
-            # Close Rate by Pipeline
+            # Close Rate by Pipeline - Full Section
+            st.markdown("### 🔄 Close Rate by Pipeline")
+            st.caption("Compare close rates across different sales pipelines to understand which motions convert best.")
+            
             pipeline_rates = calculate_close_rate_by_pipeline(deals_line_items_df)
             
             if not pipeline_rates.empty:
-                with st.expander("🔄 Close Rate by Pipeline"):
-                    st.caption("Compare close rates across different sales pipelines.")
+                # Pipeline metric cards
+                pipe_cols = st.columns(len(pipeline_rates))
+                
+                # Define pipeline colors matching the rest of the app
+                pipeline_colors = {
+                    'Retention (Existing Product)': '#10b981',
+                    'Retention': '#10b981',
+                    'Growth Pipeline (Upsell/Cross-sell)': '#3b82f6',
+                    'Growth': '#3b82f6',
+                    'Acquisition (New Customer)': '#8b5cf6',
+                    'Acquisition': '#8b5cf6',
+                    'Distributors': '#f59e0b',
+                    'E-com': '#06b6d4'
+                }
+                
+                for idx, (_, row) in enumerate(pipeline_rates.iterrows()):
+                    pipeline_name = row['Pipeline']
+                    close_rate = row['Close Rate (Count)']
+                    won_deals = row['Won Deals']
+                    total_deals = row['Total Deals']
+                    won_amount = row['Won Amount']
+                    amount_rate = row['Close Rate (Amount)']
                     
+                    # Get color
+                    color = pipeline_colors.get(pipeline_name, '#3b82f6')
+                    
+                    # Determine rate color based on performance
+                    rate_color = '#10b981' if close_rate >= 60 else '#f59e0b' if close_rate >= 40 else '#ef4444'
+                    
+                    with pipe_cols[idx]:
+                        st.markdown(f"""
+                            <div class="pipeline-card" style="border-left-color: {color}; min-height: 180px;">
+                                <div style="font-size: 0.7rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                    {pipeline_name}
+                                </div>
+                                <div style="font-size: 2.5rem; font-weight: 700; color: {rate_color};">
+                                    {close_rate:.1f}%
+                                </div>
+                                <div style="color: #64748b; font-size: 0.85rem; margin-top: 0.25rem;">
+                                    {won_deals:,} won / {total_deals:,} deals
+                                </div>
+                                <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(148, 163, 184, 0.1);">
+                                    <div style="color: #64748b; font-size: 0.75rem;">
+                                        💰 Amount: <strong style="color: {rate_color};">{amount_rate:.1f}%</strong>
+                                    </div>
+                                    <div style="color: #10b981; font-size: 0.8rem; font-weight: 600; margin-top: 0.25rem;">
+                                        ${won_amount:,.0f}
+                                    </div>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                
+                # Pipeline Close Rate Chart
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                fig_pipeline = go.Figure()
+                
+                # Sort for chart display
+                chart_pipe_data = pipeline_rates.sort_values('Close Rate (Count)', ascending=True)
+                
+                # Get colors for each pipeline
+                bar_colors = [pipeline_colors.get(p, '#3b82f6') for p in chart_pipe_data['Pipeline']]
+                
+                # Add won deals bar (stacked)
+                fig_pipeline.add_trace(go.Bar(
+                    y=chart_pipe_data['Pipeline'],
+                    x=chart_pipe_data['Won Deals'],
+                    name='Won Deals',
+                    orientation='h',
+                    marker=dict(color='#10b981', line=dict(color='#059669', width=1)),
+                    text=[f"{w:,} won" for w in chart_pipe_data['Won Deals']],
+                    textposition='inside',
+                    textfont=dict(color='white', size=11),
+                    hovertemplate='<b>%{y}</b><br>Won: %{x:,} deals<extra></extra>'
+                ))
+                
+                # Add lost deals bar (stacked)
+                fig_pipeline.add_trace(go.Bar(
+                    y=chart_pipe_data['Pipeline'],
+                    x=chart_pipe_data['Lost Deals'],
+                    name='Lost Deals',
+                    orientation='h',
+                    marker=dict(color='#ef4444', line=dict(color='#dc2626', width=1)),
+                    text=[f"{l:,} lost" for l in chart_pipe_data['Lost Deals']],
+                    textposition='inside',
+                    textfont=dict(color='white', size=11),
+                    hovertemplate='<b>%{y}</b><br>Lost: %{x:,} deals<extra></extra>'
+                ))
+                
+                # Add close rate annotation at end of each bar
+                for i, row in chart_pipe_data.iterrows():
+                    fig_pipeline.add_annotation(
+                        y=row['Pipeline'],
+                        x=row['Total Deals'] + (chart_pipe_data['Total Deals'].max() * 0.02),
+                        text=f"<b>{row['Close Rate (Count)']:.1f}%</b>",
+                        showarrow=False,
+                        font=dict(
+                            color='#10b981' if row['Close Rate (Count)'] >= 60 else '#f59e0b' if row['Close Rate (Count)'] >= 40 else '#ef4444',
+                            size=14
+                        ),
+                        xanchor='left'
+                    )
+                
+                fig_pipeline.update_layout(
+                    title=dict(text='Won vs Lost Deals by Pipeline', font=dict(color='#e2e8f0', size=16)),
+                    barmode='stack',
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#e2e8f0'),
+                    xaxis=dict(
+                        gridcolor='rgba(148, 163, 184, 0.1)',
+                        tickfont=dict(color='#94a3b8'),
+                        title='Number of Deals'
+                    ),
+                    yaxis=dict(
+                        gridcolor='rgba(148, 163, 184, 0.1)',
+                        tickfont=dict(color='#e2e8f0', size=11)
+                    ),
+                    legend=dict(
+                        orientation='h',
+                        yanchor='bottom',
+                        y=1.02,
+                        xanchor='center',
+                        x=0.5,
+                        font=dict(color='#e2e8f0')
+                    ),
+                    height=300,
+                    margin=dict(t=60, b=40, l=200, r=80)
+                )
+                
+                st.plotly_chart(fig_pipeline, use_container_width=True)
+                
+                # Detailed table in expander
+                with st.expander("📋 Detailed Pipeline Breakdown"):
                     display_pipe = pipeline_rates.copy()
                     display_pipe['Close Rate (Count)'] = display_pipe['Close Rate (Count)'].apply(lambda x: f"{x:.1f}%")
                     display_pipe['Close Rate (Amount)'] = display_pipe['Close Rate (Amount)'].apply(lambda x: f"{x:.1f}%")
@@ -9328,6 +9462,8 @@ def render_yearly_planning_2026():
                     display_pipe['Total Amount'] = display_pipe['Total Amount'].apply(lambda x: f"${x:,.0f}")
                     
                     st.dataframe(display_pipe, use_container_width=True, hide_index=True)
+            else:
+                st.info("No pipeline data available for close rate analysis.")
             
             # Raw Data Explorer
             with st.expander("🔍 Explore Raw Deals Data"):
