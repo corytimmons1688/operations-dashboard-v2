@@ -6341,6 +6341,29 @@ def load_annual_tracker_data():
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     forecast_df = load_forecast_data()
     
+    # Load Copy of Deals Line Item for Close Rate Analysis
+    # Note: Column headers are in row 2 of the sheet
+    deals_line_items_df = load_google_sheets_data("Copy of Deals Line Item", "A2:S", version=CACHE_VERSION, silent=True)
+    
+    # Expected columns for Copy of Deals Line Item (in case headers need validation)
+    expected_deal_line_item_cols = [
+        'Deal ID', 'Deal Name', 'Create Date', 'Close Date', 'Deal Stage', 
+        'Pipeline', 'Deal Type', 'Deal Owner First Name', 'Deal Owner Last Name',
+        'SKU', 'Quantity', 'Primary Associated Company', 'Close Status', 
+        'Deal Close Status', 'Amount', 'Is closed lost', 'Is Closed Won', 
+        'Company Name', 'SKU Description'
+    ]
+    
+    # If the dataframe loaded but columns look wrong (e.g., first row is data not headers),
+    # we may need to reassign column names
+    if not deals_line_items_df.empty:
+        # Check if columns look like data rather than headers
+        first_col = str(deals_line_items_df.columns[0]).strip() if len(deals_line_items_df.columns) > 0 else ''
+        if first_col and not any(first_col.lower() == ec.lower() for ec in expected_deal_line_item_cols):
+            # Columns might be data - try using expected column names if column count matches
+            if len(deals_line_items_df.columns) == len(expected_deal_line_item_cols):
+                deals_line_items_df.columns = expected_deal_line_item_cols
+    
     # Process Invoice Line Items
     if not line_items_df.empty:
         if line_items_df.columns.duplicated().any():
@@ -6470,12 +6493,74 @@ def load_annual_tracker_data():
         if 'Deal Type' in deals_df.columns:
             deals_df['Forecast Category'] = deals_df['Deal Type'].apply(map_deal_type_to_forecast_category)
     
+    # Process Deals Line Items for Close Rate Analysis
+    if not deals_line_items_df.empty:
+        if deals_line_items_df.columns.duplicated().any():
+            deals_line_items_df = deals_line_items_df.loc[:, ~deals_line_items_df.columns.duplicated()]
+        
+        # Clean numeric columns
+        if 'Amount' in deals_line_items_df.columns:
+            deals_line_items_df['Amount'] = deals_line_items_df['Amount'].apply(clean_numeric)
+        if 'Quantity' in deals_line_items_df.columns:
+            deals_line_items_df['Quantity'] = deals_line_items_df['Quantity'].apply(clean_numeric)
+        
+        # Parse dates
+        if 'Create Date' in deals_line_items_df.columns:
+            deals_line_items_df['Create Date'] = pd.to_datetime(deals_line_items_df['Create Date'], errors='coerce')
+        if 'Close Date' in deals_line_items_df.columns:
+            deals_line_items_df['Close Date'] = pd.to_datetime(deals_line_items_df['Close Date'], errors='coerce')
+        
+        # Apply SKU categorization using existing logic
+        # Map SKU column to Item for categorization
+        if 'SKU' in deals_line_items_df.columns:
+            deals_line_items_df['Item'] = deals_line_items_df['SKU']
+        if 'SKU Description' in deals_line_items_df.columns:
+            deals_line_items_df['Item Description'] = deals_line_items_df['SKU Description']
+        
+        # Apply product categories
+        deals_line_items_df = apply_product_categories(deals_line_items_df)
+        
+        # Map to forecast categories
+        deals_line_items_df['Forecast Category'] = deals_line_items_df.apply(
+            lambda row: map_to_forecast_category(row.get('Product Category'), row.get('Product Sub-Category')),
+            axis=1
+        )
+        
+        # Create unified closed won flag
+        # Closed Won if: Is Closed Won = TRUE, or Deal Stage in ['Sales Order Created in NS', 'NCR']
+        def is_closed_won(row):
+            # Check Is Closed Won column
+            is_won = str(row.get('Is Closed Won', '')).strip().upper()
+            if is_won in ['TRUE', 'YES', '1']:
+                return True
+            # Check Deal Stage for Sales Order Created in NS or NCR
+            deal_stage = str(row.get('Deal Stage', '')).strip()
+            if deal_stage in ['Sales Order Created in NS', 'NCR']:
+                return True
+            return False
+        
+        deals_line_items_df['Is_Won'] = deals_line_items_df.apply(is_closed_won, axis=1)
+        
+        # Create closed lost flag
+        def is_closed_lost(row):
+            is_lost = str(row.get('Is closed lost', '')).strip().upper()
+            return is_lost in ['TRUE', 'YES', '1']
+        
+        deals_line_items_df['Is_Lost'] = deals_line_items_df.apply(is_closed_lost, axis=1)
+        
+        # Calculate days to close
+        if 'Create Date' in deals_line_items_df.columns and 'Close Date' in deals_line_items_df.columns:
+            deals_line_items_df['Days_To_Close'] = (
+                deals_line_items_df['Close Date'] - deals_line_items_df['Create Date']
+            ).dt.days
+    
     return {
         'forecast': forecast_df,
         'line_items': line_items_df,
         'invoices': invoices_df,
         'sales_orders': sales_orders_df,
-        'deals': deals_df
+        'deals': deals_df,
+        'deals_line_items': deals_line_items_df
     }
 
 
@@ -6656,6 +6741,304 @@ def calculate_variance(actuals_df, plan_df):
     )
     
     return merged
+
+
+# ===================================================================================
+# CLOSE RATE ANALYSIS - CALCULATION FUNCTIONS
+# ===================================================================================
+
+def calculate_close_rate_metrics(deals_line_items_df):
+    """
+    Calculate close rate metrics from deals line items.
+    Returns dict with overall stats and breakdowns.
+    
+    Key insight: Amount is repeated for each line item in a deal, so we need to 
+    deduplicate by Deal ID when calculating deal-level amounts.
+    """
+    if deals_line_items_df.empty:
+        return None
+    
+    df = deals_line_items_df.copy()
+    
+    # Get unique deals for accurate deal-level metrics
+    # Amount is the same for all line items in a deal, so we take the first occurrence
+    deal_id_col = 'Deal ID' if 'Deal ID' in df.columns else None
+    
+    if deal_id_col:
+        # Deduplicate to get unique deals with their amounts
+        unique_deals = df.groupby(deal_id_col).agg({
+            'Amount': 'first',  # Amount is same for all line items in a deal
+            'Is_Won': 'first',
+            'Is_Lost': 'first',
+            'Close Status': 'first',
+            'Deal Stage': 'first',
+            'Pipeline': 'first',
+            'Deal Type': 'first',
+            'Create Date': 'first',
+            'Close Date': 'first',
+            'Days_To_Close': 'first',
+            'Deal Name': 'first',
+            'Deal Owner First Name': 'first',
+            'Deal Owner Last Name': 'first',
+            'Company Name': 'first'
+        }).reset_index()
+    else:
+        # Fallback if no Deal ID - use Deal Name as identifier
+        deal_name_col = 'Deal Name' if 'Deal Name' in df.columns else None
+        if deal_name_col:
+            unique_deals = df.groupby(deal_name_col).agg({
+                'Amount': 'first',
+                'Is_Won': 'first',
+                'Is_Lost': 'first',
+                'Close Status': 'first',
+                'Deal Stage': 'first',
+                'Pipeline': 'first',
+                'Deal Type': 'first',
+                'Create Date': 'first',
+                'Close Date': 'first',
+                'Days_To_Close': 'first',
+                'Deal Owner First Name': 'first',
+                'Deal Owner Last Name': 'first',
+                'Company Name': 'first'
+            }).reset_index()
+        else:
+            unique_deals = df.copy()
+    
+    # Filter to only closed deals (won or lost)
+    closed_deals = unique_deals[(unique_deals['Is_Won'] == True) | (unique_deals['Is_Lost'] == True)]
+    
+    # Overall close rate metrics
+    total_closed = len(closed_deals)
+    total_won = len(closed_deals[closed_deals['Is_Won'] == True])
+    total_lost = len(closed_deals[closed_deals['Is_Lost'] == True])
+    
+    overall_close_rate = (total_won / total_closed * 100) if total_closed > 0 else 0
+    
+    total_won_amount = closed_deals[closed_deals['Is_Won'] == True]['Amount'].sum()
+    total_lost_amount = closed_deals[closed_deals['Is_Lost'] == True]['Amount'].sum()
+    total_closed_amount = total_won_amount + total_lost_amount
+    
+    amount_close_rate = (total_won_amount / total_closed_amount * 100) if total_closed_amount > 0 else 0
+    
+    # Close rate by Close Status (probability scores)
+    close_status_rates = {}
+    if 'Close Status' in closed_deals.columns:
+        for status in ['Expect', 'Commit', 'Best Case', 'Opportunity']:
+            status_deals = closed_deals[closed_deals['Close Status'] == status]
+            status_total = len(status_deals)
+            status_won = len(status_deals[status_deals['Is_Won'] == True])
+            status_rate = (status_won / status_total * 100) if status_total > 0 else 0
+            
+            status_amount_total = status_deals['Amount'].sum()
+            status_amount_won = status_deals[status_deals['Is_Won'] == True]['Amount'].sum()
+            status_amount_rate = (status_amount_won / status_amount_total * 100) if status_amount_total > 0 else 0
+            
+            close_status_rates[status] = {
+                'total_deals': status_total,
+                'won_deals': status_won,
+                'lost_deals': status_total - status_won,
+                'close_rate_count': status_rate,
+                'total_amount': status_amount_total,
+                'won_amount': status_amount_won,
+                'close_rate_amount': status_amount_rate
+            }
+    
+    # Days to close statistics
+    won_deals = closed_deals[closed_deals['Is_Won'] == True]
+    days_to_close_stats = {}
+    if 'Days_To_Close' in won_deals.columns:
+        valid_days = won_deals['Days_To_Close'].dropna()
+        if len(valid_days) > 0:
+            days_to_close_stats = {
+                'mean': valid_days.mean(),
+                'median': valid_days.median(),
+                'min': valid_days.min(),
+                'max': valid_days.max(),
+                'std': valid_days.std() if len(valid_days) > 1 else 0,
+                'count': len(valid_days)
+            }
+    
+    return {
+        'unique_deals': unique_deals,
+        'closed_deals': closed_deals,
+        'overall': {
+            'total_closed': total_closed,
+            'total_won': total_won,
+            'total_lost': total_lost,
+            'close_rate_count': overall_close_rate,
+            'total_closed_amount': total_closed_amount,
+            'total_won_amount': total_won_amount,
+            'total_lost_amount': total_lost_amount,
+            'close_rate_amount': amount_close_rate
+        },
+        'by_close_status': close_status_rates,
+        'days_to_close': days_to_close_stats
+    }
+
+
+def calculate_close_rate_by_category(deals_line_items_df):
+    """
+    Calculate close rate by product category using SKU categorization.
+    This uses line-item level data since categories are SKU-specific.
+    """
+    if deals_line_items_df.empty or 'Product Category' not in deals_line_items_df.columns:
+        return pd.DataFrame()
+    
+    df = deals_line_items_df.copy()
+    
+    # Filter to closed deals only
+    df = df[(df['Is_Won'] == True) | (df['Is_Lost'] == True)]
+    
+    if df.empty:
+        return pd.DataFrame()
+    
+    # Group by category and calculate metrics
+    category_metrics = []
+    
+    for category in df['Product Category'].dropna().unique():
+        cat_df = df[df['Product Category'] == category]
+        
+        total_qty = cat_df['Quantity'].sum() if 'Quantity' in cat_df.columns else len(cat_df)
+        won_qty = cat_df[cat_df['Is_Won'] == True]['Quantity'].sum() if 'Quantity' in cat_df.columns else len(cat_df[cat_df['Is_Won'] == True])
+        
+        # Also track by unique deals in this category
+        if 'Deal ID' in cat_df.columns:
+            unique_deals = cat_df.groupby('Deal ID')['Is_Won'].first()
+            deal_count = len(unique_deals)
+            deal_won_count = unique_deals.sum()
+        else:
+            deal_count = len(cat_df.drop_duplicates(subset=['Deal Name'])) if 'Deal Name' in cat_df.columns else len(cat_df)
+            deal_won_count = len(cat_df[cat_df['Is_Won'] == True].drop_duplicates(subset=['Deal Name'])) if 'Deal Name' in cat_df.columns else len(cat_df[cat_df['Is_Won'] == True])
+        
+        category_metrics.append({
+            'Category': category,
+            'Total Deals': deal_count,
+            'Won Deals': deal_won_count,
+            'Lost Deals': deal_count - deal_won_count,
+            'Close Rate': (deal_won_count / deal_count * 100) if deal_count > 0 else 0,
+            'Total Qty': total_qty,
+            'Won Qty': won_qty
+        })
+    
+    return pd.DataFrame(category_metrics).sort_values('Total Deals', ascending=False)
+
+
+def calculate_close_rate_by_pipeline(deals_line_items_df):
+    """
+    Calculate close rate by pipeline.
+    """
+    if deals_line_items_df.empty or 'Pipeline' not in deals_line_items_df.columns:
+        return pd.DataFrame()
+    
+    df = deals_line_items_df.copy()
+    
+    # Get unique deals
+    deal_id_col = 'Deal ID' if 'Deal ID' in df.columns else 'Deal Name'
+    
+    if deal_id_col not in df.columns:
+        return pd.DataFrame()
+    
+    unique_deals = df.groupby(deal_id_col).agg({
+        'Amount': 'first',
+        'Is_Won': 'first',
+        'Is_Lost': 'first',
+        'Pipeline': 'first'
+    }).reset_index()
+    
+    # Filter to closed deals
+    closed_deals = unique_deals[(unique_deals['Is_Won'] == True) | (unique_deals['Is_Lost'] == True)]
+    
+    if closed_deals.empty:
+        return pd.DataFrame()
+    
+    # Group by pipeline
+    pipeline_metrics = []
+    
+    for pipeline in closed_deals['Pipeline'].dropna().unique():
+        pipe_df = closed_deals[closed_deals['Pipeline'] == pipeline]
+        
+        total_deals = len(pipe_df)
+        won_deals = len(pipe_df[pipe_df['Is_Won'] == True])
+        won_amount = pipe_df[pipe_df['Is_Won'] == True]['Amount'].sum()
+        total_amount = pipe_df['Amount'].sum()
+        
+        pipeline_metrics.append({
+            'Pipeline': pipeline,
+            'Total Deals': total_deals,
+            'Won Deals': won_deals,
+            'Lost Deals': total_deals - won_deals,
+            'Close Rate (Count)': (won_deals / total_deals * 100) if total_deals > 0 else 0,
+            'Won Amount': won_amount,
+            'Total Amount': total_amount,
+            'Close Rate (Amount)': (won_amount / total_amount * 100) if total_amount > 0 else 0
+        })
+    
+    return pd.DataFrame(pipeline_metrics).sort_values('Total Deals', ascending=False)
+
+
+def calculate_days_to_close_by_amount_bucket(deals_line_items_df):
+    """
+    Calculate average days to close by deal amount buckets.
+    """
+    if deals_line_items_df.empty:
+        return pd.DataFrame()
+    
+    df = deals_line_items_df.copy()
+    
+    # Get unique deals
+    deal_id_col = 'Deal ID' if 'Deal ID' in df.columns else 'Deal Name'
+    
+    if deal_id_col not in df.columns:
+        return pd.DataFrame()
+    
+    unique_deals = df.groupby(deal_id_col).agg({
+        'Amount': 'first',
+        'Is_Won': 'first',
+        'Days_To_Close': 'first'
+    }).reset_index()
+    
+    # Filter to won deals with valid days
+    won_deals = unique_deals[
+        (unique_deals['Is_Won'] == True) & 
+        (unique_deals['Days_To_Close'].notna()) &
+        (unique_deals['Days_To_Close'] >= 0)
+    ]
+    
+    if won_deals.empty:
+        return pd.DataFrame()
+    
+    # Create amount buckets
+    def get_amount_bucket(amount):
+        if amount < 5000:
+            return '$0 - $5K'
+        elif amount < 15000:
+            return '$5K - $15K'
+        elif amount < 50000:
+            return '$15K - $50K'
+        elif amount < 100000:
+            return '$50K - $100K'
+        else:
+            return '$100K+'
+    
+    won_deals['Amount Bucket'] = won_deals['Amount'].apply(get_amount_bucket)
+    
+    # Order buckets correctly
+    bucket_order = ['$0 - $5K', '$5K - $15K', '$15K - $50K', '$50K - $100K', '$100K+']
+    
+    bucket_metrics = []
+    for bucket in bucket_order:
+        bucket_df = won_deals[won_deals['Amount Bucket'] == bucket]
+        if len(bucket_df) > 0:
+            bucket_metrics.append({
+                'Amount Bucket': bucket,
+                'Deal Count': len(bucket_df),
+                'Avg Days to Close': bucket_df['Days_To_Close'].mean(),
+                'Median Days': bucket_df['Days_To_Close'].median(),
+                'Min Days': bucket_df['Days_To_Close'].min(),
+                'Max Days': bucket_df['Days_To_Close'].max()
+            })
+    
+    return pd.DataFrame(bucket_metrics)
 
 
 # ===================================================================================
@@ -8632,6 +9015,372 @@ def render_yearly_planning_2026():
                 
                 st.dataframe(display_stages[['Stage', 'Confidence', 'Deal Count', 'Total Amount']], 
                            use_container_width=True, hide_index=True)
+    
+    # ==========================================================================
+    # CLOSE RATE ANALYSIS SECTION
+    # ==========================================================================
+    st.markdown("""
+        <div class="section-header">
+            <span class="section-icon">📈</span>
+            <span class="section-title">Close Rate Analysis</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Context box
+    st.markdown("""
+        <div style="background: rgba(16, 185, 129, 0.1); border-left: 4px solid #10b981; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
+            <strong style="color: #34d399;">📊 What you're seeing:</strong>
+            <span style="color: #94a3b8;"> Historical close rate analysis from HubSpot deals. Shows win/loss rates by Close Status to inform probability scoring, breakdown by product category, and time-to-close metrics.</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Source: Copy of Deals Line Item sheet (HubSpot deal line items)</span>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Get deals line items data
+    deals_line_items_df = data.get('deals_line_items', pd.DataFrame())
+    
+    if deals_line_items_df.empty:
+        st.warning("⚠️ No data found in 'Copy of Deals Line Item' sheet. Close Rate Analysis requires this data source.")
+    else:
+        # Calculate metrics
+        close_rate_metrics = calculate_close_rate_metrics(deals_line_items_df)
+        
+        if close_rate_metrics is None:
+            st.warning("⚠️ Could not calculate close rate metrics. Check data format.")
+        else:
+            # Overall Close Rate Summary
+            overall = close_rate_metrics['overall']
+            
+            st.markdown("### 📊 Overall Close Rate Summary")
+            
+            cr_col1, cr_col2, cr_col3, cr_col4 = st.columns(4)
+            
+            with cr_col1:
+                rate_color = "#10b981" if overall['close_rate_count'] >= 50 else "#f59e0b" if overall['close_rate_count'] >= 30 else "#ef4444"
+                st.markdown(f"""
+                    <div class="metric-card success">
+                        <div class="metric-label">Close Rate (Count)</div>
+                        <div class="metric-value" style="color: {rate_color};">{overall['close_rate_count']:.1f}%</div>
+                        <div class="metric-delta neutral">{overall['total_won']:,} won / {overall['total_closed']:,} closed</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with cr_col2:
+                amount_rate_color = "#10b981" if overall['close_rate_amount'] >= 50 else "#f59e0b" if overall['close_rate_amount'] >= 30 else "#ef4444"
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Close Rate (Amount)</div>
+                        <div class="metric-value" style="color: {amount_rate_color};">{overall['close_rate_amount']:.1f}%</div>
+                        <div class="metric-delta neutral">${overall['total_won_amount']:,.0f} won</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with cr_col3:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Total Won</div>
+                        <div class="metric-value" style="color: #10b981;">{overall['total_won']:,}</div>
+                        <div class="metric-delta positive">${overall['total_won_amount']:,.0f}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with cr_col4:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Total Lost</div>
+                        <div class="metric-value" style="color: #ef4444;">{overall['total_lost']:,}</div>
+                        <div class="metric-delta negative">${overall['total_lost_amount']:,.0f}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Close Rate by Close Status (Probability Scoring)
+            st.markdown("### 🎯 Close Rate by Close Status (Probability Insights)")
+            st.caption("Use these historical close rates to inform your probability scoring for each Close Status.")
+            
+            by_status = close_rate_metrics['by_close_status']
+            
+            if by_status:
+                status_cols = st.columns(4)
+                
+                # Define status colors and recommended probability ranges
+                status_config = {
+                    'Commit': {'color': '#10b981', 'icon': '🟢', 'expected_range': '80-95%'},
+                    'Expect': {'color': '#3b82f6', 'icon': '🔵', 'expected_range': '50-70%'},
+                    'Best Case': {'color': '#f59e0b', 'icon': '🟡', 'expected_range': '30-50%'},
+                    'Opportunity': {'color': '#ef4444', 'icon': '🔴', 'expected_range': '10-30%'}
+                }
+                
+                for idx, status in enumerate(['Commit', 'Expect', 'Best Case', 'Opportunity']):
+                    with status_cols[idx]:
+                        if status in by_status:
+                            data_s = by_status[status]
+                            config = status_config.get(status, {'color': '#94a3b8', 'icon': '⚪', 'expected_range': 'N/A'})
+                            
+                            # Determine if actual rate is in expected range
+                            actual_rate = data_s['close_rate_count']
+                            
+                            st.markdown(f"""
+                                <div class="pipeline-card" style="border-left-color: {config['color']};">
+                                    <div style="font-size: 0.75rem; color: #94a3b8; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.5rem;">
+                                        {config['icon']} {status}
+                                    </div>
+                                    <div style="font-size: 2rem; font-weight: 700; color: {config['color']};">
+                                        {actual_rate:.1f}%
+                                    </div>
+                                    <div style="color: #64748b; font-size: 0.85rem; margin-top: 0.25rem;">
+                                        {data_s['won_deals']} won / {data_s['total_deals']} deals
+                                    </div>
+                                    <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid rgba(148, 163, 184, 0.1);">
+                                        <div style="color: #64748b; font-size: 0.75rem;">
+                                            💰 Amount Rate: <strong style="color: #e2e8f0;">{data_s['close_rate_amount']:.1f}%</strong>
+                                        </div>
+                                        <div style="color: #64748b; font-size: 0.75rem;">
+                                            Won: ${data_s['won_amount']:,.0f}
+                                        </div>
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                                <div class="pipeline-card" style="opacity: 0.5;">
+                                    <div style="font-size: 0.75rem; color: #94a3b8;">
+                                        {status_config.get(status, {}).get('icon', '⚪')} {status}
+                                    </div>
+                                    <div style="font-size: 1.5rem; color: #475569;">
+                                        No Data
+                                    </div>
+                                </div>
+                            """, unsafe_allow_html=True)
+                
+                # Summary table
+                with st.expander("📋 Detailed Close Status Breakdown"):
+                    status_table_data = []
+                    for status in ['Commit', 'Expect', 'Best Case', 'Opportunity']:
+                        if status in by_status:
+                            d = by_status[status]
+                            status_table_data.append({
+                                'Close Status': status,
+                                'Total Deals': d['total_deals'],
+                                'Won': d['won_deals'],
+                                'Lost': d['lost_deals'],
+                                'Close Rate (Count)': f"{d['close_rate_count']:.1f}%",
+                                'Total Amount': f"${d['total_amount']:,.0f}",
+                                'Won Amount': f"${d['won_amount']:,.0f}",
+                                'Close Rate (Amount)': f"{d['close_rate_amount']:.1f}%"
+                            })
+                    
+                    if status_table_data:
+                        st.dataframe(pd.DataFrame(status_table_data), use_container_width=True, hide_index=True)
+            
+            # Days to Close Analysis
+            days_stats = close_rate_metrics['days_to_close']
+            if days_stats:
+                st.markdown("### ⏱️ Time to Close Analysis")
+                st.caption("Average time from deal creation to close for won deals.")
+                
+                dtc_col1, dtc_col2, dtc_col3, dtc_col4 = st.columns(4)
+                
+                with dtc_col1:
+                    st.markdown(f"""
+                        <div class="metric-card">
+                            <div class="metric-label">Average Days to Close</div>
+                            <div class="metric-value">{days_stats['mean']:.0f}</div>
+                            <div class="metric-delta neutral">days</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with dtc_col2:
+                    st.markdown(f"""
+                        <div class="metric-card">
+                            <div class="metric-label">Median Days</div>
+                            <div class="metric-value">{days_stats['median']:.0f}</div>
+                            <div class="metric-delta neutral">days</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with dtc_col3:
+                    st.markdown(f"""
+                        <div class="metric-card">
+                            <div class="metric-label">Fastest Close</div>
+                            <div class="metric-value" style="color: #10b981;">{days_stats['min']:.0f}</div>
+                            <div class="metric-delta neutral">days</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with dtc_col4:
+                    st.markdown(f"""
+                        <div class="metric-card">
+                            <div class="metric-label">Longest Close</div>
+                            <div class="metric-value" style="color: #f59e0b;">{days_stats['max']:.0f}</div>
+                            <div class="metric-delta neutral">days</div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                # Days to close by amount bucket
+                days_by_amount = calculate_days_to_close_by_amount_bucket(deals_line_items_df)
+                if not days_by_amount.empty:
+                    with st.expander("📊 Days to Close by Deal Size"):
+                        st.caption("Larger deals often take longer to close. Use this to set realistic close date expectations.")
+                        
+                        # Create chart
+                        fig_days = go.Figure()
+                        
+                        fig_days.add_trace(go.Bar(
+                            x=days_by_amount['Amount Bucket'],
+                            y=days_by_amount['Avg Days to Close'],
+                            marker=dict(
+                                color=['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ef4444'][:len(days_by_amount)],
+                                line=dict(color='rgba(255,255,255,0.2)', width=1)
+                            ),
+                            text=[f"{d:.0f} days" for d in days_by_amount['Avg Days to Close']],
+                            textposition='outside',
+                            textfont=dict(color='#e2e8f0', size=12)
+                        ))
+                        
+                        fig_days.update_layout(
+                            title=dict(text='Average Days to Close by Deal Size', font=dict(color='#e2e8f0', size=16)),
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='#e2e8f0'),
+                            xaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickfont=dict(color='#94a3b8')),
+                            yaxis=dict(
+                                gridcolor='rgba(148, 163, 184, 0.1)', 
+                                tickfont=dict(color='#94a3b8'),
+                                title='Days'
+                            ),
+                            height=350,
+                            margin=dict(t=60, b=60)
+                        )
+                        
+                        st.plotly_chart(fig_days, use_container_width=True)
+                        
+                        # Show table
+                        display_days = days_by_amount.copy()
+                        display_days['Avg Days to Close'] = display_days['Avg Days to Close'].apply(lambda x: f"{x:.0f}")
+                        display_days['Median Days'] = display_days['Median Days'].apply(lambda x: f"{x:.0f}")
+                        display_days['Min Days'] = display_days['Min Days'].apply(lambda x: f"{x:.0f}")
+                        display_days['Max Days'] = display_days['Max Days'].apply(lambda x: f"{x:.0f}")
+                        st.dataframe(display_days, use_container_width=True, hide_index=True)
+            
+            # Close Rate by Product Category
+            st.markdown("### 📦 Close Rate by Product Category")
+            st.caption("Which product categories have the highest close rates?")
+            
+            category_rates = calculate_close_rate_by_category(deals_line_items_df)
+            
+            if not category_rates.empty:
+                # Sort by close rate for chart
+                chart_data = category_rates.sort_values('Close Rate', ascending=True).tail(10)  # Top 10 categories
+                
+                fig_cat_rate = go.Figure()
+                
+                # Color code by close rate
+                colors = ['#ef4444' if r < 30 else '#f59e0b' if r < 50 else '#10b981' for r in chart_data['Close Rate']]
+                
+                fig_cat_rate.add_trace(go.Bar(
+                    y=chart_data['Category'],
+                    x=chart_data['Close Rate'],
+                    orientation='h',
+                    marker=dict(color=colors, line=dict(color='rgba(255,255,255,0.2)', width=1)),
+                    text=[f"{r:.1f}% ({w}/{t})" for r, w, t in zip(chart_data['Close Rate'], chart_data['Won Deals'], chart_data['Total Deals'])],
+                    textposition='outside',
+                    textfont=dict(color='#e2e8f0', size=11)
+                ))
+                
+                fig_cat_rate.update_layout(
+                    title=dict(text='Close Rate by Product Category', font=dict(color='#e2e8f0', size=16)),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    font=dict(color='#e2e8f0'),
+                    xaxis=dict(
+                        gridcolor='rgba(148, 163, 184, 0.1)', 
+                        tickfont=dict(color='#94a3b8'),
+                        title='Close Rate (%)',
+                        range=[0, min(100, chart_data['Close Rate'].max() * 1.2)]
+                    ),
+                    yaxis=dict(gridcolor='rgba(148, 163, 184, 0.1)', tickfont=dict(color='#94a3b8')),
+                    height=400,
+                    margin=dict(t=60, b=40, l=150)
+                )
+                
+                st.plotly_chart(fig_cat_rate, use_container_width=True)
+                
+                # Show full table
+                with st.expander("📋 Full Category Breakdown"):
+                    display_cat = category_rates.copy()
+                    display_cat['Close Rate'] = display_cat['Close Rate'].apply(lambda x: f"{x:.1f}%")
+                    display_cat['Total Qty'] = display_cat['Total Qty'].apply(lambda x: f"{x:,.0f}")
+                    display_cat['Won Qty'] = display_cat['Won Qty'].apply(lambda x: f"{x:,.0f}")
+                    st.dataframe(display_cat, use_container_width=True, hide_index=True)
+            else:
+                st.info("No category data available for close rate analysis.")
+            
+            # Close Rate by Pipeline
+            pipeline_rates = calculate_close_rate_by_pipeline(deals_line_items_df)
+            
+            if not pipeline_rates.empty:
+                with st.expander("🔄 Close Rate by Pipeline"):
+                    st.caption("Compare close rates across different sales pipelines.")
+                    
+                    display_pipe = pipeline_rates.copy()
+                    display_pipe['Close Rate (Count)'] = display_pipe['Close Rate (Count)'].apply(lambda x: f"{x:.1f}%")
+                    display_pipe['Close Rate (Amount)'] = display_pipe['Close Rate (Amount)'].apply(lambda x: f"{x:.1f}%")
+                    display_pipe['Won Amount'] = display_pipe['Won Amount'].apply(lambda x: f"${x:,.0f}")
+                    display_pipe['Total Amount'] = display_pipe['Total Amount'].apply(lambda x: f"${x:,.0f}")
+                    
+                    st.dataframe(display_pipe, use_container_width=True, hide_index=True)
+            
+            # Raw Data Explorer
+            with st.expander("🔍 Explore Raw Deals Data"):
+                st.caption("View the underlying deal line item data used for this analysis.")
+                
+                # Show column info
+                st.markdown("**Available Columns:**")
+                st.write(list(deals_line_items_df.columns))
+                
+                # Filters
+                filter_col1, filter_col2 = st.columns(2)
+                
+                with filter_col1:
+                    show_won = st.checkbox("Show Won Deals", value=True, key="cr_show_won")
+                    show_lost = st.checkbox("Show Lost Deals", value=True, key="cr_show_lost")
+                
+                with filter_col2:
+                    if 'Close Status' in deals_line_items_df.columns:
+                        available_statuses = deals_line_items_df['Close Status'].dropna().unique().tolist()
+                        selected_statuses = st.multiselect(
+                            "Filter by Close Status",
+                            options=available_statuses,
+                            default=available_statuses,
+                            key="cr_status_filter"
+                        )
+                    else:
+                        selected_statuses = None
+                
+                # Apply filters
+                filtered_df = deals_line_items_df.copy()
+                
+                if not show_won:
+                    filtered_df = filtered_df[filtered_df['Is_Won'] != True]
+                if not show_lost:
+                    filtered_df = filtered_df[filtered_df['Is_Lost'] != True]
+                
+                if selected_statuses and 'Close Status' in filtered_df.columns:
+                    filtered_df = filtered_df[filtered_df['Close Status'].isin(selected_statuses)]
+                
+                # Select columns to display
+                display_columns = ['Deal Name', 'Company Name', 'Amount', 'Close Status', 'Deal Stage', 
+                                  'Is_Won', 'Is_Lost', 'Days_To_Close', 'Product Category', 'SKU']
+                available_display_cols = [c for c in display_columns if c in filtered_df.columns]
+                
+                if available_display_cols:
+                    st.dataframe(
+                        filtered_df[available_display_cols].head(100),
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    st.caption(f"Showing {min(100, len(filtered_df)):,} of {len(filtered_df):,} records")
+                else:
+                    st.dataframe(filtered_df.head(100), use_container_width=True, hide_index=True)
     
     # Data Quality Check
     st.markdown("""
