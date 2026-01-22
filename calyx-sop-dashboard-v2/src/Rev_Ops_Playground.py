@@ -6343,26 +6343,21 @@ def load_annual_tracker_data():
     
     # Load Copy of Deals Line Item for Close Rate Analysis
     # Note: Column headers are in row 2 of the sheet
-    deals_line_items_df = load_google_sheets_data("Copy of Deals Line Item", "A2:S", version=CACHE_VERSION, silent=True)
+    # Range extended to AA to include new Date Entered columns for standard reorder filtering
+    deals_line_items_df = load_google_sheets_data("Copy of Deals Line Item", "A2:AA", version=CACHE_VERSION, silent=True)
     
-    # Expected columns for Copy of Deals Line Item (in case headers need validation)
-    expected_deal_line_item_cols = [
-        'Deal ID', 'Deal Name', 'Create Date', 'Close Date', 'Deal Stage', 
-        'Pipeline', 'Deal Type', 'Deal Owner First Name', 'Deal Owner Last Name',
-        'SKU', 'Quantity', 'Primary Associated Company', 'Close Status', 
-        'Deal Close Status', 'Amount', 'Is closed lost', 'Is Closed Won', 
-        'Company Name', 'SKU Description'
+    # Standard Reorder Date columns - if ANY of these have a value, exclude the deal
+    # These are columns R through Y in the sheet
+    STANDARD_REORDER_DATE_COLS = [
+        'Date entered "Standard Reorder - Confirmed by Customer (Acquisition (New Customer))"',
+        'Date entered "Standard Reorder - Confirmed by Customer (Calyx Distribution)"',
+        'Date entered "Standard Reorder - Confirmed by Customer (Growth Pipeline (Upsell/Cross-sell))"',
+        'Date entered "Standard Reorder - Confirmed by Customer- (Retention (Existing Product))"',
+        'Date entered "Standard Reorder - Pending Customer Confirmation (Acquisition (New Customer))"',
+        'Date entered "Standard Reorder - Pending Customer Confirmation (Calyx Distribution)"',
+        'Date entered "Standard Reorder - Pending Customer Confirmation (Growth Pipeline (Upsell/Cross-sell))"',
+        'Date entered "Standard Reorder - Pending Customer Confirmation (Retention (Existing Product))"',
     ]
-    
-    # If the dataframe loaded but columns look wrong (e.g., first row is data not headers),
-    # we may need to reassign column names
-    if not deals_line_items_df.empty:
-        # Check if columns look like data rather than headers
-        first_col = str(deals_line_items_df.columns[0]).strip() if len(deals_line_items_df.columns) > 0 else ''
-        if first_col and not any(first_col.lower() == ec.lower() for ec in expected_deal_line_item_cols):
-            # Columns might be data - try using expected column names if column count matches
-            if len(deals_line_items_df.columns) == len(expected_deal_line_item_cols):
-                deals_line_items_df.columns = expected_deal_line_item_cols
     
     # Process Invoice Line Items
     if not line_items_df.empty:
@@ -6497,6 +6492,66 @@ def load_annual_tracker_data():
     if not deals_line_items_df.empty:
         if deals_line_items_df.columns.duplicated().any():
             deals_line_items_df = deals_line_items_df.loc[:, ~deals_line_items_df.columns.duplicated()]
+        
+        # =======================================================================
+        # FILTER OUT STANDARD REORDER DEALS
+        # If any of the "Date entered Standard Reorder..." columns have a value,
+        # the deal was at some point a standard reorder and should be excluded
+        # =======================================================================
+        
+        # Find which standard reorder columns are actually present in the dataframe
+        present_reorder_cols = [col for col in deals_line_items_df.columns 
+                                if 'Standard Reorder' in str(col)]
+        
+        if present_reorder_cols:
+            # Create a flag: True if ANY of the standard reorder date columns have a value
+            def has_standard_reorder_date(row):
+                for col in present_reorder_cols:
+                    val = row.get(col, None)
+                    if pd.notna(val) and str(val).strip() != '':
+                        return True
+                return False
+            
+            deals_line_items_df['Is_Standard_Reorder'] = deals_line_items_df.apply(has_standard_reorder_date, axis=1)
+            
+            # Count how many we're filtering out (store for display later)
+            reorder_line_items = deals_line_items_df['Is_Standard_Reorder'].sum()
+            total_before = len(deals_line_items_df)
+            
+            # Count unique deals being filtered
+            if 'Deal ID' in deals_line_items_df.columns:
+                reorder_deals = deals_line_items_df[deals_line_items_df['Is_Standard_Reorder'] == True]['Deal ID'].nunique()
+                total_deals_before = deals_line_items_df['Deal ID'].nunique()
+            else:
+                reorder_deals = reorder_line_items
+                total_deals_before = total_before
+            
+            # Filter out standard reorder deals
+            deals_line_items_df = deals_line_items_df[deals_line_items_df['Is_Standard_Reorder'] == False].copy()
+            
+            # Store the filtering stats as attributes on the dataframe
+            deals_line_items_df.attrs['reorder_filtered_line_items'] = reorder_line_items
+            deals_line_items_df.attrs['reorder_filtered_deals'] = reorder_deals
+            deals_line_items_df.attrs['total_deals_before_filter'] = total_deals_before
+        
+        # =======================================================================
+        # FILTER OUT DEALS BY DEAL OWNER LAST NAME (Gonzalez)
+        # =======================================================================
+        if 'Deal Owner Last Name' in deals_line_items_df.columns:
+            # Count deals being filtered
+            gonzalez_mask = deals_line_items_df['Deal Owner Last Name'].str.strip().str.lower() == 'gonzalez'
+            gonzalez_line_items = gonzalez_mask.sum()
+            
+            if 'Deal ID' in deals_line_items_df.columns:
+                gonzalez_deals = deals_line_items_df[gonzalez_mask]['Deal ID'].nunique()
+            else:
+                gonzalez_deals = gonzalez_line_items
+            
+            # Filter out Gonzalez deals
+            deals_line_items_df = deals_line_items_df[~gonzalez_mask].copy()
+            
+            # Store the filtering stats
+            deals_line_items_df.attrs['gonzalez_filtered_deals'] = gonzalez_deals
         
         # Clean numeric columns
         if 'Amount' in deals_line_items_df.columns:
@@ -7039,6 +7094,212 @@ def calculate_days_to_close_by_amount_bucket(deals_line_items_df):
             })
     
     return pd.DataFrame(bucket_metrics)
+
+
+# ===================================================================================
+# REVENUE PLANNING & GAP ANALYSIS - CALCULATION FUNCTIONS
+# ===================================================================================
+
+def calculate_avg_deal_size_by_pipeline(deals_line_items_df):
+    """
+    Calculate average deal size for WON deals by pipeline.
+    Uses unique deals to avoid double-counting from line items.
+    """
+    if deals_line_items_df.empty:
+        return {}
+    
+    df = deals_line_items_df.copy()
+    
+    # Get unique deals
+    deal_id_col = 'Deal ID' if 'Deal ID' in df.columns else 'Deal Name'
+    if deal_id_col not in df.columns:
+        return {}
+    
+    # Only won deals
+    won_deals = df[df['Is_Won'] == True].copy()
+    if won_deals.empty:
+        return {}
+    
+    unique_won = won_deals.groupby(deal_id_col).agg({
+        'Amount': 'first',
+        'Pipeline': 'first'
+    }).reset_index()
+    
+    # Calculate by pipeline
+    avg_by_pipeline = {}
+    for pipeline in unique_won['Pipeline'].dropna().unique():
+        pipe_deals = unique_won[unique_won['Pipeline'] == pipeline]
+        if len(pipe_deals) > 0:
+            avg_by_pipeline[pipeline] = {
+                'avg_deal_size': pipe_deals['Amount'].mean(),
+                'median_deal_size': pipe_deals['Amount'].median(),
+                'total_deals': len(pipe_deals),
+                'total_revenue': pipe_deals['Amount'].sum()
+            }
+    
+    # Overall average
+    avg_by_pipeline['Overall'] = {
+        'avg_deal_size': unique_won['Amount'].mean(),
+        'median_deal_size': unique_won['Amount'].median(),
+        'total_deals': len(unique_won),
+        'total_revenue': unique_won['Amount'].sum()
+    }
+    
+    return avg_by_pipeline
+
+
+def calculate_pipeline_expected_revenue(open_deals_df, close_rates_by_status, close_rates_by_pipeline):
+    """
+    Calculate expected revenue from open pipeline deals.
+    
+    Uses historical close rates to weight each deal:
+    - If Close Status available: use status-specific rate
+    - Fallback to pipeline-specific rate
+    - Fallback to overall rate
+    
+    Returns dict with expected revenue calculations.
+    """
+    if open_deals_df.empty:
+        return {
+            'total_pipeline_value': 0,
+            'expected_revenue': 0,
+            'by_status': {},
+            'by_pipeline': {},
+            'deal_count': 0
+        }
+    
+    df = open_deals_df.copy()
+    
+    # Get overall fallback rate
+    overall_rate = 50.0  # Default assumption
+    if 'Overall' in close_rates_by_pipeline:
+        # Use weighted average across pipelines
+        total_deals = sum(p.get('total_deals', 0) for p in close_rates_by_pipeline.values() if isinstance(p, dict))
+        if total_deals > 0:
+            weighted_sum = sum(
+                p.get('close_rate', 50) * p.get('total_deals', 0) 
+                for p in close_rates_by_pipeline.values() 
+                if isinstance(p, dict)
+            )
+            overall_rate = weighted_sum / total_deals
+    
+    # Calculate expected value for each deal
+    def get_expected_value(row):
+        amount = row.get('Amount', 0) or 0
+        close_status = row.get('Close Status', '')
+        pipeline = row.get('Pipeline', '')
+        
+        # Priority 1: Close Status specific rate
+        if close_status and close_status in close_rates_by_status:
+            rate = close_rates_by_status[close_status].get('close_rate_count', overall_rate)
+            return amount * (rate / 100), rate, 'status'
+        
+        # Priority 2: Pipeline specific rate
+        if pipeline and pipeline in close_rates_by_pipeline:
+            rate = close_rates_by_pipeline[pipeline].get('close_rate', overall_rate)
+            return amount * (rate / 100), rate, 'pipeline'
+        
+        # Fallback to overall
+        return amount * (overall_rate / 100), overall_rate, 'overall'
+    
+    df['Expected_Value'], df['Applied_Rate'], df['Rate_Source'] = zip(*df.apply(get_expected_value, axis=1))
+    
+    total_pipeline_value = df['Amount'].sum()
+    expected_revenue = df['Expected_Value'].sum()
+    
+    # Breakdown by Close Status
+    by_status = {}
+    if 'Close Status' in df.columns:
+        for status in df['Close Status'].dropna().unique():
+            status_df = df[df['Close Status'] == status]
+            by_status[status] = {
+                'deal_count': len(status_df),
+                'pipeline_value': status_df['Amount'].sum(),
+                'expected_revenue': status_df['Expected_Value'].sum(),
+                'applied_rate': status_df['Applied_Rate'].mean()
+            }
+    
+    # Breakdown by Pipeline
+    by_pipeline = {}
+    if 'Pipeline' in df.columns:
+        for pipeline in df['Pipeline'].dropna().unique():
+            pipe_df = df[df['Pipeline'] == pipeline]
+            by_pipeline[pipeline] = {
+                'deal_count': len(pipe_df),
+                'pipeline_value': pipe_df['Amount'].sum(),
+                'expected_revenue': pipe_df['Expected_Value'].sum(),
+                'applied_rate': pipe_df['Applied_Rate'].mean()
+            }
+    
+    return {
+        'total_pipeline_value': total_pipeline_value,
+        'expected_revenue': expected_revenue,
+        'by_status': by_status,
+        'by_pipeline': by_pipeline,
+        'deal_count': len(df),
+        'details': df
+    }
+
+
+def calculate_revenue_gap_analysis(revenue_target, current_actuals, expected_pipeline, 
+                                    avg_deal_size, close_rate):
+    """
+    Calculate gap to revenue target and deals/opportunities needed.
+    
+    Formulas:
+    - Revenue Gap = Target - (Actuals + Expected Pipeline)
+    - Deals Needed = Gap / Avg Deal Size
+    - Opportunities Needed = Gap / (Close Rate × Avg Deal Size)
+    """
+    # What we expect to have
+    projected_total = current_actuals + expected_pipeline
+    
+    # Gap to target
+    revenue_gap = revenue_target - projected_total
+    
+    # Deals needed to close gap (assuming we win them all)
+    deals_needed = revenue_gap / avg_deal_size if avg_deal_size > 0 else 0
+    
+    # Opportunities needed (accounting for close rate)
+    close_rate_decimal = close_rate / 100 if close_rate > 1 else close_rate
+    opportunities_needed = revenue_gap / (close_rate_decimal * avg_deal_size) if (close_rate_decimal * avg_deal_size) > 0 else 0
+    
+    # Attainment projections
+    projected_attainment = (projected_total / revenue_target * 100) if revenue_target > 0 else 0
+    current_attainment = (current_actuals / revenue_target * 100) if revenue_target > 0 else 0
+    
+    return {
+        'revenue_target': revenue_target,
+        'current_actuals': current_actuals,
+        'expected_pipeline': expected_pipeline,
+        'projected_total': projected_total,
+        'revenue_gap': revenue_gap,
+        'deals_needed': max(0, deals_needed),  # Can't need negative deals
+        'opportunities_needed': max(0, opportunities_needed),
+        'projected_attainment': projected_attainment,
+        'current_attainment': current_attainment,
+        'avg_deal_size': avg_deal_size,
+        'close_rate': close_rate,
+        'on_track': revenue_gap <= 0
+    }
+
+
+def calculate_monthly_deals_needed(gap_analysis, months_remaining):
+    """
+    Calculate deals/opportunities needed per month to close the gap.
+    """
+    if months_remaining <= 0:
+        return {
+            'deals_per_month': 0,
+            'opportunities_per_month': 0,
+            'revenue_per_month': 0
+        }
+    
+    return {
+        'deals_per_month': gap_analysis['deals_needed'] / months_remaining,
+        'opportunities_per_month': gap_analysis['opportunities_needed'] / months_remaining,
+        'revenue_per_month': gap_analysis['revenue_gap'] / months_remaining
+    }
 
 
 # ===================================================================================
@@ -9041,6 +9302,21 @@ def render_yearly_planning_2026():
     if deals_line_items_df.empty:
         st.warning("⚠️ No data found in 'Copy of Deals Line Item' sheet. Close Rate Analysis requires this data source.")
     else:
+        # Show info about filtering if applicable
+        reorder_filtered = deals_line_items_df.attrs.get('reorder_filtered_deals', 0)
+        total_deals_before = deals_line_items_df.attrs.get('total_deals_before_filter', 0)
+        gonzalez_filtered = deals_line_items_df.attrs.get('gonzalez_filtered_deals', 0)
+        
+        filter_messages = []
+        if reorder_filtered > 0:
+            filter_messages.append(f"**{reorder_filtered:,}** Standard Reorder deals")
+        if gonzalez_filtered > 0:
+            filter_messages.append(f"**{gonzalez_filtered:,}** Gonzalez deals")
+        
+        if filter_messages:
+            total_filtered = reorder_filtered + gonzalez_filtered
+            st.info(f"ℹ️ **Deals excluded from analysis:** {' and '.join(filter_messages)} filtered out to show true sales conversion rates.")
+        
         # Calculate metrics
         close_rate_metrics = calculate_close_rate_metrics(deals_line_items_df)
         
@@ -9464,6 +9740,325 @@ def render_yearly_planning_2026():
                     st.dataframe(display_pipe, use_container_width=True, hide_index=True)
             else:
                 st.info("No pipeline data available for close rate analysis.")
+            
+            # ==========================================================================
+            # REVENUE PLANNING & GAP ANALYSIS SECTION
+            # ==========================================================================
+            st.markdown("### 🎯 Revenue Planning & Gap Analysis")
+            st.caption("Use historical close rates to project pipeline revenue and calculate what's needed to hit targets.")
+            
+            # Get average deal sizes
+            avg_deal_sizes = calculate_avg_deal_size_by_pipeline(deals_line_items_df)
+            
+            # Build close rates dict for pipeline expected revenue calculation
+            close_rates_for_calc = {}
+            if close_rate_metrics and 'by_close_status' in close_rate_metrics:
+                for status, data in close_rate_metrics['by_close_status'].items():
+                    close_rates_for_calc[status] = {
+                        'close_rate_count': data.get('close_rate_count', 50),
+                        'total_deals': data.get('total_deals', 0)
+                    }
+            
+            pipeline_rates_for_calc = {}
+            if not pipeline_rates.empty:
+                for _, row in pipeline_rates.iterrows():
+                    pipeline_rates_for_calc[row['Pipeline']] = {
+                        'close_rate': row['Close Rate (Count)'],
+                        'total_deals': row['Total Deals']
+                    }
+            
+            # Get current open pipeline deals
+            open_deal_statuses = ['Expect', 'Commit', 'Best Case', 'Opportunity']
+            open_deals = pd.DataFrame()
+            
+            if not deals_df.empty:
+                stage_col = 'Close Status' if 'Close Status' in deals_df.columns else 'Deal Stage'
+                if stage_col in deals_df.columns:
+                    open_deals = deals_df[deals_df[stage_col].isin(open_deal_statuses)].copy()
+            
+            # Calculate expected pipeline revenue
+            pipeline_expected = calculate_pipeline_expected_revenue(
+                open_deals, 
+                close_rates_for_calc, 
+                pipeline_rates_for_calc
+            )
+            
+            # Show Average Deal Size metrics
+            col1, col2, col3 = st.columns(3)
+            
+            overall_avg = avg_deal_sizes.get('Overall', {}).get('avg_deal_size', 0)
+            overall_median = avg_deal_sizes.get('Overall', {}).get('median_deal_size', 0)
+            overall_close_rate = close_rate_metrics['overall']['close_rate_count'] if close_rate_metrics else 50
+            
+            with col1:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Avg Deal Size (Won)</div>
+                        <div class="metric-value">${overall_avg:,.0f}</div>
+                        <div class="metric-delta neutral">Median: ${overall_median:,.0f}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Historical Close Rate</div>
+                        <div class="metric-value">{overall_close_rate:.1f}%</div>
+                        <div class="metric-delta neutral">Used for projections</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">Open Pipeline Deals</div>
+                        <div class="metric-value">{pipeline_expected['deal_count']:,}</div>
+                        <div class="metric-delta neutral">${pipeline_expected['total_pipeline_value']:,.0f} total value</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Pipeline Expected Revenue Summary
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            exp_col1, exp_col2, exp_col3 = st.columns(3)
+            
+            with exp_col1:
+                st.markdown(f"""
+                    <div class="glass-card" style="border-left: 4px solid #8b5cf6;">
+                        <div class="metric-label">Raw Pipeline Value</div>
+                        <div class="metric-value" style="color: #8b5cf6;">${pipeline_expected['total_pipeline_value']:,.0f}</div>
+                        <div class="metric-delta neutral">If 100% closed</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with exp_col2:
+                st.markdown(f"""
+                    <div class="glass-card" style="border-left: 4px solid #10b981;">
+                        <div class="metric-label">Expected Pipeline Revenue</div>
+                        <div class="metric-value" style="color: #10b981;">${pipeline_expected['expected_revenue']:,.0f}</div>
+                        <div class="metric-delta neutral">Weighted by close rates</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with exp_col3:
+                conversion_pct = (pipeline_expected['expected_revenue'] / pipeline_expected['total_pipeline_value'] * 100) if pipeline_expected['total_pipeline_value'] > 0 else 0
+                st.markdown(f"""
+                    <div class="glass-card" style="border-left: 4px solid #f59e0b;">
+                        <div class="metric-label">Effective Conversion</div>
+                        <div class="metric-value" style="color: #f59e0b;">{conversion_pct:.1f}%</div>
+                        <div class="metric-delta neutral">Blended pipeline rate</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Expected Revenue by Close Status breakdown
+            if pipeline_expected['by_status']:
+                with st.expander("📊 Expected Revenue by Close Status"):
+                    status_data = []
+                    for status in ['Commit', 'Expect', 'Best Case', 'Opportunity']:
+                        if status in pipeline_expected['by_status']:
+                            s = pipeline_expected['by_status'][status]
+                            status_data.append({
+                                'Close Status': status,
+                                'Deals': s['deal_count'],
+                                'Pipeline Value': f"${s['pipeline_value']:,.0f}",
+                                'Applied Rate': f"{s['applied_rate']:.1f}%",
+                                'Expected Revenue': f"${s['expected_revenue']:,.0f}"
+                            })
+                    
+                    if status_data:
+                        st.dataframe(pd.DataFrame(status_data), use_container_width=True, hide_index=True)
+            
+            # Gap Analysis Section
+            st.markdown("---")
+            st.markdown("#### 📉 Gap Analysis & Deals Needed")
+            
+            # Target Input - can use forecast or manual
+            target_col1, target_col2 = st.columns([2, 1])
+            
+            with target_col1:
+                # Get YTD target from forecast if available
+                default_target = 0
+                if 'forecast' in data and not data['forecast'].empty:
+                    forecast_df = data['forecast']
+                    total_row = forecast_df[(forecast_df['Pipeline'] == 'Total') & (forecast_df['Category'] == 'Total')]
+                    if not total_row.empty and 'Annual_Total' in total_row.columns:
+                        default_target = total_row['Annual_Total'].values[0]
+                
+                revenue_target = st.number_input(
+                    "Revenue Target ($)",
+                    min_value=0,
+                    value=int(default_target),
+                    step=100000,
+                    format="%d",
+                    help="Enter your revenue target. Defaults to 2026 Annual Forecast total if available.",
+                    key="gap_revenue_target"
+                )
+            
+            with target_col2:
+                # Calculate months remaining in year
+                current_month = datetime.now().month
+                months_remaining = 12 - current_month + 1
+                
+                months_input = st.number_input(
+                    "Months Remaining",
+                    min_value=1,
+                    max_value=12,
+                    value=months_remaining,
+                    help="Months remaining to hit target",
+                    key="gap_months_remaining"
+                )
+            
+            # Get current actuals from the selected year
+            current_actuals = 0
+            if not line_items_df.empty and 'Date' in line_items_df.columns:
+                year_actuals = line_items_df[line_items_df['Date'].dt.year == selected_year]
+                current_actuals = year_actuals['Amount'].sum() if not year_actuals.empty else 0
+            
+            # Calculate gap analysis
+            gap_analysis = calculate_revenue_gap_analysis(
+                revenue_target=revenue_target,
+                current_actuals=current_actuals,
+                expected_pipeline=pipeline_expected['expected_revenue'],
+                avg_deal_size=overall_avg,
+                close_rate=overall_close_rate
+            )
+            
+            monthly_needs = calculate_monthly_deals_needed(gap_analysis, months_input)
+            
+            # Display Gap Analysis Results
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            gap_col1, gap_col2, gap_col3, gap_col4 = st.columns(4)
+            
+            with gap_col1:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">YTD Actuals ({selected_year})</div>
+                        <div class="metric-value" style="color: #10b981;">${gap_analysis['current_actuals']:,.0f}</div>
+                        <div class="metric-delta neutral">{gap_analysis['current_attainment']:.1f}% of target</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with gap_col2:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">+ Expected Pipeline</div>
+                        <div class="metric-value" style="color: #8b5cf6;">${gap_analysis['expected_pipeline']:,.0f}</div>
+                        <div class="metric-delta neutral">Probability-weighted</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with gap_col3:
+                st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-label">= Projected Total</div>
+                        <div class="metric-value" style="color: #3b82f6;">${gap_analysis['projected_total']:,.0f}</div>
+                        <div class="metric-delta neutral">{gap_analysis['projected_attainment']:.1f}% of target</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with gap_col4:
+                gap_color = "#10b981" if gap_analysis['on_track'] else "#ef4444"
+                gap_sign = "+" if gap_analysis['revenue_gap'] < 0 else "-"
+                gap_label = "Surplus" if gap_analysis['on_track'] else "Gap"
+                st.markdown(f"""
+                    <div class="metric-card {'success' if gap_analysis['on_track'] else 'danger'}">
+                        <div class="metric-label">Revenue {gap_label}</div>
+                        <div class="metric-value" style="color: {gap_color};">${abs(gap_analysis['revenue_gap']):,.0f}</div>
+                        <div class="metric-delta {'positive' if gap_analysis['on_track'] else 'negative'}">{'On Track! 🎉' if gap_analysis['on_track'] else 'Need to close gap'}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Deals/Opportunities Needed
+            if not gap_analysis['on_track'] and gap_analysis['revenue_gap'] > 0:
+                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("#### 🔢 What's Needed to Close the Gap")
+                
+                need_col1, need_col2, need_col3 = st.columns(3)
+                
+                with need_col1:
+                    st.markdown(f"""
+                        <div class="glass-card" style="border-left: 4px solid #ef4444; background: rgba(239, 68, 68, 0.1);">
+                            <div style="color: #f87171; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;">Deals Needed (100% Win)</div>
+                            <div style="font-size: 2.5rem; font-weight: 700; color: #fca5a5;">{gap_analysis['deals_needed']:.0f}</div>
+                            <div style="color: #94a3b8; font-size: 0.85rem; margin-top: 0.5rem;">
+                                {monthly_needs['deals_per_month']:.1f} per month
+                            </div>
+                            <div style="color: #64748b; font-size: 0.75rem;">
+                                Formula: Gap ÷ Avg Deal Size
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with need_col2:
+                    st.markdown(f"""
+                        <div class="glass-card" style="border-left: 4px solid #f59e0b; background: rgba(245, 158, 11, 0.1);">
+                            <div style="color: #fbbf24; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;">Opportunities Needed</div>
+                            <div style="font-size: 2.5rem; font-weight: 700; color: #fcd34d;">{gap_analysis['opportunities_needed']:.0f}</div>
+                            <div style="color: #94a3b8; font-size: 0.85rem; margin-top: 0.5rem;">
+                                {monthly_needs['opportunities_per_month']:.1f} per month
+                            </div>
+                            <div style="color: #64748b; font-size: 0.75rem;">
+                                Formula: Gap ÷ (Close Rate × Avg Deal Size)
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                with need_col3:
+                    st.markdown(f"""
+                        <div class="glass-card" style="border-left: 4px solid #6366f1; background: rgba(99, 102, 241, 0.1);">
+                            <div style="color: #a5b4fc; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 1px;">Monthly Revenue Needed</div>
+                            <div style="font-size: 2.5rem; font-weight: 700; color: #c7d2fe;">${monthly_needs['revenue_per_month']:,.0f}</div>
+                            <div style="color: #94a3b8; font-size: 0.85rem; margin-top: 0.5rem;">
+                                Over {months_input} months
+                            </div>
+                            <div style="color: #64748b; font-size: 0.75rem;">
+                                To close ${gap_analysis['revenue_gap']:,.0f} gap
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+                
+                # Assumptions callout
+                st.markdown(f"""
+                    <div style="background: rgba(148, 163, 184, 0.1); border-radius: 8px; padding: 1rem; margin-top: 1rem;">
+                        <div style="color: #94a3b8; font-size: 0.85rem;">
+                            <strong>📊 Assumptions used:</strong>
+                            Avg Deal Size = <strong>${overall_avg:,.0f}</strong> | 
+                            Close Rate = <strong>{overall_close_rate:.1f}%</strong> | 
+                            Based on historical won deals
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            elif gap_analysis['on_track']:
+                st.markdown(f"""
+                    <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 1.5rem; margin-top: 1rem; text-align: center;">
+                        <div style="font-size: 2rem; margin-bottom: 0.5rem;">🎉</div>
+                        <div style="color: #34d399; font-size: 1.25rem; font-weight: 600;">On Track to Exceed Target!</div>
+                        <div style="color: #94a3b8; margin-top: 0.5rem;">
+                            Projected ${gap_analysis['projected_total']:,.0f} vs Target ${revenue_target:,.0f}
+                            <br>
+                            <span style="color: #10b981; font-weight: 600;">Surplus: ${abs(gap_analysis['revenue_gap']):,.0f}</span>
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            # Avg Deal Size by Pipeline breakdown
+            if avg_deal_sizes:
+                with st.expander("📊 Average Deal Size by Pipeline"):
+                    deal_size_data = []
+                    for pipeline, metrics in avg_deal_sizes.items():
+                        if pipeline != 'Overall' and isinstance(metrics, dict):
+                            deal_size_data.append({
+                                'Pipeline': pipeline,
+                                'Avg Deal Size': f"${metrics['avg_deal_size']:,.0f}",
+                                'Median Deal Size': f"${metrics['median_deal_size']:,.0f}",
+                                'Won Deals': metrics['total_deals'],
+                                'Total Revenue': f"${metrics['total_revenue']:,.0f}"
+                            })
+                    
+                    if deal_size_data:
+                        st.dataframe(pd.DataFrame(deal_size_data), use_container_width=True, hide_index=True)
             
             # Raw Data Explorer
             with st.expander("🔍 Explore Raw Deals Data"):
