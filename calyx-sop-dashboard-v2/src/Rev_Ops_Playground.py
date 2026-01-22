@@ -25,7 +25,7 @@ import uuid
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-CACHE_VERSION = "v3_calyx_categories"
+CACHE_VERSION = "v4_tooling_shipping_fix"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
@@ -5055,6 +5055,8 @@ def apply_product_categories(df):
     # Find Calyx columns (flexible matching - handles whitespace and case differences)
     product_type_col = None
     item_type_col = None
+    item_col = None
+    item_desc_col = None
     
     for col in df.columns:
         col_lower = str(col).lower().strip()
@@ -5064,16 +5066,20 @@ def apply_product_categories(df):
         # Look for "calyx | item type" or similar  
         elif 'item type' in col_lower and 'calyx' in col_lower:
             item_type_col = col
-    
-    # Debug: Print what we found (comment out in production)
-    # print(f"DEBUG: Found product_type_col={product_type_col}, item_type_col={item_type_col}")
-    # print(f"DEBUG: Available columns: {list(df.columns)}")
+        # Look for Item column
+        elif col_lower == 'item':
+            item_col = col
+        # Look for Item Description column
+        elif col_lower == 'item description':
+            item_desc_col = col
     
     def categorize_row(row):
         """Categorize a single row based on Calyx columns"""
         # Get column values
         product_type_raw = ''
         item_type_raw = ''
+        item_name = ''
+        item_desc = ''
         
         if product_type_col and product_type_col in row.index:
             val = row[product_type_col]
@@ -5085,15 +5091,41 @@ def apply_product_categories(df):
             if pd.notna(val):
                 item_type_raw = str(val).strip()
         
+        if item_col and item_col in row.index:
+            val = row[item_col]
+            if pd.notna(val):
+                item_name = str(val).strip()
+        
+        if item_desc_col and item_desc_col in row.index:
+            val = row[item_desc_col]
+            if pd.notna(val):
+                item_desc = str(val).strip()
+        
         product_type = product_type_raw.lower()
         item_type = item_type_raw.lower()
+        item_name_lower = item_name.lower()
+        item_desc_lower = item_desc.lower()
         
-        # PRIMARY: Check Calyx || Product Type first
+        # OVERRIDE 1: Check for Tooling Fee in item name - always categorize as Other
+        # This catches "Tooling Fee - Labels" which shouldn't be in Labels
+        if 'tooling fee' in item_name_lower or 'tooling fee' in item_desc_lower:
+            return ('Other', 'Tooling Fee', None)
+        
+        # OVERRIDE 2: Check for Shipping in item type FIRST (before product type)
+        # Shipping should be its own category
+        if item_type == 'shipping':
+            return ('Shipping', 'Shipping', None)
+        
+        # Also check item name for shipping patterns
+        if 'shipping' in item_name_lower and ('freight' in item_name_lower or 'ship' in item_name_lower or item_name_lower.startswith('shipping')):
+            return ('Shipping', 'Shipping', None)
+        
+        # PRIMARY: Check Calyx || Product Type
         if product_type and product_type in PRODUCT_TYPE_TO_CATEGORY:
             category = PRODUCT_TYPE_TO_CATEGORY[product_type]
             return (category, product_type_raw, None)
         
-        # FALLBACK: Check Calyx | Item Type for shipping/tax
+        # FALLBACK: Check Calyx | Item Type for other types
         if item_type and item_type in ITEM_TYPE_TO_CATEGORY:
             category = ITEM_TYPE_TO_CATEGORY[item_type]
             return (category, item_type_raw, None)
