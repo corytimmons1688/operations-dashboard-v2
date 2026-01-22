@@ -25,7 +25,7 @@ import uuid
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-CACHE_VERSION = "v6_deals_line_item_pipeline"
+CACHE_VERSION = "v7_so_line_items_time_filter"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
@@ -6499,6 +6499,9 @@ def load_annual_tracker_data():
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     forecast_df = load_forecast_data()
     
+    # Load Sales Order Line Item for proper categorization (same structure as Invoice Line Item)
+    sales_order_line_items_df = load_google_sheets_data("Sales Order Line Item", "A:W", version=CACHE_VERSION, silent=True)
+    
     # Load Copy of Deals Line Item for Close Rate Analysis
     # Note: Column headers are in row 2 of the sheet
     # Range extended to AB to include Effective unit price column
@@ -6620,7 +6623,7 @@ def load_annual_tracker_data():
             
             line_items_df['Forecast Pipeline'] = line_items_df.apply(assign_so_manually_built_pipeline, axis=1)
     
-    # Process Sales Orders
+    # Process Sales Orders (header level - kept for backward compatibility)
     if not sales_orders_df.empty:
         if sales_orders_df.columns.duplicated().any():
             sales_orders_df = sales_orders_df.loc[:, ~sales_orders_df.columns.duplicated()]
@@ -6644,6 +6647,39 @@ def load_annual_tracker_data():
         
         if 'Order Type' in sales_orders_df.columns:
             sales_orders_df['Forecast Category'] = sales_orders_df['Order Type'].apply(map_order_type_to_forecast_category)
+    
+    # =======================================================================
+    # PROCESS SALES ORDER LINE ITEMS (for proper categorization)
+    # Uses same Calyx || Product Type logic as Invoice Line Items
+    # =======================================================================
+    if not sales_order_line_items_df.empty:
+        if sales_order_line_items_df.columns.duplicated().any():
+            sales_order_line_items_df = sales_order_line_items_df.loc[:, ~sales_order_line_items_df.columns.duplicated()]
+        
+        # Clean numeric columns
+        if 'Amount' in sales_order_line_items_df.columns:
+            sales_order_line_items_df['Amount'] = sales_order_line_items_df['Amount'].apply(clean_numeric)
+        if 'Quantity Ordered' in sales_order_line_items_df.columns:
+            sales_order_line_items_df['Quantity'] = sales_order_line_items_df['Quantity Ordered'].apply(clean_numeric)
+        
+        # Parse dates
+        if 'Date Created' in sales_order_line_items_df.columns:
+            sales_order_line_items_df['Date Created'] = pd.to_datetime(sales_order_line_items_df['Date Created'], errors='coerce')
+        if 'Pending Fulfillment Date' in sales_order_line_items_df.columns:
+            sales_order_line_items_df['Pending Fulfillment Date'] = pd.to_datetime(sales_order_line_items_df['Pending Fulfillment Date'], errors='coerce')
+        
+        # Apply same Calyx-based categorization as Invoice Line Items
+        sales_order_line_items_df = apply_product_categories(sales_order_line_items_df)
+        
+        # Map to forecast categories
+        sales_order_line_items_df['Forecast Category'] = sales_order_line_items_df.apply(
+            lambda row: map_to_forecast_category(row.get('Product Category'), row.get('Product Sub-Category')),
+            axis=1
+        )
+        
+        # Map HubSpot Pipeline
+        if 'HubSpot Pipeline' in sales_order_line_items_df.columns:
+            sales_order_line_items_df['Forecast Pipeline'] = sales_order_line_items_df['HubSpot Pipeline'].apply(map_to_forecast_pipeline)
     
     # Process HubSpot Deals
     if not deals_df.empty:
@@ -6834,6 +6870,7 @@ def load_annual_tracker_data():
         'line_items': line_items_df,
         'invoices': invoices_df,
         'sales_orders': sales_orders_df,
+        'sales_order_line_items': sales_order_line_items_df,
         'deals': deals_df,
         'deals_line_items': deals_line_items_df,
         'pipeline_deals': pipeline_deals_df
@@ -6994,6 +7031,51 @@ def get_ytd_plan(forecast_df, through_month):
     df['YTD_Plan'] = df[months_to_sum].sum(axis=1)
     
     return df[['Pipeline', 'Category', 'YTD_Plan', 'Annual_Total']]
+
+
+def get_period_plan(forecast_df, period_type, month=None, quarter=None):
+    """
+    Calculate plan for a specific time period (Month or Quarter).
+    
+    Args:
+        forecast_df: Forecast dataframe with monthly columns
+        period_type: 'Month' or 'Quarter'
+        month: Month number (1-12) for Month period type
+        quarter: Quarter number (1-4) for Quarter period type
+    
+    Returns:
+        DataFrame with Pipeline, Category, and Period_Plan columns
+    """
+    if forecast_df.empty:
+        return pd.DataFrame()
+    
+    df = forecast_df.copy()
+    
+    if period_type == 'Month' and month:
+        # Get plan for a single month
+        month_name = MONTH_NAMES[month - 1]  # 0-indexed
+        if month_name in df.columns:
+            df['Period_Plan'] = df[month_name]
+        else:
+            df['Period_Plan'] = 0
+    elif period_type == 'Quarter' and quarter:
+        # Get plan for a quarter (sum of 3 months)
+        quarter_months = {
+            1: ['January', 'February', 'March'],
+            2: ['April', 'May', 'June'],
+            3: ['July', 'August', 'September'],
+            4: ['October', 'November', 'December']
+        }
+        months_to_sum = quarter_months.get(quarter, [])
+        available_months = [m for m in months_to_sum if m in df.columns]
+        if available_months:
+            df['Period_Plan'] = df[available_months].sum(axis=1)
+        else:
+            df['Period_Plan'] = 0
+    else:
+        df['Period_Plan'] = 0
+    
+    return df[['Pipeline', 'Category', 'Period_Plan', 'Annual_Total']]
 
 
 def calculate_variance(actuals_df, plan_df):
@@ -8158,6 +8240,7 @@ def render_yearly_planning_2026():
     forecast_df = data.get('forecast', pd.DataFrame())
     line_items_df = data.get('line_items', pd.DataFrame())
     sales_orders_df = data.get('sales_orders', pd.DataFrame())
+    sales_order_line_items_df = data.get('sales_order_line_items', pd.DataFrame())
     deals_df = data.get('deals', pd.DataFrame())
     pipeline_deals_df = data.get('pipeline_deals', pd.DataFrame())
     
@@ -8888,24 +8971,62 @@ def render_yearly_planning_2026():
         <div style="background: rgba(99, 102, 241, 0.1); border-left: 4px solid #6366f1; padding: 1rem; border-radius: 0 8px 8px 0; margin-bottom: 1.5rem;">
             <strong style="color: #a5b4fc;">📊 What you're seeing:</strong>
             <span style="color: #94a3b8;"> Combined view of Realized Revenue + Pending Orders + HubSpot Pipeline, broken down by Category and Pipeline.</span>
-            <br><span style="color: #64748b; font-size: 0.85rem;">Use the filters to adjust which HubSpot deal stages to include.</span>
+            <br><span style="color: #64748b; font-size: 0.85rem;">Use the filters to adjust time period and which HubSpot deal stages to include.</span>
         </div>
     """, unsafe_allow_html=True)
     
-    # HubSpot Deal Stage Filter
-    st.markdown("**HubSpot Deal Stage Filter:**")
+    # Time Period and Deal Stage Filters
+    filter_col1, filter_col2 = st.columns([1, 2])
     
-    # Available stages - check what's in the data (try both column names)
-    available_stages = []
-    stage_column = None
+    with filter_col1:
+        st.markdown("**Time Period:**")
+        time_period = st.radio(
+            "View by:",
+            options=["Month", "Quarter"],
+            index=0,
+            horizontal=True,
+            key="pipeline_time_period",
+            label_visibility="collapsed"
+        )
+        
+        # Determine the date range based on selection
+        now = datetime.now()
+        if time_period == "Month":
+            # Current month
+            period_start = datetime(selected_year, current_month, 1)
+            if current_month == 12:
+                period_end = datetime(selected_year + 1, 1, 1) - timedelta(days=1)
+            else:
+                period_end = datetime(selected_year, current_month + 1, 1) - timedelta(days=1)
+            period_label = period_start.strftime("%B %Y")
+        else:
+            # Current quarter
+            current_quarter = (current_month - 1) // 3 + 1
+            quarter_start_month = (current_quarter - 1) * 3 + 1
+            quarter_end_month = current_quarter * 3
+            period_start = datetime(selected_year, quarter_start_month, 1)
+            if quarter_end_month == 12:
+                period_end = datetime(selected_year + 1, 1, 1) - timedelta(days=1)
+            else:
+                period_end = datetime(selected_year, quarter_end_month + 1, 1) - timedelta(days=1)
+            period_label = f"Q{current_quarter} {selected_year}"
+        
+        st.caption(f"Showing: **{period_label}**")
     
-    if not pipeline_deals_df.empty:
-        if 'Close Status' in pipeline_deals_df.columns:
-            stage_column = 'Close Status'
-            available_stages = pipeline_deals_df['Close Status'].dropna().unique().tolist()
-        elif 'Deal Stage' in pipeline_deals_df.columns:
-            stage_column = 'Deal Stage'
-            available_stages = pipeline_deals_df['Deal Stage'].dropna().unique().tolist()
+    with filter_col2:
+        st.markdown("**HubSpot Deal Stage Filter:**")
+        
+        # Available stages - check what's in the data (try both column names)
+        available_stages = []
+        stage_column = None
+        
+        if not pipeline_deals_df.empty:
+            if 'Close Status' in pipeline_deals_df.columns:
+                stage_column = 'Close Status'
+                available_stages = pipeline_deals_df['Close Status'].dropna().unique().tolist()
+            elif 'Deal Stage' in pipeline_deals_df.columns:
+                stage_column = 'Deal Stage'
+                available_stages = pipeline_deals_df['Deal Stage'].dropna().unique().tolist()
     
     # Common stage names to look for (in priority order)
     priority_stages = ['Commit', 'Best Case', 'Expect', 'Opportunity']
@@ -8927,28 +9048,48 @@ def render_yearly_planning_2026():
         st.info("No HubSpot deal stages available")
     
     # Calculate data for each source
-    # 1. Actuals (from line_items_df)
+    # 1. Actuals (from line_items_df) - filtered by selected time period
     actuals_by_category = pd.DataFrame()
     actuals_by_pipeline = pd.DataFrame()
     
     if not line_items_df.empty:
-        year_filtered = line_items_df.copy()
-        if 'Date' in year_filtered.columns:
-            year_filtered = year_filtered[year_filtered['Date'].dt.year == selected_year]
+        period_filtered = line_items_df.copy()
+        if 'Date' in period_filtered.columns:
+            # Filter by the selected time period (Month or Quarter)
+            period_filtered = period_filtered[
+                (period_filtered['Date'] >= period_start) & 
+                (period_filtered['Date'] <= period_end)
+            ]
         
-        if 'Forecast Category' in year_filtered.columns:
-            actuals_by_category = year_filtered.groupby('Forecast Category')['Amount'].sum().reset_index()
+        if 'Forecast Category' in period_filtered.columns:
+            actuals_by_category = period_filtered.groupby('Forecast Category')['Amount'].sum().reset_index()
             actuals_by_category.columns = ['Category', 'Actuals']
         
-        if 'Forecast Pipeline' in year_filtered.columns:
-            actuals_by_pipeline = year_filtered.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+        if 'Forecast Pipeline' in period_filtered.columns:
+            actuals_by_pipeline = period_filtered.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             actuals_by_pipeline.columns = ['Pipeline', 'Actuals']
     
-    # 2. Pending Sales Orders
+    # 2. Pending Sales Orders (from sales_order_line_items_df for proper categorization)
     pending_by_category = pd.DataFrame()
     pending_by_pipeline = pd.DataFrame()
     
-    if not sales_orders_df.empty:
+    if not sales_order_line_items_df.empty:
+        pending_orders = sales_order_line_items_df.copy()
+        # Filter for pending/partial fulfillment status
+        if 'Status' in pending_orders.columns:
+            pending_orders = pending_orders[
+                pending_orders['Status'].str.contains('Pending|Partial', case=False, na=False)
+            ]
+        
+        if 'Forecast Category' in pending_orders.columns:
+            pending_by_category = pending_orders.groupby('Forecast Category')['Amount'].sum().reset_index()
+            pending_by_category.columns = ['Category', 'Pending']
+        
+        if 'Forecast Pipeline' in pending_orders.columns:
+            pending_by_pipeline = pending_orders.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
+            pending_by_pipeline.columns = ['Pipeline', 'Pending']
+    elif not sales_orders_df.empty:
+        # Fallback to header-level sales orders if line items not available
         pending_orders = sales_orders_df.copy()
         if 'Status' in pending_orders.columns:
             pending_orders = pending_orders[
@@ -8963,7 +9104,7 @@ def render_yearly_planning_2026():
             pending_by_pipeline = pending_orders.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             pending_by_pipeline.columns = ['Pipeline', 'Pending']
     
-    # 3. HubSpot Deals (filtered by selected stages) - Using Deals Line Item sheet
+    # 3. HubSpot Deals (filtered by selected stages AND close date within time period)
     deals_by_category = pd.DataFrame()
     deals_by_pipeline = pd.DataFrame()
     
@@ -8974,6 +9115,13 @@ def render_yearly_planning_2026():
         stage_mask = filtered_deals[stage_column].isin(selected_stages)
         filtered_deals = filtered_deals[stage_mask]
         
+        # Filter by Close Date within the selected time period
+        if 'Close Date' in filtered_deals.columns:
+            filtered_deals = filtered_deals[
+                (filtered_deals['Close Date'] >= period_start) & 
+                (filtered_deals['Close Date'] <= period_end)
+            ]
+        
         if 'Forecast Category' in filtered_deals.columns:
             deals_by_category = filtered_deals.groupby('Forecast Category')['Amount'].sum().reset_index()
             deals_by_category.columns = ['Category', 'Deals']
@@ -8983,8 +9131,15 @@ def render_yearly_planning_2026():
             deals_by_pipeline.columns = ['Pipeline', 'Deals']
     
     # ===== COMPREHENSIVE CATEGORY CHART - Plan vs Full Pipeline =====
-    st.markdown("### 📊 Plan vs. Full Pipeline by Category")
-    st.caption("Compare your YTD plan against realized revenue plus everything in the pipeline")
+    st.markdown(f"### 📊 Plan vs. Full Pipeline by Category ({period_label})")
+    st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
+    
+    # Calculate period plan based on time selection
+    if time_period == "Month":
+        period_plan = get_period_plan(forecast_df, 'Month', month=current_month)
+    else:
+        current_quarter = (current_month - 1) // 3 + 1
+        period_plan = get_period_plan(forecast_df, 'Quarter', quarter=current_quarter)
     
     # Merge all category data INCLUDING plan
     all_categories = list(set(
@@ -9000,13 +9155,13 @@ def render_yearly_planning_2026():
     if chart_categories:
         category_combined = pd.DataFrame({'Category': chart_categories})
         
-        # Add YTD Plan from forecast
-        plan_by_category = ytd_plan[
-            (ytd_plan['Pipeline'] == 'Total') & 
-            (ytd_plan['Category'].isin(chart_categories))
-        ][['Category', 'YTD_Plan']].copy()
+        # Add Period Plan from forecast
+        plan_by_category = period_plan[
+            (period_plan['Pipeline'] == 'Total') & 
+            (period_plan['Category'].isin(chart_categories))
+        ][['Category', 'Period_Plan']].copy()
         category_combined = category_combined.merge(plan_by_category, on='Category', how='left')
-        category_combined['YTD_Plan'] = category_combined['YTD_Plan'].fillna(0)
+        category_combined['Period_Plan'] = category_combined['Period_Plan'].fillna(0)
         
         if not actuals_by_category.empty:
             category_combined = category_combined.merge(actuals_by_category, on='Category', how='left')
@@ -9025,27 +9180,27 @@ def render_yearly_planning_2026():
         
         category_combined = category_combined.fillna(0)
         category_combined['Total Pipeline'] = category_combined['Actuals'] + category_combined['Pending'] + category_combined['Deals']
-        category_combined['Variance'] = category_combined['Total Pipeline'] - category_combined['YTD_Plan']
+        category_combined['Variance'] = category_combined['Total Pipeline'] - category_combined['Period_Plan']
         category_combined['Attainment'] = np.where(
-            category_combined['YTD_Plan'] > 0,
-            (category_combined['Total Pipeline'] / category_combined['YTD_Plan'] * 100),
+            category_combined['Period_Plan'] > 0,
+            (category_combined['Total Pipeline'] / category_combined['Period_Plan'] * 100),
             0
         )
-        category_combined = category_combined.sort_values('YTD_Plan', ascending=False)
+        category_combined = category_combined.sort_values('Period_Plan', ascending=False)
         
         # ===== BIG BEAUTIFUL CHART =====
         fig_cat = go.Figure()
         
         # Plan bar (gray, semi-transparent background)
         fig_cat.add_trace(go.Bar(
-            name='YTD Plan',
+            name=f'{period_label} Plan',
             x=category_combined['Category'],
-            y=category_combined['YTD_Plan'],
+            y=category_combined['Period_Plan'],
             marker=dict(
                 color='rgba(148, 163, 184, 0.3)',
                 line=dict(color='rgba(148, 163, 184, 0.6)', width=2)
             ),
-            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in category_combined['YTD_Plan']],
+            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in category_combined['Period_Plan']],
             textposition='outside',
             textfont=dict(color='#94a3b8', size=11),
             hovertemplate='<b>%{x}</b><br>Plan: $%{y:,.0f}<extra></extra>',
@@ -9108,7 +9263,7 @@ def render_yearly_planning_2026():
             
             fig_cat.add_annotation(
                 x=row['Category'],
-                y=total + (category_combined['YTD_Plan'].max() * 0.05),
+                y=total + (category_combined['Period_Plan'].max() * 0.05),
                 text=f"{att:.0f}%",
                 showarrow=False,
                 font=dict(color=color, size=12, family='Inter'),
@@ -9159,7 +9314,7 @@ def render_yearly_planning_2026():
         st.markdown("<br>", unsafe_allow_html=True)
         
         metric_cols = st.columns(5)
-        total_plan = category_combined['YTD_Plan'].sum()
+        total_plan = category_combined['Period_Plan'].sum()
         total_actuals = category_combined['Actuals'].sum()
         total_pending = category_combined['Pending'].sum()
         total_deals = category_combined['Deals'].sum()
@@ -9169,7 +9324,7 @@ def render_yearly_planning_2026():
         with metric_cols[0]:
             st.markdown(f"""
                 <div style="text-align: center; padding: 0.75rem; background: rgba(148,163,184,0.1); border-radius: 8px;">
-                    <div style="color: #94a3b8; font-size: 0.7rem; text-transform: uppercase;">YTD Plan</div>
+                    <div style="color: #94a3b8; font-size: 0.7rem; text-transform: uppercase;">{period_label} Plan</div>
                     <div style="color: #f1f5f9; font-size: 1.25rem; font-weight: 700;">${total_plan:,.0f}</div>
                 </div>
             """, unsafe_allow_html=True)
@@ -9210,22 +9365,22 @@ def render_yearly_planning_2026():
         # Data table
         with st.expander("📋 View Full Category Breakdown Table"):
             display_cat = category_combined.copy()
-            display_cat = display_cat.rename(columns={'YTD_Plan': 'YTD Plan', 'Total Pipeline': 'Total (with Pipeline)'})
-            display_cat['YTD Plan'] = display_cat['YTD Plan'].apply(lambda x: f"${x:,.0f}")
+            display_cat = display_cat.rename(columns={'Period_Plan': f'{period_label} Plan', 'Total Pipeline': 'Total (with Pipeline)'})
+            display_cat[f'{period_label} Plan'] = display_cat[f'{period_label} Plan'].apply(lambda x: f"${x:,.0f}")
             display_cat['Actuals'] = display_cat['Actuals'].apply(lambda x: f"${x:,.0f}")
             display_cat['Pending'] = display_cat['Pending'].apply(lambda x: f"${x:,.0f}")
             display_cat['Deals'] = display_cat['Deals'].apply(lambda x: f"${x:,.0f}")
             display_cat['Total (with Pipeline)'] = display_cat['Total (with Pipeline)'].apply(lambda x: f"${x:,.0f}")
             display_cat['Variance'] = display_cat['Variance'].apply(lambda x: f"${x:+,.0f}")
             display_cat['Attainment'] = display_cat['Attainment'].apply(lambda x: f"{x:.1f}%")
-            st.dataframe(display_cat[['Category', 'YTD Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
+            st.dataframe(display_cat[['Category', f'{period_label} Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
                         use_container_width=True, hide_index=True)
     else:
         st.info("No category data available")
     
     # ===== COMPREHENSIVE PIPELINE CHART - Plan vs Full Pipeline =====
-    st.markdown("### 📊 Plan vs. Full Pipeline by Sales Motion")
-    st.caption("Compare your YTD plan against realized revenue plus everything in the pipeline")
+    st.markdown(f"### 📊 Plan vs. Full Pipeline by Sales Motion ({period_label})")
+    st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
     
     # Filter to known pipelines and add plan data
     chart_pipelines = FORECAST_PIPELINES.copy()
@@ -9233,13 +9388,13 @@ def render_yearly_planning_2026():
     if chart_pipelines:
         pipeline_combined = pd.DataFrame({'Pipeline': chart_pipelines})
         
-        # Add YTD Plan from forecast
-        plan_by_pipeline = ytd_plan[
-            (ytd_plan['Category'] == 'Total') & 
-            (ytd_plan['Pipeline'].isin(chart_pipelines))
-        ][['Pipeline', 'YTD_Plan']].copy()
+        # Add Period Plan from forecast
+        plan_by_pipeline = period_plan[
+            (period_plan['Category'] == 'Total') & 
+            (period_plan['Pipeline'].isin(chart_pipelines))
+        ][['Pipeline', 'Period_Plan']].copy()
         pipeline_combined = pipeline_combined.merge(plan_by_pipeline, on='Pipeline', how='left')
-        pipeline_combined['YTD_Plan'] = pipeline_combined['YTD_Plan'].fillna(0)
+        pipeline_combined['Period_Plan'] = pipeline_combined['Period_Plan'].fillna(0)
         
         if not actuals_by_pipeline.empty:
             pipeline_combined = pipeline_combined.merge(actuals_by_pipeline, on='Pipeline', how='left')
@@ -9258,13 +9413,13 @@ def render_yearly_planning_2026():
         
         pipeline_combined = pipeline_combined.fillna(0)
         pipeline_combined['Total Pipeline'] = pipeline_combined['Actuals'] + pipeline_combined['Pending'] + pipeline_combined['Deals']
-        pipeline_combined['Variance'] = pipeline_combined['Total Pipeline'] - pipeline_combined['YTD_Plan']
+        pipeline_combined['Variance'] = pipeline_combined['Total Pipeline'] - pipeline_combined['Period_Plan']
         pipeline_combined['Attainment'] = np.where(
-            pipeline_combined['YTD_Plan'] > 0,
-            (pipeline_combined['Total Pipeline'] / pipeline_combined['YTD_Plan'] * 100),
+            pipeline_combined['Period_Plan'] > 0,
+            (pipeline_combined['Total Pipeline'] / pipeline_combined['Period_Plan'] * 100),
             0
         )
-        pipeline_combined = pipeline_combined.sort_values('YTD_Plan', ascending=True)  # For horizontal bar
+        pipeline_combined = pipeline_combined.sort_values('Period_Plan', ascending=True)  # For horizontal bar
         
         # Get pipeline colors
         pipe_colors = [PIPELINE_COLORS.get(p, '#3b82f6') for p in pipeline_combined['Pipeline']]
@@ -9274,15 +9429,15 @@ def render_yearly_planning_2026():
         
         # Plan bar (gray background)
         fig_pipe.add_trace(go.Bar(
-            name='YTD Plan',
+            name=f'{period_label} Plan',
             y=pipeline_combined['Pipeline'],
-            x=pipeline_combined['YTD_Plan'],
+            x=pipeline_combined['Period_Plan'],
             orientation='h',
             marker=dict(
                 color='rgba(148, 163, 184, 0.25)',
                 line=dict(color='rgba(148, 163, 184, 0.5)', width=2)
             ),
-            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in pipeline_combined['YTD_Plan']],
+            text=[f"${x/1000:.0f}K" if x >= 1000 else f"${x:.0f}" for x in pipeline_combined['Period_Plan']],
             textposition='outside',
             textfont=dict(color='#94a3b8', size=11),
             hovertemplate='<b>%{y}</b><br>Plan: $%{x:,.0f}<extra></extra>',
@@ -9348,7 +9503,7 @@ def render_yearly_planning_2026():
             
             fig_pipe.add_annotation(
                 y=row['Pipeline'],
-                x=max(row['YTD_Plan'], total) + (pipeline_combined['YTD_Plan'].max() * 0.08),
+                x=max(row['Period_Plan'], total) + (pipeline_combined['Period_Plan'].max() * 0.08),
                 text=f"{att:.0f}%",
                 showarrow=False,
                 font=dict(color=color, size=12, family='Inter'),
@@ -9396,16 +9551,16 @@ def render_yearly_planning_2026():
         
         # Data table
         with st.expander("📋 View Full Pipeline Breakdown Table"):
-            display_pipe = pipeline_combined.sort_values('YTD_Plan', ascending=False).copy()
-            display_pipe = display_pipe.rename(columns={'YTD_Plan': 'YTD Plan', 'Total Pipeline': 'Total (with Pipeline)'})
-            display_pipe['YTD Plan'] = display_pipe['YTD Plan'].apply(lambda x: f"${x:,.0f}")
+            display_pipe = pipeline_combined.sort_values('Period_Plan', ascending=False).copy()
+            display_pipe = display_pipe.rename(columns={'Period_Plan': f'{period_label} Plan', 'Total Pipeline': 'Total (with Pipeline)'})
+            display_pipe[f'{period_label} Plan'] = display_pipe[f'{period_label} Plan'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Actuals'] = display_pipe['Actuals'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Pending'] = display_pipe['Pending'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Deals'] = display_pipe['Deals'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Total (with Pipeline)'] = display_pipe['Total (with Pipeline)'].apply(lambda x: f"${x:,.0f}")
             display_pipe['Variance'] = display_pipe['Variance'].apply(lambda x: f"${x:+,.0f}")
             display_pipe['Attainment'] = display_pipe['Attainment'].apply(lambda x: f"{x:.1f}%")
-            st.dataframe(display_pipe[['Pipeline', 'YTD Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
+            st.dataframe(display_pipe[['Pipeline', f'{period_label} Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
                         use_container_width=True, hide_index=True)
     else:
         st.info("No pipeline data available")
