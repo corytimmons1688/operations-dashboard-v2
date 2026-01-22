@@ -4989,33 +4989,125 @@ def categorize_product(item_name, item_description="", calyx_product_type=""):
 
 def apply_product_categories(df):
     """
-    Apply categorization to a dataframe with Item and Item Description columns.
-    Adds 'Product Category', 'Product Sub-Category', and 'Component Type' columns.
+    Apply categorization to a dataframe using Calyx || Product Type and Calyx | Item Type columns.
+    
+    PRIMARY: Uses 'Calyx || Product Type' (Column X) to map to Forecast Category
+    FALLBACK: For blanks, checks 'Calyx | Item Type' (Column W) for Shipping/Tax
+    
+    Mapping from Calyx || Product Type to Forecast Category:
+        Plastic Lids → Drams
+        Plastic Bases → Drams
+        Application → Application
+        Labels → Labels
+        Flex Pack → Flexpack
+        Tray Inserts → Other
+        Calyx Cure → Cure
+        Shrink Bands → Other
+        Glass Bases → Glass
+        Tubes → Other
+        Boxes → Other
+        Fee → Other
+        Design → Other
+        Container → Glass
+        Tray Frames → Other
+        Accessories → Other
+        Service → Other
+    
+    Mapping from Calyx | Item Type (for blanks):
+        Shipping → Shipping
+        Tax Item → Other (excluded from revenue)
     """
     if df.empty:
         return df
     
     df = df.copy()
     
-    # Determine which columns to use
-    item_col = 'Item' if 'Item' in df.columns else None
-    desc_col = 'Item Description' if 'Item Description' in df.columns else None
-    product_type_col = 'Calyx || Product Type' if 'Calyx || Product Type' in df.columns else None
+    # Mapping from Calyx || Product Type to Forecast Category
+    PRODUCT_TYPE_TO_CATEGORY = {
+        'Plastic Lids': 'Drams',
+        'Plastic Bases': 'Drams',
+        'Application': 'Application',
+        'Labels': 'Labels',
+        'Flex Pack': 'Flexpack',
+        'Tray Inserts': 'Other',
+        'Calyx Cure': 'Cure',
+        'Shrink Bands': 'Other',
+        'Glass Bases': 'Glass',
+        'Tubes': 'Other',
+        'Boxes': 'Other',
+        'Fee': 'Other',
+        'Design': 'Other',
+        'Container': 'Glass',
+        'Tray Frames': 'Other',
+        'Accessories': 'Other',
+        'Service': 'Other',
+    }
     
-    if item_col is None and desc_col is None:
-        df['Product Category'] = 'Other'
-        df['Product Sub-Category'] = 'Uncategorized'
-        df['Component Type'] = None
+    # Mapping from Calyx | Item Type (fallback for blanks)
+    ITEM_TYPE_TO_CATEGORY = {
+        'Shipping': 'Shipping',
+        'Tax Item': 'Other',
+        'Inventory Item': 'Other',  # Will be overridden by Product Type if available
+        'Non-inventory Item': 'Other',
+        'Service': 'Other',
+    }
+    
+    def categorize_row(row):
+        """Categorize a single row based on Calyx columns"""
+        # Get column values
+        product_type = str(row.get('Calyx || Product Type', '')).strip() if pd.notna(row.get('Calyx || Product Type')) else ''
+        item_type = str(row.get('Calyx | Item Type', '')).strip() if pd.notna(row.get('Calyx | Item Type')) else ''
+        
+        # PRIMARY: Check Calyx || Product Type first
+        if product_type and product_type in PRODUCT_TYPE_TO_CATEGORY:
+            category = PRODUCT_TYPE_TO_CATEGORY[product_type]
+            return (category, product_type, None)
+        
+        # FALLBACK: Check Calyx | Item Type for shipping/tax
+        if item_type:
+            if item_type in ITEM_TYPE_TO_CATEGORY:
+                category = ITEM_TYPE_TO_CATEGORY[item_type]
+                return (category, item_type, None)
+        
+        # If we have a product type that's not in our mapping, log it and categorize as Other
+        if product_type:
+            return ('Other', product_type, None)
+        
+        # Default fallback
+        return ('Other', 'Uncategorized', None)
+    
+    # Check if we have the Calyx columns
+    has_product_type = 'Calyx || Product Type' in df.columns
+    has_item_type = 'Calyx | Item Type' in df.columns
+    
+    if not has_product_type and not has_item_type:
+        # Fall back to old SKU-based categorization if Calyx columns don't exist
+        # This maintains backward compatibility with other data sources
+        item_col = 'Item' if 'Item' in df.columns else None
+        desc_col = 'Item Description' if 'Item Description' in df.columns else None
+        
+        if item_col is None and desc_col is None:
+            df['Product Category'] = 'Other'
+            df['Product Sub-Category'] = 'Uncategorized'
+            df['Component Type'] = None
+            return df
+        
+        # Apply old categorization for backward compatibility
+        categories = df.apply(
+            lambda row: categorize_product(
+                row.get(item_col, '') if item_col else '',
+                row.get(desc_col, '') if desc_col else '',
+                ''
+            ), axis=1
+        )
+        
+        df['Product Category'] = categories.apply(lambda x: x[0])
+        df['Product Sub-Category'] = categories.apply(lambda x: x[1])
+        df['Component Type'] = categories.apply(lambda x: x[2])
         return df
     
-    # Apply categorization
-    categories = df.apply(
-        lambda row: categorize_product(
-            row.get(item_col, '') if item_col else '',
-            row.get(desc_col, '') if desc_col else '',
-            row.get(product_type_col, '') if product_type_col else ''
-        ), axis=1
-    )
+    # Apply new Calyx-based categorization
+    categories = df.apply(categorize_row, axis=1)
     
     df['Product Category'] = categories.apply(lambda x: x[0])
     df['Product Sub-Category'] = categories.apply(lambda x: x[1])
@@ -6144,35 +6236,48 @@ MONTH_ABBREV = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
 # ===================================================================================
 
 def map_to_forecast_category(product_category, sub_category=None):
-    """Map detailed product category to forecast category"""
+    """
+    Map product category to forecast category.
+    
+    Since apply_product_categories now outputs Forecast Categories directly
+    (Drams, Flexpack, Cure, Glass, Labels, Application, Shipping, Other),
+    this function mainly passes them through or handles legacy categories.
+    
+    Forecast Categories:
+        - Drams
+        - Flexpack
+        - Cure
+        - Glass
+        - Labels
+        - Application
+        - Shipping
+        - Other
+    """
     if pd.isna(product_category):
         return 'Other'
     
     cat = str(product_category).strip()
-    sub = str(sub_category).strip() if sub_category else ''
     
-    if cat == 'Drams':
-        return 'Drams'
-    if cat == 'Dram Accessories':
-        return 'Drams'
-    if cat == 'DML (Universal)':
-        return 'Drams'
-    if cat == 'Flexpack':
-        return 'Flexpack'
-    if cat == 'Calyx Cure':
-        return 'Cure'
-    if cat in ['Concentrates', 'Calyx Jar']:
-        return 'Glass'
-    if cat == 'Non-Core Labels':
-        return 'Labels'
-    if cat == 'Fees & Adjustments':
-        if 'Shipping' in sub:
-            return 'Shipping'
-        if 'Application' in sub:
-            return 'Application'
-        return 'Other'
-    if cat in ['Boxes', 'Tubes']:
-        return 'Other'
+    # Direct pass-through for new Calyx-based categories
+    valid_forecast_categories = ['Drams', 'Flexpack', 'Cure', 'Glass', 'Labels', 'Application', 'Shipping', 'Other']
+    if cat in valid_forecast_categories:
+        return cat
+    
+    # Handle legacy category names (backward compatibility)
+    legacy_mappings = {
+        'Dram Accessories': 'Drams',
+        'DML (Universal)': 'Drams',
+        'Calyx Cure': 'Cure',
+        'Concentrates': 'Glass',
+        'Calyx Jar': 'Glass',
+        'Non-Core Labels': 'Labels',
+        'Fees & Adjustments': 'Other',
+        'Boxes': 'Other',
+        'Tubes': 'Other',
+    }
+    
+    if cat in legacy_mappings:
+        return legacy_mappings[cat]
     
     return 'Other'
 
