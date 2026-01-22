@@ -25,7 +25,7 @@ import uuid
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-CACHE_VERSION = "v4_tooling_shipping_fix"
+CACHE_VERSION = "v5_shipitem_fix"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
@@ -5046,6 +5046,7 @@ def apply_product_categories(df):
     # Mapping from Calyx | Item Type (fallback for blanks)
     ITEM_TYPE_TO_CATEGORY = {
         'shipping': 'Shipping',
+        'shipitem': 'Shipping',
         'tax item': 'Other',
         'inventory item': 'Other',
         'non-inventory item': 'Other',
@@ -5111,13 +5112,8 @@ def apply_product_categories(df):
         if 'tooling fee' in item_name_lower or 'tooling fee' in item_desc_lower:
             return ('Other', 'Tooling Fee', None)
         
-        # OVERRIDE 2: Check for Shipping in item type FIRST (before product type)
-        # Shipping should be its own category
-        if item_type == 'shipping':
-            return ('Shipping', 'Shipping', None)
-        
-        # Also check item name for shipping patterns
-        if 'shipping' in item_name_lower and ('freight' in item_name_lower or 'ship' in item_name_lower or item_name_lower.startswith('shipping')):
+        # OVERRIDE 2: Check Calyx | Item Type for "ShipItem" - this is shipping
+        if item_type == 'shipitem' or item_type == 'shipping':
             return ('Shipping', 'Shipping', None)
         
         # PRIMARY: Check Calyx || Product Type
