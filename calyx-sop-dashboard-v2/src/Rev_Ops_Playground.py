@@ -6390,18 +6390,45 @@ def map_deal_type_to_forecast_category(deal_type):
     
     dt = str(deal_type).upper().strip()
     
+    # Drams - check first since "LABELED" appears in multiple categories
     if 'NON-LABELED' in dt or 'NON LABELED' in dt:
+        return 'Drams'
+    if 'DRAM' in dt:
         return 'Drams'
     if 'LABELED' in dt and 'LABELS ONLY' not in dt:
         return 'Drams'
-    if 'FLEXPACK' in dt:
+    
+    # Flexpack
+    if 'FLEXPACK' in dt or 'FLEX' in dt or 'WAVE' in dt or 'BAG' in dt:
         return 'Flexpack'
+    
+    # Cure
     if 'CURE' in dt or 'CALYX CURE' in dt:
         return 'Cure'
-    if 'OUTER BOX' in dt or 'BOX' in dt:
-        return 'Other'
+    
+    # Cube
+    if 'CUBE' in dt:
+        return 'Cube'
+    
+    # Glass (concentrates, jars)
+    if 'GLASS' in dt or 'CONCENTRATE' in dt or 'JAR' in dt or '4ML' in dt or '7ML' in dt or '8TH' in dt:
+        return 'Glass'
+    
+    # Labels
     if 'LABELS ONLY' in dt or 'LABEL' in dt:
         return 'Labels'
+    
+    # Application
+    if 'APPLICATION' in dt or 'APPL' in dt:
+        return 'Application'
+    
+    # Shipping
+    if 'SHIP' in dt or 'FREIGHT' in dt:
+        return 'Shipping'
+    
+    # Boxes go to Other
+    if 'OUTER BOX' in dt or 'BOX' in dt:
+        return 'Other'
     
     return 'Other'
 
@@ -6781,9 +6808,11 @@ def load_annual_tracker_data():
             deals_line_items_df['Close Date'] = pd.to_datetime(deals_line_items_df['Close Date'], errors='coerce')
         
         # Apply SKU-based categorization using lookup from Invoice Line Items
+        # WITH FALLBACK to Deal Type when SKU is null or maps to 'Other'
         if 'SKU' in deals_line_items_df.columns and sku_category_lookup:
-            deals_line_items_df['Product Category'] = deals_line_items_df['SKU'].map(sku_category_lookup).fillna('Other')
+            deals_line_items_df['SKU_Category'] = deals_line_items_df['SKU'].map(sku_category_lookup)
         else:
+            deals_line_items_df['SKU_Category'] = None
             # Fallback: Map SKU column to Item for old categorization
             if 'SKU' in deals_line_items_df.columns:
                 deals_line_items_df['Item'] = deals_line_items_df['SKU']
@@ -6791,10 +6820,24 @@ def load_annual_tracker_data():
                 deals_line_items_df['Item Description'] = deals_line_items_df['SKU Description']
             deals_line_items_df = apply_product_categories(deals_line_items_df)
         
-        # Map to forecast categories
-        deals_line_items_df['Forecast Category'] = deals_line_items_df['Product Category'].apply(
-            lambda x: map_to_forecast_category(x, None)
-        )
+        # Get Deal Type based category as fallback (Column G = "Deal Type")
+        if 'Deal Type' in deals_line_items_df.columns:
+            deals_line_items_df['DealType_Category'] = deals_line_items_df['Deal Type'].apply(map_deal_type_to_forecast_category)
+        else:
+            deals_line_items_df['DealType_Category'] = 'Other'
+        
+        # Use SKU category if available and not 'Other', otherwise use Deal Type category
+        def get_best_category_dli(row):
+            sku_cat = row.get('SKU_Category')
+            deal_cat = row.get('DealType_Category', 'Other')
+            
+            # If SKU lookup succeeded and isn't 'Other', use it
+            if pd.notna(sku_cat) and sku_cat != 'Other':
+                return map_to_forecast_category(sku_cat, None)
+            # Otherwise fall back to Deal Type
+            return deal_cat
+        
+        deals_line_items_df['Forecast Category'] = deals_line_items_df.apply(get_best_category_dli, axis=1)
         
         # Create unified closed won flag
         # Closed Won if: Is Closed Won = TRUE, or Deal Stage in ['Sales Order Created in NS', 'NCR']
@@ -6855,15 +6898,30 @@ def load_annual_tracker_data():
             pipeline_deals_df['Forecast Pipeline'] = pipeline_deals_df['Pipeline'].apply(map_to_forecast_pipeline)
         
         # Apply SKU-based categorization using lookup from Invoice Line Items
+        # WITH FALLBACK to Deal Type when SKU is null or maps to 'Other'
         if 'SKU' in pipeline_deals_df.columns and sku_category_lookup:
-            pipeline_deals_df['Product Category'] = pipeline_deals_df['SKU'].map(sku_category_lookup).fillna('Other')
+            pipeline_deals_df['SKU_Category'] = pipeline_deals_df['SKU'].map(sku_category_lookup)
         else:
-            pipeline_deals_df['Product Category'] = 'Other'
+            pipeline_deals_df['SKU_Category'] = None
         
-        # Map to forecast categories
-        pipeline_deals_df['Forecast Category'] = pipeline_deals_df['Product Category'].apply(
-            lambda x: map_to_forecast_category(x, None)
-        )
+        # Get Deal Type based category as fallback (Column G = "Deal Type")
+        if 'Deal Type' in pipeline_deals_df.columns:
+            pipeline_deals_df['DealType_Category'] = pipeline_deals_df['Deal Type'].apply(map_deal_type_to_forecast_category)
+        else:
+            pipeline_deals_df['DealType_Category'] = 'Other'
+        
+        # Use SKU category if available and not 'Other', otherwise use Deal Type category
+        def get_best_category(row):
+            sku_cat = row.get('SKU_Category')
+            deal_cat = row.get('DealType_Category', 'Other')
+            
+            # If SKU lookup succeeded and isn't 'Other', use it
+            if pd.notna(sku_cat) and sku_cat != 'Other':
+                return map_to_forecast_category(sku_cat, None)
+            # Otherwise fall back to Deal Type
+            return deal_cat
+        
+        pipeline_deals_df['Forecast Category'] = pipeline_deals_df.apply(get_best_category, axis=1)
     
     return {
         'forecast': forecast_df,
@@ -9137,26 +9195,42 @@ def render_yearly_planning_2026():
         
         if not pipeline_deals_df.empty:
             st.write(f"Total pipeline_deals_df rows: {len(pipeline_deals_df)}")
-            st.write(f"Columns: {list(pipeline_deals_df.columns)}")
             
-            # Check if SKU column exists and has data
-            if 'SKU' in pipeline_deals_df.columns:
-                non_null_skus = pipeline_deals_df['SKU'].notna().sum()
-                st.write(f"SKU column: {non_null_skus} non-null values out of {len(pipeline_deals_df)}")
-            else:
-                st.error("❌ No 'SKU' column found in pipeline_deals_df!")
+            # Check SKU and Deal Type columns
+            col1, col2 = st.columns(2)
+            with col1:
+                if 'SKU' in pipeline_deals_df.columns:
+                    non_null_skus = pipeline_deals_df['SKU'].notna().sum()
+                    st.metric("SKU Values", f"{non_null_skus} / {len(pipeline_deals_df)}")
+                else:
+                    st.error("❌ No 'SKU' column!")
+            
+            with col2:
+                if 'Deal Type' in pipeline_deals_df.columns:
+                    non_null_dt = pipeline_deals_df['Deal Type'].notna().sum()
+                    st.metric("Deal Type Values", f"{non_null_dt} / {len(pipeline_deals_df)}")
+                else:
+                    st.error("❌ No 'Deal Type' column!")
+            
+            # Show categorization source breakdown
+            if 'SKU_Category' in pipeline_deals_df.columns and 'DealType_Category' in pipeline_deals_df.columns:
+                st.markdown("**Categorization Source:**")
+                sku_used = pipeline_deals_df['SKU_Category'].notna() & (pipeline_deals_df['SKU_Category'] != 'Other')
+                st.write(f"- Using SKU lookup: {sku_used.sum()} deals")
+                st.write(f"- Using Deal Type fallback: {(~sku_used).sum()} deals")
             
             # Check Forecast Category distribution
             if 'Forecast Category' in pipeline_deals_df.columns:
                 st.markdown("**All Deals - Forecast Category Distribution:**")
-                all_cat_dist = pipeline_deals_df.groupby('Forecast Category')['Amount'].sum().reset_index()
-                all_cat_dist.columns = ['Category', 'Total Amount']
-                all_cat_dist = all_cat_dist.sort_values('Total Amount', ascending=False)
+                all_cat_dist = pipeline_deals_df.groupby('Forecast Category')['Amount'].agg(['count', 'sum']).reset_index()
+                all_cat_dist.columns = ['Category', 'Count', 'Total Amount']
+                all_cat_dist['Total Amount'] = all_cat_dist['Total Amount'].apply(lambda x: f"${x:,.0f}")
+                all_cat_dist = all_cat_dist.sort_values('Count', ascending=False)
                 st.dataframe(all_cat_dist, hide_index=True)
                 
                 # Check specifically for Labels
                 labels_deals = pipeline_deals_df[pipeline_deals_df['Forecast Category'] == 'Labels']
-                st.write(f"**Labels deals (all time):** {len(labels_deals)} deals, ${labels_deals['Amount'].sum():,.0f}")
+                st.info(f"**Labels deals (all time):** {len(labels_deals)} deals, ${labels_deals['Amount'].sum():,.0f}")
             else:
                 st.error("❌ No 'Forecast Category' column found!")
             
