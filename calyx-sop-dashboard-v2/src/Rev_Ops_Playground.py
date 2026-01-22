@@ -25,7 +25,7 @@ import uuid
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-CACHE_VERSION = "v1_qbr_generator"
+CACHE_VERSION = "v2_close_rate_analysis"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
@@ -6340,6 +6340,9 @@ def load_annual_tracker_data():
     sales_orders_df = load_google_sheets_data("_NS_SalesOrders_Data", "A:AG", version=CACHE_VERSION)
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     forecast_df = load_forecast_data()
+    
+    # Debug: Log what was loaded
+    # st.write(f"DEBUG - Invoices loaded: {len(invoices_df)} rows, empty={invoices_df.empty}")
     
     # Load Copy of Deals Line Item for Close Rate Analysis
     # Note: Column headers are in row 2 of the sheet
