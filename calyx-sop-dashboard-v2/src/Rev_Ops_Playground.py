@@ -7163,6 +7163,75 @@ def calculate_variance(actuals_df, plan_df):
 # CLOSE RATE ANALYSIS - CALCULATION FUNCTIONS
 # ===================================================================================
 
+def get_deals_for_export(deals_line_items_df, filter_type=None, filter_value=None):
+    """
+    Get deals data formatted for export/download.
+    
+    Args:
+        deals_line_items_df: The deals line items dataframe
+        filter_type: 'pipeline', 'category', 'close_status', or None for all
+        filter_value: The value to filter by (e.g., 'Retention', 'Labels', 'Commit')
+    
+    Returns:
+        DataFrame with unique deals ready for export
+    """
+    if deals_line_items_df.empty:
+        return pd.DataFrame()
+    
+    df = deals_line_items_df.copy()
+    
+    # Get unique deals (deduplicate by Deal ID)
+    deal_id_col = 'Deal ID' if 'Deal ID' in df.columns else None
+    
+    # Columns to include in export
+    export_cols = [
+        'Deal ID', 'Deal Name', 'Company Name', 'Primary Associated Company',
+        'Deal Owner First Name', 'Deal Owner Last Name', 'Pipeline', 
+        'Deal Stage', 'Close Status', 'Deal Type', 'Amount',
+        'Create Date', 'Close Date', 'Days_To_Close',
+        'Is_Won', 'Is_Lost', 'Forecast Category', 'Product Category'
+    ]
+    
+    # Build aggregation dict dynamically based on available columns
+    agg_dict = {}
+    for col in export_cols:
+        if col in df.columns and col != deal_id_col:
+            agg_dict[col] = 'first'
+    
+    if deal_id_col:
+        unique_deals = df.groupby(deal_id_col).agg(agg_dict).reset_index()
+    else:
+        deal_name_col = 'Deal Name' if 'Deal Name' in df.columns else None
+        if deal_name_col and 'Deal Name' in agg_dict:
+            del agg_dict['Deal Name']
+        if deal_name_col:
+            unique_deals = df.groupby(deal_name_col).agg(agg_dict).reset_index()
+        else:
+            unique_deals = df.copy()
+    
+    # Filter to closed deals only
+    unique_deals = unique_deals[(unique_deals['Is_Won'] == True) | (unique_deals['Is_Lost'] == True)]
+    
+    # Apply filter if specified
+    if filter_type and filter_value:
+        if filter_type == 'pipeline' and 'Pipeline' in unique_deals.columns:
+            unique_deals = unique_deals[unique_deals['Pipeline'] == filter_value]
+        elif filter_type == 'category' and 'Forecast Category' in unique_deals.columns:
+            unique_deals = unique_deals[unique_deals['Forecast Category'] == filter_value]
+        elif filter_type == 'close_status' and 'Close Status' in unique_deals.columns:
+            unique_deals = unique_deals[unique_deals['Close Status'] == filter_value]
+    
+    # Clean up for export - keep only available columns
+    available_cols = [c for c in export_cols if c in unique_deals.columns]
+    export_df = unique_deals[available_cols].copy()
+    
+    # Add a win/loss status column for clarity
+    if 'Is_Won' in export_df.columns:
+        export_df['Status'] = export_df['Is_Won'].apply(lambda x: 'Won' if x else 'Lost')
+    
+    return export_df
+
+
 def calculate_close_rate_metrics(deals_line_items_df):
     """
     Calculate close rate metrics from deals line items.
@@ -10271,6 +10340,84 @@ def render_yearly_planning_2026():
                     st.dataframe(display_pipe, use_container_width=True, hide_index=True)
             else:
                 st.info("No pipeline data available for close rate analysis.")
+            
+            # ==========================================================================
+            # EXPORT DEALS DATA
+            # ==========================================================================
+            st.markdown("### 📥 Export Deals Data")
+            st.caption("Download the underlying deal data used in the Close Rate Analysis.")
+            
+            export_col1, export_col2 = st.columns(2)
+            
+            with export_col1:
+                st.markdown("**Export by Filter:**")
+                export_type = st.selectbox(
+                    "Select export type:",
+                    ["All Closed Deals", "By Pipeline", "By Category", "By Close Status"],
+                    key="close_rate_export_type"
+                )
+                
+                filter_value = None
+                if export_type == "By Pipeline":
+                    if not pipeline_rates.empty:
+                        pipeline_options = pipeline_rates['Pipeline'].tolist()
+                        filter_value = st.selectbox("Select Pipeline:", pipeline_options, key="export_pipeline_select")
+                elif export_type == "By Category":
+                    # category_rates might not exist if category section was skipped
+                    try:
+                        if not category_rates.empty:
+                            category_options = category_rates['Category'].tolist()
+                            filter_value = st.selectbox("Select Category:", category_options, key="export_category_select")
+                    except NameError:
+                        st.info("Category data not available")
+                elif export_type == "By Close Status":
+                    filter_value = st.selectbox("Select Close Status:", ['Commit', 'Expect', 'Best Case', 'Opportunity'], key="export_status_select")
+            
+            with export_col2:
+                st.markdown("**Download:**")
+                
+                # Determine filter parameters
+                if export_type == "All Closed Deals":
+                    export_df = get_deals_for_export(deals_line_items_df)
+                    filename = "all_closed_deals.csv"
+                elif export_type == "By Pipeline" and filter_value:
+                    export_df = get_deals_for_export(deals_line_items_df, 'pipeline', filter_value)
+                    filename = f"deals_pipeline_{filter_value.replace(' ', '_').replace('/', '_')}.csv"
+                elif export_type == "By Category" and filter_value:
+                    export_df = get_deals_for_export(deals_line_items_df, 'category', filter_value)
+                    filename = f"deals_category_{filter_value.replace(' ', '_')}.csv"
+                elif export_type == "By Close Status" and filter_value:
+                    export_df = get_deals_for_export(deals_line_items_df, 'close_status', filter_value)
+                    filename = f"deals_status_{filter_value.replace(' ', '_')}.csv"
+                else:
+                    export_df = pd.DataFrame()
+                    filename = "deals.csv"
+                
+                if not export_df.empty:
+                    st.metric("Deals in Export", f"{len(export_df):,}")
+                    
+                    # Convert to CSV
+                    csv_data = export_df.to_csv(index=False)
+                    
+                    st.download_button(
+                        label=f"📥 Download {export_type}",
+                        data=csv_data,
+                        file_name=filename,
+                        mime="text/csv",
+                        key="download_close_rate_deals"
+                    )
+                else:
+                    st.warning("No deals match the selected filter.")
+            
+            # Show preview of export data
+            with st.expander("👀 Preview Export Data"):
+                if not export_df.empty:
+                    st.write(f"**{len(export_df):,} deals** will be included in the export.")
+                    st.dataframe(export_df.head(20), use_container_width=True, hide_index=True)
+                    if len(export_df) > 20:
+                        st.caption(f"Showing first 20 of {len(export_df):,} deals. Download for full list.")
+                else:
+                    st.info("Select an export type to preview data.")
             
             # ==========================================================================
             # REVENUE PLANNING & GAP ANALYSIS SECTION
