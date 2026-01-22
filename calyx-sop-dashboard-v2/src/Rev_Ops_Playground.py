@@ -9131,6 +9131,62 @@ def render_yearly_planning_2026():
             deals_by_pipeline = filtered_deals.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             deals_by_pipeline.columns = ['Pipeline', 'Deals']
     
+    # DEBUG: Deals categorization diagnostics
+    with st.expander("🔍 DEBUG: HubSpot Deals Categorization"):
+        st.markdown(f"**Period: {period_label}** (from {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')})")
+        
+        if not pipeline_deals_df.empty:
+            st.write(f"Total pipeline_deals_df rows: {len(pipeline_deals_df)}")
+            st.write(f"Columns: {list(pipeline_deals_df.columns)}")
+            
+            # Check if SKU column exists and has data
+            if 'SKU' in pipeline_deals_df.columns:
+                non_null_skus = pipeline_deals_df['SKU'].notna().sum()
+                st.write(f"SKU column: {non_null_skus} non-null values out of {len(pipeline_deals_df)}")
+            else:
+                st.error("❌ No 'SKU' column found in pipeline_deals_df!")
+            
+            # Check Forecast Category distribution
+            if 'Forecast Category' in pipeline_deals_df.columns:
+                st.markdown("**All Deals - Forecast Category Distribution:**")
+                all_cat_dist = pipeline_deals_df.groupby('Forecast Category')['Amount'].sum().reset_index()
+                all_cat_dist.columns = ['Category', 'Total Amount']
+                all_cat_dist = all_cat_dist.sort_values('Total Amount', ascending=False)
+                st.dataframe(all_cat_dist, hide_index=True)
+                
+                # Check specifically for Labels
+                labels_deals = pipeline_deals_df[pipeline_deals_df['Forecast Category'] == 'Labels']
+                st.write(f"**Labels deals (all time):** {len(labels_deals)} deals, ${labels_deals['Amount'].sum():,.0f}")
+            else:
+                st.error("❌ No 'Forecast Category' column found!")
+            
+            # Show what made it through the filters
+            st.markdown("---")
+            st.markdown("**After Stage + Date Filtering:**")
+            if not deals_by_category.empty:
+                st.dataframe(deals_by_category, hide_index=True)
+            else:
+                st.warning("No deals passed the filters!")
+                
+                # Debug the filtering
+                if selected_stages and stage_column:
+                    stage_filtered = pipeline_deals_df[pipeline_deals_df[stage_column].isin(selected_stages)]
+                    st.write(f"After stage filter: {len(stage_filtered)} deals")
+                    
+                    if 'Close Date' in stage_filtered.columns:
+                        date_filtered = stage_filtered[
+                            (stage_filtered['Close Date'] >= period_start) & 
+                            (stage_filtered['Close Date'] <= period_end)
+                        ]
+                        st.write(f"After date filter: {len(date_filtered)} deals")
+                        
+                        if len(date_filtered) > 0 and 'Forecast Category' in date_filtered.columns:
+                            st.markdown("**Filtered deals by category:**")
+                            filtered_cats = date_filtered.groupby('Forecast Category')['Amount'].sum().reset_index()
+                            st.dataframe(filtered_cats, hide_index=True)
+        else:
+            st.error("pipeline_deals_df is empty!")
+    
     # ===== COMPREHENSIVE CATEGORY CHART - Plan vs Full Pipeline =====
     st.markdown(f"### 📊 Plan vs. Full Pipeline by Category ({period_label})")
     st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
@@ -9376,6 +9432,44 @@ def render_yearly_planning_2026():
             display_cat['Attainment'] = display_cat['Attainment'].apply(lambda x: f"{x:.1f}%")
             st.dataframe(display_cat[['Category', f'{period_label} Plan', 'Actuals', 'Pending', 'Deals', 'Total (with Pipeline)', 'Variance', 'Attainment']], 
                         use_container_width=True, hide_index=True)
+        
+        # DEBUG: Show what's in the forecast data
+        with st.expander("🔍 DEBUG: Forecast Data Diagnostics"):
+            st.markdown("**Period Plan Query Results (Pipeline='Total'):**")
+            if not period_plan.empty:
+                total_plan = period_plan[period_plan['Pipeline'] == 'Total'].copy()
+                st.write(f"Found {len(total_plan)} rows with Pipeline='Total'")
+                st.dataframe(total_plan[['Pipeline', 'Category', 'Period_Plan']], hide_index=True)
+                
+                # Show specific categories
+                st.markdown("**Checking specific categories:**")
+                for cat in ['Shipping', 'Labels', 'Application', 'Other']:
+                    cat_row = total_plan[total_plan['Category'] == cat]
+                    if not cat_row.empty:
+                        val = cat_row['Period_Plan'].values[0]
+                        st.write(f"- **{cat}**: ${val:,.0f}")
+                    else:
+                        st.error(f"- **{cat}**: ❌ NOT FOUND in forecast!")
+            else:
+                st.error("period_plan is empty!")
+            
+            st.markdown("---")
+            st.markdown("**Full forecast_df structure:**")
+            if 'forecast' in data:
+                forecast_df_debug = data['forecast']
+                st.write(f"Total rows: {len(forecast_df_debug)}")
+                st.write(f"Unique Pipelines: {forecast_df_debug['Pipeline'].unique().tolist()}")
+                st.write(f"Unique Categories: {forecast_df_debug['Category'].unique().tolist()}")
+                
+                # Show the Total pipeline section specifically
+                st.markdown("**'Total' Pipeline rows in forecast_df:**")
+                total_rows = forecast_df_debug[forecast_df_debug['Pipeline'] == 'Total']
+                if not total_rows.empty:
+                    cols_to_show = ['Pipeline', 'Category', 'January', 'February', 'March', 'Q1', 'Annual_Total']
+                    available_cols = [c for c in cols_to_show if c in total_rows.columns]
+                    st.dataframe(total_rows[available_cols], hide_index=True)
+                else:
+                    st.error("No 'Total' pipeline rows found!")
     else:
         st.info("No category data available")
     
