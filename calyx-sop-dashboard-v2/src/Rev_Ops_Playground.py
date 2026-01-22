@@ -8990,26 +8990,27 @@ def render_yearly_planning_2026():
         )
         
         # Determine the date range based on selection
+        # Use through_month from sidebar for consistency with Category Breakdown section
         now = datetime.now()
         if time_period == "Month":
-            # Current month
-            period_start = datetime(selected_year, current_month, 1)
-            if current_month == 12:
+            # Use sidebar's through_month setting for consistency
+            period_start = datetime(selected_year, through_month, 1)
+            if through_month == 12:
                 period_end = datetime(selected_year + 1, 1, 1) - timedelta(days=1)
             else:
-                period_end = datetime(selected_year, current_month + 1, 1) - timedelta(days=1)
+                period_end = datetime(selected_year, through_month + 1, 1) - timedelta(days=1)
             period_label = period_start.strftime("%B %Y")
         else:
-            # Current quarter
-            current_quarter = (current_month - 1) // 3 + 1
-            quarter_start_month = (current_quarter - 1) * 3 + 1
-            quarter_end_month = current_quarter * 3
+            # Use sidebar's through_month to determine quarter
+            selected_quarter = (through_month - 1) // 3 + 1
+            quarter_start_month = (selected_quarter - 1) * 3 + 1
+            quarter_end_month = selected_quarter * 3
             period_start = datetime(selected_year, quarter_start_month, 1)
             if quarter_end_month == 12:
                 period_end = datetime(selected_year + 1, 1, 1) - timedelta(days=1)
             else:
                 period_end = datetime(selected_year, quarter_end_month + 1, 1) - timedelta(days=1)
-            period_label = f"Q{current_quarter} {selected_year}"
+            period_label = f"Q{selected_quarter} {selected_year}"
         
         st.caption(f"Showing: **{period_label}**")
     
@@ -9134,12 +9135,12 @@ def render_yearly_planning_2026():
     st.markdown(f"### 📊 Plan vs. Full Pipeline by Category ({period_label})")
     st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
     
-    # Calculate period plan based on time selection
+    # Calculate period plan based on time selection (using through_month from sidebar)
     if time_period == "Month":
-        period_plan = get_period_plan(forecast_df, 'Month', month=current_month)
+        period_plan = get_period_plan(forecast_df, 'Month', month=through_month)
     else:
-        current_quarter = (current_month - 1) // 3 + 1
-        period_plan = get_period_plan(forecast_df, 'Quarter', quarter=current_quarter)
+        selected_quarter = (through_month - 1) // 3 + 1
+        period_plan = get_period_plan(forecast_df, 'Quarter', quarter=selected_quarter)
     
     # Merge all category data INCLUDING plan
     all_categories = list(set(
