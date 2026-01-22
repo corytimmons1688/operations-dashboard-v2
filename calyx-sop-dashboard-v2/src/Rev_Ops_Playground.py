@@ -25,7 +25,7 @@ import uuid
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-CACHE_VERSION = "v5_shipitem_fix"
+CACHE_VERSION = "v6_deals_line_item_pipeline"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
@@ -6499,16 +6499,18 @@ def load_annual_tracker_data():
     deals_df = load_google_sheets_data("All Reps All Pipelines", "A:Z", version=CACHE_VERSION)
     forecast_df = load_forecast_data()
     
-    # Debug: Log what was loaded
-    # st.write(f"DEBUG - Invoices loaded: {len(invoices_df)} rows, empty={invoices_df.empty}")
-    
     # Load Copy of Deals Line Item for Close Rate Analysis
     # Note: Column headers are in row 2 of the sheet
-    # Range extended to AA to include new Date Entered columns for standard reorder filtering
-    deals_line_items_df = load_google_sheets_data("Copy of Deals Line Item", "A2:AA", version=CACHE_VERSION, silent=True)
+    # Range extended to AB to include Effective unit price column
+    deals_line_items_df = load_google_sheets_data("Copy of Deals Line Item", "A2:AB", version=CACHE_VERSION, silent=True)
+    
+    # Load Deals Line Item for Pipeline Section (Plan vs Full Pipeline)
+    # Note: Column headers are in row 2 of the sheet
+    # This is the active pipeline view - no standard reorder/Gonzalez filtering
+    pipeline_deals_df = load_google_sheets_data("Deals Line Item", "A2:T", version=CACHE_VERSION, silent=True)
     
     # Standard Reorder Date columns - if ANY of these have a value, exclude the deal
-    # These are columns R through Y in the sheet
+    # These are columns R through Y in the Copy of Deals Line Item sheet
     STANDARD_REORDER_DATE_COLS = [
         'Date entered "Standard Reorder - Confirmed by Customer (Acquisition (New Customer))"',
         'Date entered "Standard Reorder - Confirmed by Customer (Calyx Distribution)"',
@@ -6538,6 +6540,16 @@ def load_annual_tracker_data():
             lambda row: map_to_forecast_category(row.get('Product Category'), row.get('Product Sub-Category')),
             axis=1
         )
+    
+    # =======================================================================
+    # CREATE SKU → CATEGORY LOOKUP FROM INVOICE LINE ITEMS
+    # This will be used to categorize HubSpot deals by their SKU
+    # =======================================================================
+    sku_category_lookup = {}
+    if not line_items_df.empty and 'Item' in line_items_df.columns and 'Product Category' in line_items_df.columns:
+        # Build lookup: SKU → Product Category (use the most common category for each SKU)
+        sku_categories = line_items_df.groupby('Item')['Product Category'].agg(lambda x: x.mode().iloc[0] if len(x.mode()) > 0 else 'Other')
+        sku_category_lookup = sku_categories.to_dict()
     
     # Process Invoices (for pipeline lookup)
     pipeline_lookup = {}
@@ -6714,11 +6726,17 @@ def load_annual_tracker_data():
             # Store the filtering stats
             deals_line_items_df.attrs['gonzalez_filtered_deals'] = gonzalez_deals
         
-        # Clean numeric columns
-        if 'Amount' in deals_line_items_df.columns:
-            deals_line_items_df['Amount'] = deals_line_items_df['Amount'].apply(clean_numeric)
+        # Clean numeric columns - use Effective Unit Price × Quantity for Amount
+        if 'Effective unit price' in deals_line_items_df.columns:
+            deals_line_items_df['Effective unit price'] = deals_line_items_df['Effective unit price'].apply(clean_numeric)
         if 'Quantity' in deals_line_items_df.columns:
             deals_line_items_df['Quantity'] = deals_line_items_df['Quantity'].apply(clean_numeric)
+        
+        # Calculate Amount as Effective Unit Price × Quantity
+        if 'Effective unit price' in deals_line_items_df.columns and 'Quantity' in deals_line_items_df.columns:
+            deals_line_items_df['Amount'] = deals_line_items_df['Effective unit price'] * deals_line_items_df['Quantity']
+        elif 'Amount' in deals_line_items_df.columns:
+            deals_line_items_df['Amount'] = deals_line_items_df['Amount'].apply(clean_numeric)
         
         # Parse dates
         if 'Create Date' in deals_line_items_df.columns:
@@ -6726,20 +6744,20 @@ def load_annual_tracker_data():
         if 'Close Date' in deals_line_items_df.columns:
             deals_line_items_df['Close Date'] = pd.to_datetime(deals_line_items_df['Close Date'], errors='coerce')
         
-        # Apply SKU categorization using existing logic
-        # Map SKU column to Item for categorization
-        if 'SKU' in deals_line_items_df.columns:
-            deals_line_items_df['Item'] = deals_line_items_df['SKU']
-        if 'SKU Description' in deals_line_items_df.columns:
-            deals_line_items_df['Item Description'] = deals_line_items_df['SKU Description']
-        
-        # Apply product categories
-        deals_line_items_df = apply_product_categories(deals_line_items_df)
+        # Apply SKU-based categorization using lookup from Invoice Line Items
+        if 'SKU' in deals_line_items_df.columns and sku_category_lookup:
+            deals_line_items_df['Product Category'] = deals_line_items_df['SKU'].map(sku_category_lookup).fillna('Other')
+        else:
+            # Fallback: Map SKU column to Item for old categorization
+            if 'SKU' in deals_line_items_df.columns:
+                deals_line_items_df['Item'] = deals_line_items_df['SKU']
+            if 'SKU Description' in deals_line_items_df.columns:
+                deals_line_items_df['Item Description'] = deals_line_items_df['SKU Description']
+            deals_line_items_df = apply_product_categories(deals_line_items_df)
         
         # Map to forecast categories
-        deals_line_items_df['Forecast Category'] = deals_line_items_df.apply(
-            lambda row: map_to_forecast_category(row.get('Product Category'), row.get('Product Sub-Category')),
-            axis=1
+        deals_line_items_df['Forecast Category'] = deals_line_items_df['Product Category'].apply(
+            lambda x: map_to_forecast_category(x, None)
         )
         
         # Create unified closed won flag
@@ -6770,13 +6788,55 @@ def load_annual_tracker_data():
                 deals_line_items_df['Close Date'] - deals_line_items_df['Create Date']
             ).dt.days
     
+    # =======================================================================
+    # PROCESS PIPELINE DEALS (Deals Line Item) FOR PIPELINE SECTION
+    # No filtering - show all active pipeline deals
+    # =======================================================================
+    if not pipeline_deals_df.empty:
+        if pipeline_deals_df.columns.duplicated().any():
+            pipeline_deals_df = pipeline_deals_df.loc[:, ~pipeline_deals_df.columns.duplicated()]
+        
+        # Clean numeric columns - use Effective Unit Price × Quantity for Amount
+        if 'Effective unit price' in pipeline_deals_df.columns:
+            pipeline_deals_df['Effective unit price'] = pipeline_deals_df['Effective unit price'].apply(clean_numeric)
+        if 'Quantity' in pipeline_deals_df.columns:
+            pipeline_deals_df['Quantity'] = pipeline_deals_df['Quantity'].apply(clean_numeric)
+        
+        # Calculate Amount as Effective Unit Price × Quantity
+        if 'Effective unit price' in pipeline_deals_df.columns and 'Quantity' in pipeline_deals_df.columns:
+            pipeline_deals_df['Amount'] = pipeline_deals_df['Effective unit price'] * pipeline_deals_df['Quantity']
+        elif 'Amount' in pipeline_deals_df.columns:
+            pipeline_deals_df['Amount'] = pipeline_deals_df['Amount'].apply(clean_numeric)
+        
+        # Parse dates
+        if 'Close Date' in pipeline_deals_df.columns:
+            pipeline_deals_df['Close Date'] = pd.to_datetime(pipeline_deals_df['Close Date'], errors='coerce')
+        if 'Create Date' in pipeline_deals_df.columns:
+            pipeline_deals_df['Create Date'] = pd.to_datetime(pipeline_deals_df['Create Date'], errors='coerce')
+        
+        # Map Pipeline to Forecast Pipeline
+        if 'Pipeline' in pipeline_deals_df.columns:
+            pipeline_deals_df['Forecast Pipeline'] = pipeline_deals_df['Pipeline'].apply(map_to_forecast_pipeline)
+        
+        # Apply SKU-based categorization using lookup from Invoice Line Items
+        if 'SKU' in pipeline_deals_df.columns and sku_category_lookup:
+            pipeline_deals_df['Product Category'] = pipeline_deals_df['SKU'].map(sku_category_lookup).fillna('Other')
+        else:
+            pipeline_deals_df['Product Category'] = 'Other'
+        
+        # Map to forecast categories
+        pipeline_deals_df['Forecast Category'] = pipeline_deals_df['Product Category'].apply(
+            lambda x: map_to_forecast_category(x, None)
+        )
+    
     return {
         'forecast': forecast_df,
         'line_items': line_items_df,
         'invoices': invoices_df,
         'sales_orders': sales_orders_df,
         'deals': deals_df,
-        'deals_line_items': deals_line_items_df
+        'deals_line_items': deals_line_items_df,
+        'pipeline_deals': pipeline_deals_df
     }
 
 
@@ -8099,6 +8159,7 @@ def render_yearly_planning_2026():
     line_items_df = data.get('line_items', pd.DataFrame())
     sales_orders_df = data.get('sales_orders', pd.DataFrame())
     deals_df = data.get('deals', pd.DataFrame())
+    pipeline_deals_df = data.get('pipeline_deals', pd.DataFrame())
     
     if forecast_df.empty:
         st.error("❌ Could not load 2026 Forecast data. Please check the '2026 Forecast' sheet exists.")
@@ -8753,14 +8814,14 @@ def render_yearly_planning_2026():
             """, unsafe_allow_html=True)
     
     with health_col2:
-        if not deals_df.empty:
-            if 'Deal Stage' in deals_df.columns:
-                open_deals = deals_df[~deals_df['Deal Stage'].str.contains('Closed|Won|Lost', case=False, na=False)]
+        if not pipeline_deals_df.empty:
+            if 'Deal Stage' in pipeline_deals_df.columns:
+                open_deals = pipeline_deals_df[~pipeline_deals_df['Deal Stage'].str.contains('Closed|Won|Lost', case=False, na=False)]
             else:
-                open_deals = deals_df
+                open_deals = pipeline_deals_df
             
             pipeline_total = open_deals['Amount'].sum() if 'Amount' in open_deals.columns else 0
-            deal_count = len(open_deals)
+            deal_count = open_deals['Deal ID'].nunique() if 'Deal ID' in open_deals.columns else len(open_deals)
             
             st.markdown(f"""
                 <div class="glass-card">
@@ -8838,13 +8899,13 @@ def render_yearly_planning_2026():
     available_stages = []
     stage_column = None
     
-    if not deals_df.empty:
-        if 'Close Status' in deals_df.columns:
+    if not pipeline_deals_df.empty:
+        if 'Close Status' in pipeline_deals_df.columns:
             stage_column = 'Close Status'
-            available_stages = deals_df['Close Status'].dropna().unique().tolist()
-        elif 'Deal Stage' in deals_df.columns:
+            available_stages = pipeline_deals_df['Close Status'].dropna().unique().tolist()
+        elif 'Deal Stage' in pipeline_deals_df.columns:
             stage_column = 'Deal Stage'
-            available_stages = deals_df['Deal Stage'].dropna().unique().tolist()
+            available_stages = pipeline_deals_df['Deal Stage'].dropna().unique().tolist()
     
     # Common stage names to look for (in priority order)
     priority_stages = ['Commit', 'Best Case', 'Expect', 'Opportunity']
@@ -8902,12 +8963,12 @@ def render_yearly_planning_2026():
             pending_by_pipeline = pending_orders.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             pending_by_pipeline.columns = ['Pipeline', 'Pending']
     
-    # 3. HubSpot Deals (filtered by selected stages)
+    # 3. HubSpot Deals (filtered by selected stages) - Using Deals Line Item sheet
     deals_by_category = pd.DataFrame()
     deals_by_pipeline = pd.DataFrame()
     
-    if not deals_df.empty and selected_stages and stage_column:
-        filtered_deals = deals_df.copy()
+    if not pipeline_deals_df.empty and selected_stages and stage_column:
+        filtered_deals = pipeline_deals_df.copy()
         
         # Filter by selected stages using the detected column
         stage_mask = filtered_deals[stage_column].isin(selected_stages)
