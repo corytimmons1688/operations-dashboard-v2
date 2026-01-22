@@ -6819,43 +6819,28 @@ def calculate_close_rate_metrics(deals_line_items_df):
     # Amount is the same for all line items in a deal, so we take the first occurrence
     deal_id_col = 'Deal ID' if 'Deal ID' in df.columns else None
     
+    # Build aggregation dict dynamically based on available columns
+    agg_dict = {}
+    potential_cols = [
+        'Amount', 'Is_Won', 'Is_Lost', 'Close Status', 'Deal Stage', 'Pipeline',
+        'Deal Type', 'Create Date', 'Close Date', 'Days_To_Close', 'Deal Name',
+        'Deal Owner First Name', 'Deal Owner Last Name', 'Company Name', 'Primary Associated Company'
+    ]
+    for col in potential_cols:
+        if col in df.columns:
+            agg_dict[col] = 'first'
+    
     if deal_id_col:
         # Deduplicate to get unique deals with their amounts
-        unique_deals = df.groupby(deal_id_col).agg({
-            'Amount': 'first',  # Amount is same for all line items in a deal
-            'Is_Won': 'first',
-            'Is_Lost': 'first',
-            'Close Status': 'first',
-            'Deal Stage': 'first',
-            'Pipeline': 'first',
-            'Deal Type': 'first',
-            'Create Date': 'first',
-            'Close Date': 'first',
-            'Days_To_Close': 'first',
-            'Deal Name': 'first',
-            'Deal Owner First Name': 'first',
-            'Deal Owner Last Name': 'first',
-            'Company Name': 'first'
-        }).reset_index()
+        unique_deals = df.groupby(deal_id_col).agg(agg_dict).reset_index()
     else:
         # Fallback if no Deal ID - use Deal Name as identifier
         deal_name_col = 'Deal Name' if 'Deal Name' in df.columns else None
         if deal_name_col:
-            unique_deals = df.groupby(deal_name_col).agg({
-                'Amount': 'first',
-                'Is_Won': 'first',
-                'Is_Lost': 'first',
-                'Close Status': 'first',
-                'Deal Stage': 'first',
-                'Pipeline': 'first',
-                'Deal Type': 'first',
-                'Create Date': 'first',
-                'Close Date': 'first',
-                'Days_To_Close': 'first',
-                'Deal Owner First Name': 'first',
-                'Deal Owner Last Name': 'first',
-                'Company Name': 'first'
-            }).reset_index()
+            # Remove Deal Name from agg dict if it's the groupby column
+            if 'Deal Name' in agg_dict:
+                del agg_dict['Deal Name']
+            unique_deals = df.groupby(deal_name_col).agg(agg_dict).reset_index()
         else:
             unique_deals = df.copy()
     
@@ -7949,10 +7934,10 @@ def render_yearly_planning_2026():
     with st.spinner("Loading data..."):
         data = load_annual_tracker_data()
     
-    forecast_df = data['forecast']
-    line_items_df = data['line_items']
-    sales_orders_df = data['sales_orders']
-    deals_df = data['deals']
+    forecast_df = data.get('forecast', pd.DataFrame())
+    line_items_df = data.get('line_items', pd.DataFrame())
+    sales_orders_df = data.get('sales_orders', pd.DataFrame())
+    deals_df = data.get('deals', pd.DataFrame())
     
     if forecast_df.empty:
         st.error("❌ Could not load 2026 Forecast data. Please check the '2026 Forecast' sheet exists.")
@@ -10125,7 +10110,7 @@ def render_yearly_planning_2026():
         st.markdown("### 🔗 Invoice Line Item ↔ Invoices Join Diagnostics")
         
         # Check the join between Invoice Line Item and _NS_Invoices_Data
-        invoices_df = data['invoices']
+        invoices_df = data.get('invoices', pd.DataFrame())
         
         col1, col2 = st.columns(2)
         
