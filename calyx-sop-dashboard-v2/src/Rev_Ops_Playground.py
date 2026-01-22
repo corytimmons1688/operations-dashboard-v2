@@ -25,7 +25,7 @@ import uuid
 # ========== CONFIGURATION ==========
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-CACHE_VERSION = "v2_close_rate_analysis"
+CACHE_VERSION = "v3_calyx_categories"
 
 
 # ========== PDF/HTML GENERATION HELPERS ==========
@@ -5024,95 +5024,120 @@ def apply_product_categories(df):
     
     # Mapping from Calyx || Product Type to Forecast Category
     PRODUCT_TYPE_TO_CATEGORY = {
-        'Plastic Lids': 'Drams',
-        'Plastic Bases': 'Drams',
-        'Application': 'Application',
-        'Labels': 'Labels',
-        'Flex Pack': 'Flexpack',
-        'Tray Inserts': 'Other',
-        'Calyx Cure': 'Cure',
-        'Shrink Bands': 'Other',
-        'Glass Bases': 'Glass',
-        'Tubes': 'Other',
-        'Boxes': 'Other',
-        'Fee': 'Other',
-        'Design': 'Other',
-        'Container': 'Glass',
-        'Tray Frames': 'Other',
-        'Accessories': 'Other',
-        'Service': 'Other',
+        'plastic lids': 'Drams',
+        'plastic bases': 'Drams',
+        'application': 'Application',
+        'labels': 'Labels',
+        'flex pack': 'Flexpack',
+        'tray inserts': 'Other',
+        'calyx cure': 'Cure',
+        'shrink bands': 'Other',
+        'glass bases': 'Glass',
+        'tubes': 'Other',
+        'boxes': 'Other',
+        'fee': 'Other',
+        'design': 'Other',
+        'container': 'Glass',
+        'tray frames': 'Other',
+        'accessories': 'Other',
+        'service': 'Other',
     }
     
     # Mapping from Calyx | Item Type (fallback for blanks)
     ITEM_TYPE_TO_CATEGORY = {
-        'Shipping': 'Shipping',
-        'Tax Item': 'Other',
-        'Inventory Item': 'Other',  # Will be overridden by Product Type if available
-        'Non-inventory Item': 'Other',
-        'Service': 'Other',
+        'shipping': 'Shipping',
+        'tax item': 'Other',
+        'inventory item': 'Other',
+        'non-inventory item': 'Other',
+        'service': 'Other',
     }
+    
+    # Find Calyx columns (flexible matching - handles whitespace and case differences)
+    product_type_col = None
+    item_type_col = None
+    
+    for col in df.columns:
+        col_lower = str(col).lower().strip()
+        # Look for "calyx || product type" or similar
+        if 'product type' in col_lower and 'calyx' in col_lower:
+            product_type_col = col
+        # Look for "calyx | item type" or similar  
+        elif 'item type' in col_lower and 'calyx' in col_lower:
+            item_type_col = col
+    
+    # Debug: Print what we found (comment out in production)
+    # print(f"DEBUG: Found product_type_col={product_type_col}, item_type_col={item_type_col}")
+    # print(f"DEBUG: Available columns: {list(df.columns)}")
     
     def categorize_row(row):
         """Categorize a single row based on Calyx columns"""
         # Get column values
-        product_type = str(row.get('Calyx || Product Type', '')).strip() if pd.notna(row.get('Calyx || Product Type')) else ''
-        item_type = str(row.get('Calyx | Item Type', '')).strip() if pd.notna(row.get('Calyx | Item Type')) else ''
+        product_type_raw = ''
+        item_type_raw = ''
+        
+        if product_type_col and product_type_col in row.index:
+            val = row[product_type_col]
+            if pd.notna(val):
+                product_type_raw = str(val).strip()
+        
+        if item_type_col and item_type_col in row.index:
+            val = row[item_type_col]
+            if pd.notna(val):
+                item_type_raw = str(val).strip()
+        
+        product_type = product_type_raw.lower()
+        item_type = item_type_raw.lower()
         
         # PRIMARY: Check Calyx || Product Type first
         if product_type and product_type in PRODUCT_TYPE_TO_CATEGORY:
             category = PRODUCT_TYPE_TO_CATEGORY[product_type]
-            return (category, product_type, None)
+            return (category, product_type_raw, None)
         
         # FALLBACK: Check Calyx | Item Type for shipping/tax
-        if item_type:
-            if item_type in ITEM_TYPE_TO_CATEGORY:
-                category = ITEM_TYPE_TO_CATEGORY[item_type]
-                return (category, item_type, None)
+        if item_type and item_type in ITEM_TYPE_TO_CATEGORY:
+            category = ITEM_TYPE_TO_CATEGORY[item_type]
+            return (category, item_type_raw, None)
         
-        # If we have a product type that's not in our mapping, log it and categorize as Other
-        if product_type:
-            return ('Other', product_type, None)
+        # If we have a product type that's not in our mapping, categorize as Other
+        if product_type_raw:
+            return ('Other', product_type_raw, None)
         
         # Default fallback
         return ('Other', 'Uncategorized', None)
     
-    # Check if we have the Calyx columns
-    has_product_type = 'Calyx || Product Type' in df.columns
-    has_item_type = 'Calyx | Item Type' in df.columns
-    
-    if not has_product_type and not has_item_type:
-        # Fall back to old SKU-based categorization if Calyx columns don't exist
-        # This maintains backward compatibility with other data sources
-        item_col = 'Item' if 'Item' in df.columns else None
-        desc_col = 'Item Description' if 'Item Description' in df.columns else None
-        
-        if item_col is None and desc_col is None:
-            df['Product Category'] = 'Other'
-            df['Product Sub-Category'] = 'Uncategorized'
-            df['Component Type'] = None
-            return df
-        
-        # Apply old categorization for backward compatibility
-        categories = df.apply(
-            lambda row: categorize_product(
-                row.get(item_col, '') if item_col else '',
-                row.get(desc_col, '') if desc_col else '',
-                ''
-            ), axis=1
-        )
+    # If we found at least one Calyx column, use the new logic
+    if product_type_col or item_type_col:
+        # Apply new Calyx-based categorization
+        categories = df.apply(categorize_row, axis=1)
         
         df['Product Category'] = categories.apply(lambda x: x[0])
         df['Product Sub-Category'] = categories.apply(lambda x: x[1])
         df['Component Type'] = categories.apply(lambda x: x[2])
         return df
     
-    # Apply new Calyx-based categorization
-    categories = df.apply(categorize_row, axis=1)
+    # NO Calyx columns found - fall back to old SKU-based categorization
+    # This is for backward compatibility with data sources that don't have Calyx columns
+    item_col = 'Item' if 'Item' in df.columns else None
+    desc_col = 'Item Description' if 'Item Description' in df.columns else None
+    
+    if item_col is None and desc_col is None:
+        df['Product Category'] = 'Other'
+        df['Product Sub-Category'] = 'Uncategorized'
+        df['Component Type'] = None
+        return df
+    
+    # Apply old categorization for backward compatibility
+    categories = df.apply(
+        lambda row: categorize_product(
+            row.get(item_col, '') if item_col else '',
+            row.get(desc_col, '') if desc_col else '',
+            ''
+        ), axis=1
+    )
     
     df['Product Category'] = categories.apply(lambda x: x[0])
     df['Product Sub-Category'] = categories.apply(lambda x: x[1])
     df['Component Type'] = categories.apply(lambda x: x[2])
-    
     return df
 
 
@@ -10215,6 +10240,41 @@ def render_yearly_planning_2026():
     """, unsafe_allow_html=True)
     
     with st.expander("View Diagnostics", expanded=False):
+        # Category Diagnostics
+        st.markdown("### 📦 Category Diagnostics")
+        
+        if not line_items_df.empty:
+            cat_diag_col1, cat_diag_col2 = st.columns(2)
+            
+            with cat_diag_col1:
+                st.markdown("**Calyx Columns Found:**")
+                calyx_cols = [c for c in line_items_df.columns if 'calyx' in c.lower()]
+                if calyx_cols:
+                    for col in calyx_cols:
+                        unique_vals = line_items_df[col].dropna().unique()[:10].tolist()
+                        st.write(f"• `{col}`: {unique_vals}")
+                else:
+                    st.error("❌ No Calyx columns found! Columns available:")
+                    st.write(list(line_items_df.columns))
+            
+            with cat_diag_col2:
+                st.markdown("**Category Distribution:**")
+                if 'Product Category' in line_items_df.columns:
+                    cat_dist = line_items_df.groupby('Product Category')['Amount'].agg(['count', 'sum']).reset_index()
+                    cat_dist.columns = ['Category', 'Count', 'Amount']
+                    cat_dist['Amount'] = cat_dist['Amount'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(cat_dist, hide_index=True)
+                else:
+                    st.error("❌ No 'Product Category' column found!")
+                
+                if 'Forecast Category' in line_items_df.columns:
+                    st.markdown("**Forecast Category Distribution:**")
+                    fc_dist = line_items_df.groupby('Forecast Category')['Amount'].agg(['count', 'sum']).reset_index()
+                    fc_dist.columns = ['Forecast Category', 'Count', 'Amount']
+                    fc_dist['Amount'] = fc_dist['Amount'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(fc_dist, hide_index=True)
+        
+        st.markdown("---")
         st.markdown("### 🔗 Invoice Line Item ↔ Invoices Join Diagnostics")
         
         # Check the join between Invoice Line Item and _NS_Invoices_Data
