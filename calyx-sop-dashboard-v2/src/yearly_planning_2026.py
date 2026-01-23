@@ -8782,7 +8782,8 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     # =========================================================================
     # TOP PIPELINE SKUS
     # =========================================================================
-    # Ensure SKU Description column exists
+    # Make a copy to avoid modifying the original and ensure SKU Description exists
+    product_data = product_data.copy()
     if 'SKU Description' not in product_data.columns:
         product_data['SKU Description'] = ''
     
@@ -9882,7 +9883,11 @@ def render_product_forecasting_tool():
         return filtered
     
     # Create forecast-ready dataframe (concentrates = bases only)
-    forecast_df = filter_concentrate_bases_only(filtered_df)
+    forecast_df = filter_concentrate_bases_only(filtered_df).copy()
+    
+    # Ensure SKU Description column exists (needed for groupby operations)
+    if 'SKU Description' not in forecast_df.columns:
+        forecast_df['SKU Description'] = ''
     
     # =========================================================================
     # CALCULATE PENDING ORDERS & YTD ACTUALS METRICS (Using Line Item Data)
