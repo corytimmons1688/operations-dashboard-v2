@@ -442,6 +442,167 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         """
     
+    # ===== Generate SKU Reorder Analysis HTML =====
+    sku_reorder_html = ""
+    if customer_line_items is not None and not customer_line_items.empty and 'Date' in customer_line_items.columns and 'Item' in customer_line_items.columns:
+        # Analyze SKU reorder patterns
+        analysis_df = customer_line_items[customer_line_items['Date'].notna()].copy()
+        
+        if not analysis_df.empty:
+            analysis_df['Date'] = pd.to_datetime(analysis_df['Date'], errors='coerce')
+            analysis_df = analysis_df[analysis_df['Date'].notna()]
+            
+            if not analysis_df.empty:
+                item_col = 'Item'
+                desc_col = 'Item Description' if 'Item Description' in analysis_df.columns else None
+                qty_col = 'Quantity' if 'Quantity' in analysis_df.columns else None
+                
+                sku_data = []
+                today = pd.Timestamp.now()
+                
+                for sku in analysis_df[item_col].unique():
+                    if not sku or str(sku).strip() == '' or str(sku).lower() == 'nan':
+                        continue
+                    
+                    sku_orders = analysis_df[analysis_df[item_col] == sku].copy()
+                    sku_orders = sku_orders.sort_values('Date')
+                    
+                    # Get description
+                    description = ''
+                    if desc_col and desc_col in sku_orders.columns:
+                        desc_val = sku_orders[desc_col].dropna().iloc[0] if len(sku_orders[desc_col].dropna()) > 0 else ''
+                        description = str(desc_val)[:40] + '...' if len(str(desc_val)) > 40 else str(desc_val)
+                    
+                    # Get unique order dates
+                    order_dates = sku_orders['Date'].dt.date.unique()
+                    order_dates = sorted(order_dates)
+                    num_orders = len(order_dates)
+                    
+                    if num_orders < 2:  # Need at least 2 orders for reorder prediction
+                        continue
+                    
+                    # Calculate total quantity
+                    total_qty = sku_orders[qty_col].sum() if qty_col else 0
+                    
+                    first_order = order_dates[0]
+                    last_order = order_dates[-1]
+                    
+                    # Calculate average days between orders
+                    intervals = []
+                    for i in range(1, len(order_dates)):
+                        interval = (order_dates[i] - order_dates[i-1]).days
+                        if interval > 0:
+                            intervals.append(interval)
+                    
+                    if intervals:
+                        avg_days_between = sum(intervals) / len(intervals)
+                        last_order_dt = pd.Timestamp(last_order)
+                        predicted_next = last_order_dt + timedelta(days=avg_days_between)
+                        predicted_next_order = predicted_next.date()
+                        days_until_next = (predicted_next - today).days
+                        
+                        # Order history string
+                        order_history_str = " → ".join([d.strftime('%m/%d/%y') for d in order_dates[-5:]])  # Last 5 dates
+                        
+                        sku_data.append({
+                            'SKU': sku,
+                            'Description': description,
+                            'Total Orders': num_orders,
+                            'Total Qty': total_qty,
+                            'Last Order': last_order,
+                            'Avg Days': avg_days_between,
+                            'Predicted Next': predicted_next_order,
+                            'Days Until': days_until_next,
+                            'History': order_history_str
+                        })
+                
+                if sku_data:
+                    # Sort by days until next order (most urgent first)
+                    sku_data = sorted(sku_data, key=lambda x: x['Days Until'])
+                    
+                    # Count stats
+                    overdue = sum(1 for s in sku_data if s['Days Until'] < -14)
+                    due_soon = sum(1 for s in sku_data if -14 <= s['Days Until'] <= 30)
+                    upcoming = sum(1 for s in sku_data if s['Days Until'] > 30)
+                    
+                    # Build table rows
+                    sku_rows = ""
+                    for row in sku_data[:15]:  # Top 15 SKUs
+                        days = row['Days Until']
+                        if days < -14:
+                            status = f'<span style="color: #ef4444; font-weight: 600;">🔴 Overdue ({abs(int(days))}d)</span>'
+                        elif days < 0:
+                            status = f'<span style="color: #f59e0b; font-weight: 600;">🟠 Past ({abs(int(days))}d)</span>'
+                        elif days <= 30:
+                            status = f'<span style="color: #10b981; font-weight: 600;">🟢 Due Soon ({int(days)}d)</span>'
+                        else:
+                            status = f'<span style="color: #3b82f6;">🔵 {int(days)}d</span>'
+                        
+                        sku_rows += f"""
+                        <tr>
+                            <td style="font-weight: 500;">{row['SKU']}</td>
+                            <td style="color: #64748b; font-size: 0.85rem;">{row['Description']}</td>
+                            <td style="text-align: center;">{row['Total Orders']}</td>
+                            <td style="text-align: center;">{row['Last Order'].strftime('%Y-%m-%d')}</td>
+                            <td style="text-align: center;">{row['Avg Days']:.0f}</td>
+                            <td style="text-align: center;">{row['Predicted Next'].strftime('%Y-%m-%d')}</td>
+                            <td style="text-align: center;">{status}</td>
+                        </tr>"""
+                    
+                    sku_reorder_html = f"""
+        <div class="section">
+            <div class="section-header">
+                <div class="section-icon-box blue">🔄</div>
+                <div>
+                    <div class="section-title">SKU Reorder Analysis</div>
+                    <div class="section-subtitle">Order history and predicted reorder timing for key SKUs</div>
+                </div>
+            </div>
+            
+            <div class="stats-row">
+                <div class="stat-card" style="background: linear-gradient(135deg, #fef2f2 0%, #fecaca 100%); border-color: #f87171;">
+                    <div class="stat-value" style="color: #dc2626;">{overdue}</div>
+                    <div class="stat-label" style="color: #dc2626;">Overdue SKUs</div>
+                </div>
+                <div class="stat-card green">
+                    <div class="stat-value">{due_soon}</div>
+                    <div class="stat-label">Due Soon</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">{upcoming}</div>
+                    <div class="stat-label">Upcoming</div>
+                </div>
+                <div class="stat-card purple">
+                    <div class="stat-value">{len(sku_data)}</div>
+                    <div class="stat-label">Trackable SKUs</div>
+                </div>
+            </div>
+            
+            <div class="table-container">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th style="text-align: left;">SKU</th>
+                        <th style="text-align: left;">Description</th>
+                        <th style="text-align: center;">Orders</th>
+                        <th style="text-align: center;">Last Order</th>
+                        <th style="text-align: center;">Avg Days</th>
+                        <th style="text-align: center;">Predicted Next</th>
+                        <th style="text-align: center;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>{sku_rows}</tbody>
+            </table>
+            </div>
+            
+            <div style="margin-top: 15px; padding: 12px; background: #f8fafc; border-radius: 8px; border-left: 3px solid #3b82f6;">
+                <div style="font-size: 0.85rem; color: #64748b;">
+                    <strong>How to use:</strong> Focus on 🔴 Overdue and 🟢 Due Soon SKUs. These are based on historical ordering patterns and indicate when the customer typically reorders each product.
+                </div>
+            </div>
+        </div>
+        """
+    
     # ===== Generate NCR Analysis HTML =====
     ncr_html = ""
     total_orders = len(customer_orders) if not customer_orders.empty else 0
@@ -1781,6 +1942,8 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             
             {line_item_html if pdf_config.get('product_mix', True) else ''}
             
+            {sku_reorder_html if pdf_config.get('product_mix', True) else ''}
+            
             {ncr_html if pdf_config.get('quality_ncr', True) else ''}
         </div>
         
@@ -2445,6 +2608,8 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         </div>
         
         {line_item_html}
+        
+        {sku_reorder_html}
         
         {ncr_html}
         
@@ -5699,6 +5864,254 @@ def render_line_item_analysis_section(line_items_df, customer_name):
         """, unsafe_allow_html=True)
 
 
+def render_sku_reorder_analysis_section(customer_line_items, customer_name):
+    """
+    Section: SKU Reorder Analysis
+    Shows order history per SKU with dates and predicts next order dates based on historical cadence.
+    Useful for sales meetings to discuss reorder timing with customers.
+    """
+    st.markdown("### 🔄 SKU Reorder Analysis")
+    st.caption("Order history by SKU with predicted next order dates based on historical patterns")
+    
+    # Create unique key prefix from customer name for chart keys
+    key_prefix = f"reorder_{customer_name.replace(' ', '_').replace('.', '').replace(',', '')[:30]}"
+    
+    if customer_line_items is None or customer_line_items.empty:
+        st.info("No invoice line item data available for reorder analysis.")
+        return
+    
+    # Check required columns
+    required_cols = ['Date', 'Item']
+    if not all(col in customer_line_items.columns for col in required_cols):
+        st.info("Invoice line item data missing required columns for reorder analysis.")
+        return
+    
+    # Filter to only items with dates
+    analysis_df = customer_line_items[customer_line_items['Date'].notna()].copy()
+    
+    if analysis_df.empty:
+        st.info("No dated invoice line items available for reorder analysis.")
+        return
+    
+    # Ensure Date is datetime
+    analysis_df['Date'] = pd.to_datetime(analysis_df['Date'], errors='coerce')
+    analysis_df = analysis_df[analysis_df['Date'].notna()]
+    
+    if analysis_df.empty:
+        st.info("No valid dated invoice line items available for reorder analysis.")
+        return
+    
+    # Get Item column - use Item Description if available for better readability
+    item_col = 'Item'
+    desc_col = 'Item Description' if 'Item Description' in analysis_df.columns else None
+    qty_col = 'Quantity' if 'Quantity' in analysis_df.columns else None
+    amt_col = 'Amount' if 'Amount' in analysis_df.columns else None
+    
+    # Calculate reorder metrics per SKU
+    sku_data = []
+    today = pd.Timestamp.now()
+    
+    for sku in analysis_df[item_col].unique():
+        if not sku or str(sku).strip() == '' or str(sku).lower() == 'nan':
+            continue
+            
+        sku_orders = analysis_df[analysis_df[item_col] == sku].copy()
+        sku_orders = sku_orders.sort_values('Date')
+        
+        # Get description
+        description = ''
+        if desc_col and desc_col in sku_orders.columns:
+            desc_val = sku_orders[desc_col].dropna().iloc[0] if len(sku_orders[desc_col].dropna()) > 0 else ''
+            description = str(desc_val)[:50] + '...' if len(str(desc_val)) > 50 else str(desc_val)
+        
+        # Get unique order dates
+        order_dates = sku_orders['Date'].dt.date.unique()
+        order_dates = sorted(order_dates)
+        num_orders = len(order_dates)
+        
+        if num_orders < 1:
+            continue
+        
+        # Calculate total quantity and revenue
+        total_qty = sku_orders[qty_col].sum() if qty_col else 0
+        total_revenue = sku_orders[amt_col].sum() if amt_col else 0
+        
+        # First and last order dates
+        first_order = order_dates[0]
+        last_order = order_dates[-1]
+        
+        # Calculate average days between orders
+        avg_days_between = None
+        predicted_next_order = None
+        days_until_next = None
+        
+        if num_orders >= 2:
+            # Calculate intervals between consecutive orders
+            intervals = []
+            for i in range(1, len(order_dates)):
+                interval = (order_dates[i] - order_dates[i-1]).days
+                if interval > 0:  # Only count positive intervals
+                    intervals.append(interval)
+            
+            if intervals:
+                avg_days_between = sum(intervals) / len(intervals)
+                
+                # Predict next order date
+                last_order_dt = pd.Timestamp(last_order)
+                predicted_next = last_order_dt + timedelta(days=avg_days_between)
+                predicted_next_order = predicted_next.date()
+                days_until_next = (predicted_next - today).days
+        
+        # Format order history string
+        order_history = [d.strftime('%Y-%m-%d') for d in order_dates]
+        
+        sku_data.append({
+            'SKU': sku,
+            'Description': description,
+            'Total Orders': num_orders,
+            'Total Qty': total_qty,
+            'Total Revenue': total_revenue,
+            'First Order': first_order,
+            'Last Order': last_order,
+            'Avg Days Between': avg_days_between,
+            'Predicted Next Order': predicted_next_order,
+            'Days Until Next': days_until_next,
+            'Order History': order_history
+        })
+    
+    if not sku_data:
+        st.info("No SKUs with sufficient data for reorder analysis.")
+        return
+    
+    sku_df = pd.DataFrame(sku_data)
+    
+    # Sort by number of orders (most frequently ordered first), then by last order date
+    sku_df = sku_df.sort_values(['Total Orders', 'Last Order'], ascending=[False, False])
+    
+    # Summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        repeat_skus = len(sku_df[sku_df['Total Orders'] >= 2])
+        st.metric("Repeat SKUs", repeat_skus, help="SKUs ordered 2+ times")
+    
+    with col2:
+        avg_orders_per_sku = sku_df['Total Orders'].mean()
+        st.metric("Avg Orders/SKU", f"{avg_orders_per_sku:.1f}")
+    
+    with col3:
+        upcoming = sku_df[sku_df['Days Until Next'].notna() & (sku_df['Days Until Next'] <= 30) & (sku_df['Days Until Next'] >= -14)]
+        st.metric("Due Soon", len(upcoming), help="SKUs predicted to reorder in next 30 days")
+    
+    with col4:
+        overdue = sku_df[sku_df['Days Until Next'].notna() & (sku_df['Days Until Next'] < -14)]
+        st.metric("Overdue", len(overdue), help="SKUs past predicted reorder date by 14+ days")
+    
+    # Filter options
+    st.markdown("---")
+    
+    filter_col1, filter_col2 = st.columns(2)
+    with filter_col1:
+        min_orders = st.selectbox(
+            "Minimum Orders",
+            options=[1, 2, 3, 5, 10],
+            index=1,  # Default to 2+
+            key=f"{key_prefix}_min_orders",
+            help="Filter to SKUs with at least this many orders"
+        )
+    
+    with filter_col2:
+        show_prediction = st.selectbox(
+            "Show Predictions",
+            options=["All SKUs", "Has Prediction", "Due Soon (≤30 days)", "Overdue"],
+            index=0,
+            key=f"{key_prefix}_show_pred"
+        )
+    
+    # Apply filters
+    display_df = sku_df[sku_df['Total Orders'] >= min_orders].copy()
+    
+    if show_prediction == "Has Prediction":
+        display_df = display_df[display_df['Predicted Next Order'].notna()]
+    elif show_prediction == "Due Soon (≤30 days)":
+        display_df = display_df[display_df['Days Until Next'].notna() & (display_df['Days Until Next'] <= 30) & (display_df['Days Until Next'] >= -14)]
+    elif show_prediction == "Overdue":
+        display_df = display_df[display_df['Days Until Next'].notna() & (display_df['Days Until Next'] < -14)]
+    
+    if display_df.empty:
+        st.info("No SKUs match the current filter criteria.")
+        return
+    
+    # Main data table
+    st.markdown(f"#### 📦 SKU Reorder Details ({len(display_df)} SKUs)")
+    
+    # Format for display
+    table_df = display_df.copy()
+    
+    # Format columns
+    table_df['Total Qty'] = table_df['Total Qty'].apply(lambda x: f"{x:,.0f}" if pd.notna(x) else "-")
+    table_df['Total Revenue'] = table_df['Total Revenue'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "-")
+    table_df['First Order'] = table_df['First Order'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "-")
+    table_df['Last Order'] = table_df['Last Order'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "-")
+    table_df['Avg Days Between'] = table_df['Avg Days Between'].apply(lambda x: f"{x:.0f} days" if pd.notna(x) else "-")
+    table_df['Predicted Next Order'] = table_df['Predicted Next Order'].apply(lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else "-")
+    
+    # Status indicator
+    def status_indicator(days):
+        if pd.isna(days):
+            return "⚪ Insufficient Data"
+        elif days < -14:
+            return f"🔴 Overdue ({abs(int(days))} days)"
+        elif days < 0:
+            return f"🟠 Slightly Past ({abs(int(days))} days)"
+        elif days <= 30:
+            return f"🟢 Due Soon ({int(days)} days)"
+        else:
+            return f"🔵 Upcoming ({int(days)} days)"
+    
+    table_df['Status'] = display_df['Days Until Next'].apply(status_indicator)
+    
+    # Select and order columns for display
+    display_cols = ['SKU', 'Description', 'Total Orders', 'Last Order', 'Avg Days Between', 'Predicted Next Order', 'Status']
+    table_df = table_df[display_cols]
+    
+    st.dataframe(table_df, use_container_width=True, hide_index=True)
+    
+    # Detailed order history expander
+    with st.expander("📜 View Detailed Order History by SKU"):
+        for _, row in display_df.head(20).iterrows():
+            sku = row['SKU']
+            desc = row['Description']
+            history = row['Order History']
+            
+            if history and len(history) > 0:
+                history_str = " → ".join(history)
+                st.markdown(f"""
+                    <div style="
+                        background: #1e293b;
+                        padding: 12px 16px;
+                        border-radius: 8px;
+                        margin-bottom: 8px;
+                        border-left: 3px solid #3b82f6;
+                    ">
+                        <div style="color: #f1f5f9; font-weight: 600; font-size: 0.95rem;">{sku}</div>
+                        <div style="color: #94a3b8; font-size: 0.8rem; margin-bottom: 6px;">{desc}</div>
+                        <div style="color: #64748b; font-size: 0.85rem;">{history_str}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+    
+    # Legend
+    st.markdown("""
+        <div style="display: flex; gap: 15px; margin-top: 15px; color: #94a3b8; font-size: 0.8rem; flex-wrap: wrap;">
+            <span>🔴 Overdue (14+ days past)</span>
+            <span>🟠 Slightly Past (0-14 days)</span>
+            <span>🟢 Due Soon (0-30 days)</span>
+            <span>🔵 Upcoming (30+ days)</span>
+            <span>⚪ Insufficient Data</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+
 def render_ncr_section(customer_ncrs, customer_orders, customer_name):
     """
     Section: Non-Conformance Report (NCR) Analysis
@@ -7037,6 +7450,8 @@ def render_qbr_generator_content():
         st.markdown("---")
         render_line_item_analysis_section(all_line_items, "Company")
         st.markdown("---")
+        render_sku_reorder_analysis_section(all_line_items, "Company")
+        st.markdown("---")
         render_ncr_section(all_ncrs, all_orders, "Company")
         
     elif len(all_customers_data) == 1:
@@ -7076,6 +7491,12 @@ def render_qbr_generator_content():
         # =========================================================================
         st.markdown("---")
         render_line_item_analysis_section(customer_line_items, selected_customer)
+        
+        # =========================================================================
+        # SKU REORDER ANALYSIS - Order history and reorder predictions
+        # =========================================================================
+        st.markdown("---")
+        render_sku_reorder_analysis_section(customer_line_items, selected_customer)
         
         # =========================================================================
         # NCR (NON-CONFORMANCE) ANALYSIS - Quality issues tracking
@@ -7225,6 +7646,11 @@ def render_qbr_generator_content():
             st.markdown("### 📦 Combined Product Analysis")
             render_line_item_analysis_section(all_line_items, "All Selected Customers")
             
+            # Combined SKU Reorder Analysis
+            st.markdown("---")
+            st.markdown("### 🔄 Combined SKU Reorder Analysis")
+            render_sku_reorder_analysis_section(all_line_items, "All Selected Customers")
+            
             # Combined NCR Analysis
             st.markdown("---")
             st.markdown("### ⚠️ Combined Quality & Non-Conformance")
@@ -7264,6 +7690,10 @@ def render_qbr_generator_content():
                 # Line Item Analysis
                 st.markdown("---")
                 render_line_item_analysis_section(customer_line_items, selected_customer)
+                
+                # SKU Reorder Analysis
+                st.markdown("---")
+                render_sku_reorder_analysis_section(customer_line_items, selected_customer)
                 
                 # NCR Analysis
                 st.markdown("---")
