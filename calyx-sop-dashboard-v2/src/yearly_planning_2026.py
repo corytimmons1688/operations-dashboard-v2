@@ -449,6 +449,26 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
         analysis_df = customer_line_items[customer_line_items['Date'].notna()].copy()
         
         if not analysis_df.empty:
+            # ===== EXCLUDE FEES, SHIPPING, AND TAX ITEMS =====
+            EXCLUDED_SKUS = [
+                'AVATAX', 'UPS GROUND', 'UPS NEXT DAY SAVER', 'Estes Express',
+                'Convenience Fee 3.5%', 'Tooling Fee - Labels', 'Expedite Fee', 
+                'Ecommerce Shipping', 'Ecommerce shipping'
+            ]
+            EXCLUDED_PATTERNS = [
+                'fee', 'shipping', 'freight', 'ups ', 'fedex', 'estes', 'avatax', 
+                'tax', 'tooling', 'expedite', 'convenience', 'surcharge', 'handling'
+            ]
+            
+            analysis_df['_sku_lower'] = analysis_df['Item'].astype(str).str.lower().str.strip()
+            excluded_lower = [s.lower() for s in EXCLUDED_SKUS]
+            analysis_df = analysis_df[~analysis_df['_sku_lower'].isin(excluded_lower)]
+            
+            for pattern in EXCLUDED_PATTERNS:
+                analysis_df = analysis_df[~analysis_df['_sku_lower'].str.contains(pattern, na=False)]
+            
+            analysis_df = analysis_df.drop(columns=['_sku_lower'])
+            
             analysis_df['Date'] = pd.to_datetime(analysis_df['Date'], errors='coerce')
             analysis_df = analysis_df[analysis_df['Date'].notna()]
             
@@ -5891,6 +5911,36 @@ def render_sku_reorder_analysis_section(customer_line_items, customer_name):
     
     if analysis_df.empty:
         st.info("No dated invoice line items available for reorder analysis.")
+        return
+    
+    # ===== EXCLUDE FEES, SHIPPING, AND TAX ITEMS =====
+    # These are not real products and shouldn't be included in reorder analysis
+    EXCLUDED_SKUS = [
+        'AVATAX', 'UPS GROUND', 'UPS NEXT DAY SAVER', 'Estes Express',
+        'Convenience Fee 3.5%', 'Tooling Fee - Labels', 'Expedite Fee', 
+        'Ecommerce Shipping', 'Ecommerce shipping'
+    ]
+    
+    # Also exclude anything that looks like a fee or shipping
+    EXCLUDED_PATTERNS = [
+        'fee', 'shipping', 'freight', 'ups ', 'fedex', 'estes', 'avatax', 
+        'tax', 'tooling', 'expedite', 'convenience', 'surcharge', 'handling'
+    ]
+    
+    # Filter out excluded SKUs (exact match, case-insensitive)
+    analysis_df['_sku_lower'] = analysis_df['Item'].astype(str).str.lower().str.strip()
+    excluded_lower = [s.lower() for s in EXCLUDED_SKUS]
+    analysis_df = analysis_df[~analysis_df['_sku_lower'].isin(excluded_lower)]
+    
+    # Filter out SKUs matching excluded patterns
+    for pattern in EXCLUDED_PATTERNS:
+        analysis_df = analysis_df[~analysis_df['_sku_lower'].str.contains(pattern, na=False)]
+    
+    # Clean up temp column
+    analysis_df = analysis_df.drop(columns=['_sku_lower'])
+    
+    if analysis_df.empty:
+        st.info("No product SKUs available for reorder analysis (fees and shipping excluded).")
         return
     
     # Ensure Date is datetime
