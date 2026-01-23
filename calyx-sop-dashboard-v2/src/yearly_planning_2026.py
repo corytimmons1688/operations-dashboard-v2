@@ -8782,6 +8782,10 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     # =========================================================================
     # TOP PIPELINE SKUS
     # =========================================================================
+    # Ensure SKU Description column exists
+    if 'SKU Description' not in product_data.columns:
+        product_data['SKU Description'] = ''
+    
     sku_summary = product_data.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
         'Quantity': 'sum',
         'Deal ID': 'nunique' if 'Deal ID' in product_data.columns else 'count'
@@ -10475,6 +10479,10 @@ def render_product_forecasting_tool():
     # =========================================================================
     st.markdown("---")
     st.markdown("### 🏆 Top SKUs by Quantity")
+    
+    # Ensure SKU Description column exists
+    if 'SKU Description' not in forecast_df.columns:
+        forecast_df['SKU Description'] = ''
     
     sku_summary = forecast_df.groupby(['SKU', 'SKU Description', 'Product Category']).agg({
         'Quantity': 'sum',
