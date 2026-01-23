@@ -473,8 +473,10 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
             analysis_df = analysis_df[analysis_df['Date'].notna()]
             
             if not analysis_df.empty:
+                # Load SKU display names from Raw_Items
+                sku_display_names = load_sku_display_names()
+                
                 item_col = 'Item'
-                desc_col = 'Item Description' if 'Item Description' in analysis_df.columns else None
                 qty_col = 'Quantity' if 'Quantity' in analysis_df.columns else None
                 
                 sku_data = []
@@ -487,11 +489,11 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     sku_orders = analysis_df[analysis_df[item_col] == sku].copy()
                     sku_orders = sku_orders.sort_values('Date')
                     
-                    # Get description
-                    description = ''
-                    if desc_col and desc_col in sku_orders.columns:
-                        desc_val = sku_orders[desc_col].dropna().iloc[0] if len(sku_orders[desc_col].dropna()) > 0 else ''
-                        description = str(desc_val)[:40] + '...' if len(str(desc_val)) > 40 else str(desc_val)
+                    # Get description from Raw_Items lookup
+                    sku_str = str(sku).strip()
+                    description = sku_display_names.get(sku_str, '')
+                    if description:
+                        description = description[:40] + '...' if len(description) > 40 else description
                     
                     # Get unique order dates
                     order_dates = sku_orders['Date'].dt.date.unique()
@@ -3619,6 +3621,30 @@ def clean_numeric(value):
         return 0
 
 
+@st.cache_data
+def load_sku_display_names(version=CACHE_VERSION):
+    """
+    Load SKU → Display Name mapping from Raw_Items sheet.
+    Used for enriching SKU data with human-readable descriptions.
+    """
+    raw_items_df = load_google_sheets_data("Raw_Items", "A:C", version=version, silent=True)
+    
+    sku_lookup = {}
+    if not raw_items_df.empty:
+        # Expected columns: SKU, Display Name, Description
+        sku_col = 'SKU' if 'SKU' in raw_items_df.columns else None
+        name_col = 'Display Name' if 'Display Name' in raw_items_df.columns else None
+        
+        if sku_col and name_col:
+            for _, row in raw_items_df.iterrows():
+                sku = str(row[sku_col]).strip() if pd.notna(row[sku_col]) else ''
+                display_name = str(row[name_col]).strip() if pd.notna(row[name_col]) else ''
+                if sku and display_name and display_name.lower() != 'nan':
+                    sku_lookup[sku] = display_name
+    
+    return sku_lookup
+
+
 def load_qbr_data():
     """Load all data needed for QBR generation"""
     
@@ -5951,9 +5977,11 @@ def render_sku_reorder_analysis_section(customer_line_items, customer_name):
         st.info("No valid dated invoice line items available for reorder analysis.")
         return
     
-    # Get Item column - use Item Description if available for better readability
+    # Load SKU display names from Raw_Items for descriptions
+    sku_display_names = load_sku_display_names()
+    
+    # Get Item column
     item_col = 'Item'
-    desc_col = 'Item Description' if 'Item Description' in analysis_df.columns else None
     qty_col = 'Quantity' if 'Quantity' in analysis_df.columns else None
     amt_col = 'Amount' if 'Amount' in analysis_df.columns else None
     
@@ -5968,11 +5996,11 @@ def render_sku_reorder_analysis_section(customer_line_items, customer_name):
         sku_orders = analysis_df[analysis_df[item_col] == sku].copy()
         sku_orders = sku_orders.sort_values('Date')
         
-        # Get description
-        description = ''
-        if desc_col and desc_col in sku_orders.columns:
-            desc_val = sku_orders[desc_col].dropna().iloc[0] if len(sku_orders[desc_col].dropna()) > 0 else ''
-            description = str(desc_val)[:50] + '...' if len(str(desc_val)) > 50 else str(desc_val)
+        # Get description from Raw_Items lookup
+        sku_str = str(sku).strip()
+        description = sku_display_names.get(sku_str, '')
+        if description:
+            description = description[:50] + '...' if len(description) > 50 else description
         
         # Get unique order dates
         order_dates = sku_orders['Date'].dt.date.unique()
