@@ -6763,24 +6763,52 @@ def load_annual_tracker_data():
                     )
                     
                     # Create a computed Expected Date based on Updated Status
-                    def get_expected_date(row):
-                        status = str(row.get('Updated Status', '')).lower() if pd.notna(row.get('Updated Status')) else ''
-                        
-                        if 'pending fulfillment' in status:
-                            # PF: Use Customer Promise Last Date to Ship, then Projected Date
-                            if pd.notna(row.get('Customer Promise Last Date to Ship')):
-                                return row['Customer Promise Last Date to Ship']
-                            elif pd.notna(row.get('Projected Date')):
-                                return row['Projected Date']
-                        elif 'pending approval' in status:
-                            # PA: Use Pending Approval Date
-                            if pd.notna(row.get('Pending Approval Date')):
-                                return row['Pending Approval Date']
-                        
-                        # No date available
-                        return pd.NaT
+                    # Status values are like: "PF with Date (Int)", "PA with Date", "PF No Date (Ext)", etc.
+                    # PF = Pending Fulfillment, PA = Pending Approval
+                    # Use vectorized operations for better performance and reliability
                     
-                    sales_order_line_items_df['Expected Ship Date'] = sales_order_line_items_df.apply(get_expected_date, axis=1)
+                    # Initialize Expected Ship Date as NaT
+                    sales_order_line_items_df['Expected Ship Date'] = pd.NaT
+                    
+                    # Check for date columns (might have _header suffix if originals existed)
+                    cpld_col = 'Customer Promise Last Date to Ship'
+                    if cpld_col not in sales_order_line_items_df.columns and f'{cpld_col}_header' in sales_order_line_items_df.columns:
+                        cpld_col = f'{cpld_col}_header'
+                    
+                    proj_col = 'Projected Date'
+                    if proj_col not in sales_order_line_items_df.columns and f'{proj_col}_header' in sales_order_line_items_df.columns:
+                        proj_col = f'{proj_col}_header'
+                    
+                    pa_date_col = 'Pending Approval Date'
+                    if pa_date_col not in sales_order_line_items_df.columns and f'{pa_date_col}_header' in sales_order_line_items_df.columns:
+                        pa_date_col = f'{pa_date_col}_header'
+                    
+                    status_col = 'Updated Status'
+                    if status_col not in sales_order_line_items_df.columns and f'{status_col}_header' in sales_order_line_items_df.columns:
+                        status_col = f'{status_col}_header'
+                    
+                    # Get the Updated Status as uppercase for matching
+                    if status_col in sales_order_line_items_df.columns:
+                        status_upper = sales_order_line_items_df[status_col].fillna('').astype(str).str.upper()
+                        
+                        # PF (Pending Fulfillment): Use Customer Promise Last Date to Ship, then Projected Date
+                        pf_mask = status_upper.str.startswith('PF')
+                        if cpld_col in sales_order_line_items_df.columns:
+                            # Ensure dates are datetime
+                            sales_order_line_items_df[cpld_col] = pd.to_datetime(sales_order_line_items_df[cpld_col], errors='coerce')
+                            sales_order_line_items_df.loc[pf_mask, 'Expected Ship Date'] = sales_order_line_items_df.loc[pf_mask, cpld_col]
+                        
+                        # Fill any remaining PF rows with Projected Date
+                        if proj_col in sales_order_line_items_df.columns:
+                            sales_order_line_items_df[proj_col] = pd.to_datetime(sales_order_line_items_df[proj_col], errors='coerce')
+                            pf_no_date = pf_mask & sales_order_line_items_df['Expected Ship Date'].isna()
+                            sales_order_line_items_df.loc[pf_no_date, 'Expected Ship Date'] = sales_order_line_items_df.loc[pf_no_date, proj_col]
+                        
+                        # PA (Pending Approval): Use Pending Approval Date
+                        pa_mask = status_upper.str.startswith('PA')
+                        if pa_date_col in sales_order_line_items_df.columns:
+                            sales_order_line_items_df[pa_date_col] = pd.to_datetime(sales_order_line_items_df[pa_date_col], errors='coerce')
+                            sales_order_line_items_df.loc[pa_mask, 'Expected Ship Date'] = sales_order_line_items_df.loc[pa_mask, pa_date_col]
     
     # Process HubSpot Deals
     if not deals_df.empty:
@@ -9276,8 +9304,8 @@ def render_yearly_planning_2026():
     
     # 2. Pending Sales Orders (from sales_order_line_items_df for proper categorization)
     # Uses Updated Status from _NS_SalesOrders_Data and the appropriate date based on status:
-    # - Pending Fulfillment: Customer Promise Last Date to Ship or Projected Date
-    # - Pending Approval: Pending Approval Date
+    # - Pending Fulfillment (PF): Customer Promise Last Date to Ship or Projected Date
+    # - Pending Approval (PA): Pending Approval Date
     # Records without dates are excluded from projections
     pending_by_category = pd.DataFrame()
     pending_by_pipeline = pd.DataFrame()
@@ -9285,11 +9313,18 @@ def render_yearly_planning_2026():
     if not sales_order_line_items_df.empty:
         pending_orders = sales_order_line_items_df.copy()
         
-        # Filter for pending status using Updated Status if available, otherwise fall back to Status
-        status_col = 'Updated Status' if 'Updated Status' in pending_orders.columns else 'Status'
-        if status_col in pending_orders.columns:
+        # Filter for pending status
+        # Updated Status values are like: "PF with Date (Int)", "PA with Date", etc.
+        # Original Status values contain: "Pending Fulfillment", "Pending Approval", "Partial"
+        if 'Updated Status' in pending_orders.columns:
+            # Use Updated Status - filter for PF or PA statuses
             pending_orders = pending_orders[
-                pending_orders[status_col].str.contains('Pending|Partial', case=False, na=False)
+                pending_orders['Updated Status'].str.upper().str.startswith(('PF', 'PA'), na=False)
+            ]
+        elif 'Status' in pending_orders.columns:
+            # Fall back to original Status column
+            pending_orders = pending_orders[
+                pending_orders['Status'].str.contains('Pending|Partial', case=False, na=False)
             ]
         
         # Filter by Expected Ship Date within the selected time period
@@ -9326,9 +9361,12 @@ def render_yearly_planning_2026():
             pending_by_pipeline = pending_orders.groupby('Forecast Pipeline')['Amount'].sum().reset_index()
             pending_by_pipeline.columns = ['Pipeline', 'Pending']
     
-    # 3. HubSpot Deals (filtered by selected stages AND Pending Approval Date within time period)
+    # 3. HubSpot Deals (filtered by selected stages AND date within time period)
+    # Use "Pending Approval Date" (Column V) as the expected fulfillment date
+    # Fall back to Close Date for deals that don't have a Pending Approval Date
     deals_by_category = pd.DataFrame()
     deals_by_pipeline = pd.DataFrame()
+    date_col_used = 'None'
     
     if not pipeline_deals_df.empty and selected_stages and stage_column:
         filtered_deals = pipeline_deals_df.copy()
@@ -9337,23 +9375,26 @@ def render_yearly_planning_2026():
         stage_mask = filtered_deals[stage_column].isin(selected_stages)
         filtered_deals = filtered_deals[stage_mask]
         
-        # Filter by Pending Approval Date within the selected time period (preferred)
-        # Fall back to Close Date if Pending Approval Date not available
-        date_col_used = None
-        if 'Pending Approval Date' in filtered_deals.columns:
-            # Use Pending Approval Date for filtering
+        # Create a unified "Expected Date" column that uses Pending Approval Date if available,
+        # otherwise falls back to Close Date
+        if 'Pending Approval Date' in filtered_deals.columns and 'Close Date' in filtered_deals.columns:
+            filtered_deals['Expected Date'] = filtered_deals['Pending Approval Date'].fillna(filtered_deals['Close Date'])
+            date_col_used = 'Pending Approval Date (with Close Date fallback)'
+        elif 'Pending Approval Date' in filtered_deals.columns:
+            filtered_deals['Expected Date'] = filtered_deals['Pending Approval Date']
             date_col_used = 'Pending Approval Date'
-            filtered_deals = filtered_deals[
-                (filtered_deals['Pending Approval Date'] >= period_start) & 
-                (filtered_deals['Pending Approval Date'] <= period_end)
-            ]
         elif 'Close Date' in filtered_deals.columns:
-            # Fallback to Close Date if Pending Approval Date not available
+            filtered_deals['Expected Date'] = filtered_deals['Close Date']
             date_col_used = 'Close Date'
-            filtered_deals = filtered_deals[
-                (filtered_deals['Close Date'] >= period_start) & 
-                (filtered_deals['Close Date'] <= period_end)
-            ]
+        else:
+            filtered_deals['Expected Date'] = pd.NaT
+        
+        # Filter by Expected Date within the selected time period
+        filtered_deals = filtered_deals[
+            (filtered_deals['Expected Date'].notna()) &
+            (filtered_deals['Expected Date'] >= period_start) & 
+            (filtered_deals['Expected Date'] <= period_end)
+        ]
         
         if 'Forecast Category' in filtered_deals.columns:
             deals_by_category = filtered_deals.groupby('Forecast Category')['Amount'].sum().reset_index()
@@ -9385,16 +9426,48 @@ def render_yearly_planning_2026():
                 if 'Expected Ship Date' in sales_order_line_items_df.columns:
                     non_null = sales_order_line_items_df['Expected Ship Date'].notna().sum()
                     st.metric("Expected Ship Date", f"{non_null} / {len(sales_order_line_items_df)}")
+                    
+                    # Show breakdown of Expected Ship Date by status
+                    if 'Updated Status' in sales_order_line_items_df.columns and non_null > 0:
+                        status_dates = sales_order_line_items_df.groupby('Updated Status')['Expected Ship Date'].apply(lambda x: x.notna().sum())
+                        st.write("Dates by status:")
+                        st.dataframe(status_dates[status_dates > 0])
                 else:
                     st.error("❌ No 'Expected Ship Date' computed")
             
             with col3:
                 st.markdown("**Date columns available:**")
-                date_cols = ['Customer Promise Last Date to Ship', 'Projected Date', 'Pending Approval Date']
+                date_cols = ['Customer Promise Last Date to Ship', 'Projected Date', 'Pending Approval Date', 
+                             'Customer Promise Last Date to Ship_header', 'Projected Date_header', 'Pending Approval Date_header']
                 for col in date_cols:
                     if col in sales_order_line_items_df.columns:
                         count = sales_order_line_items_df[col].notna().sum()
                         st.write(f"- {col}: {count}")
+                
+                # Show Updated Status column name
+                if 'Updated Status' in sales_order_line_items_df.columns:
+                    st.write(f"- Updated Status: ✅")
+                elif 'Updated Status_header' in sales_order_line_items_df.columns:
+                    st.write(f"- Updated Status_header: ✅")
+            
+            # Check if PF/PA rows have dates
+            st.markdown("---")
+            st.markdown("**Debug: PF/PA rows date availability:**")
+            if 'Updated Status' in sales_order_line_items_df.columns:
+                pf_rows = sales_order_line_items_df[sales_order_line_items_df['Updated Status'].str.upper().str.startswith('PF', na=False)]
+                pa_rows = sales_order_line_items_df[sales_order_line_items_df['Updated Status'].str.upper().str.startswith('PA', na=False)]
+                
+                st.write(f"PF rows: {len(pf_rows)}")
+                if len(pf_rows) > 0:
+                    cpld_count = pf_rows['Customer Promise Last Date to Ship'].notna().sum() if 'Customer Promise Last Date to Ship' in pf_rows.columns else 0
+                    proj_count = pf_rows['Projected Date'].notna().sum() if 'Projected Date' in pf_rows.columns else 0
+                    st.write(f"  - With Customer Promise Date: {cpld_count}")
+                    st.write(f"  - With Projected Date: {proj_count}")
+                
+                st.write(f"PA rows: {len(pa_rows)}")
+                if len(pa_rows) > 0:
+                    pa_date_count = pa_rows['Pending Approval Date'].notna().sum() if 'Pending Approval Date' in pa_rows.columns else 0
+                    st.write(f"  - With Pending Approval Date: {pa_date_count}")
             
             # Show pending orders breakdown
             st.markdown("---")
@@ -9410,9 +9483,14 @@ def render_yearly_planning_2026():
     # DEBUG: Deals categorization diagnostics
     with st.expander("🔍 DEBUG: HubSpot Deals Categorization"):
         st.markdown(f"**Period: {period_label}** (from {period_start.strftime('%Y-%m-%d')} to {period_end.strftime('%Y-%m-%d')})")
+        st.markdown(f"**Date column used for filtering:** `{date_col_used}`")
         
         if not pipeline_deals_df.empty:
             st.write(f"Total pipeline_deals_df rows: {len(pipeline_deals_df)}")
+            
+            # Show all columns available
+            st.markdown("**All columns in pipeline_deals_df:**")
+            st.write(list(pipeline_deals_df.columns))
             
             # Check date columns
             st.markdown("**Date Columns:**")
@@ -9421,12 +9499,18 @@ def render_yearly_planning_2026():
                 if 'Pending Approval Date' in pipeline_deals_df.columns:
                     non_null_pa = pipeline_deals_df['Pending Approval Date'].notna().sum()
                     st.metric("Pending Approval Date", f"{non_null_pa} / {len(pipeline_deals_df)}")
+                    # Show sample dates
+                    if non_null_pa > 0:
+                        sample_dates = pipeline_deals_df['Pending Approval Date'].dropna().head(3)
+                        st.write("Sample dates:", sample_dates.tolist())
                 else:
-                    st.warning("⚠️ No 'Pending Approval Date' column - using Close Date")
+                    st.error("❌ No 'Pending Approval Date' column!")
             with date_col2:
                 if 'Close Date' in pipeline_deals_df.columns:
                     non_null_cd = pipeline_deals_df['Close Date'].notna().sum()
                     st.metric("Close Date", f"{non_null_cd} / {len(pipeline_deals_df)}")
+                else:
+                    st.error("❌ No 'Close Date' column!")
             
             # Check SKU and Deal Type columns
             col1, col2 = st.columns(2)
@@ -9469,6 +9553,7 @@ def render_yearly_planning_2026():
             # Show what made it through the filters
             st.markdown("---")
             st.markdown("**After Stage + Date Filtering:**")
+            st.write(f"Date column used for filtering: **{date_col_used if date_col_used else 'None'}**")
             if not deals_by_category.empty:
                 st.dataframe(deals_by_category, hide_index=True)
             else:
@@ -9479,7 +9564,22 @@ def render_yearly_planning_2026():
                     stage_filtered = pipeline_deals_df[pipeline_deals_df[stage_column].isin(selected_stages)]
                     st.write(f"After stage filter: {len(stage_filtered)} deals")
                     
-                    # Check which date column to use
+                    # Show date distribution for filtered deals
+                    if 'Close Date' in stage_filtered.columns:
+                        dates_in_period = stage_filtered[
+                            (stage_filtered['Close Date'].notna()) &
+                            (stage_filtered['Close Date'] >= period_start) & 
+                            (stage_filtered['Close Date'] <= period_end)
+                        ]
+                        st.write(f"Deals with Close Date in {period_label}: {len(dates_in_period)}")
+                    
+                    if 'Pending Approval Date' in stage_filtered.columns:
+                        pa_dates_in_period = stage_filtered[
+                            (stage_filtered['Pending Approval Date'].notna()) &
+                            (stage_filtered['Pending Approval Date'] >= period_start) & 
+                            (stage_filtered['Pending Approval Date'] <= period_end)
+                        ]
+                        st.write(f"Deals with Pending Approval Date in {period_label}: {len(pa_dates_in_period)}")
                     date_col = 'Pending Approval Date' if 'Pending Approval Date' in stage_filtered.columns else 'Close Date'
                     if date_col in stage_filtered.columns:
                         date_filtered = stage_filtered[
