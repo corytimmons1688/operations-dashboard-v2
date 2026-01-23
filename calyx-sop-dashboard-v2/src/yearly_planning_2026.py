@@ -6661,11 +6661,56 @@ def render_sku_order_history_tool():
     """
     SKU Order History Tool - Standalone report generator for SKU-level order analysis.
     Shows detailed order history by SKU with dates, quantities, and narrative summaries.
-    Designed for sales rep customer meetings to discuss reorder timing and forecasting.
+    Uses customer and date selections from the QBR Generator tab.
     """
     
     st.markdown("### 🔄 SKU Order History Report Generator")
     st.caption("Generate detailed SKU order history reports for customer meetings and forecasting")
+    
+    # ===== GET SELECTIONS FROM QBR GENERATOR TAB =====
+    selected_customers = st.session_state.get('qbr_customer_selector', [])
+    period_type = st.session_state.get('qbr_period_type', 'All Time')
+    
+    # Remove Company Overview option if present
+    COMPANY_OVERVIEW_OPTION = "📊 Company Overview (All Data)"
+    selected_customers = [c for c in selected_customers if c != COMPANY_OVERVIEW_OPTION]
+    
+    # Check if customers are selected
+    if not selected_customers:
+        st.markdown("""
+            <div style="
+                background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+                padding: 2rem;
+                border-radius: 12px;
+                border-left: 4px solid #f59e0b;
+                margin: 1rem 0;
+                text-align: center;
+            ">
+                <h3 style="color: #f59e0b; margin: 0 0 1rem 0;">👈 Select Customers in QBR Generator Tab</h3>
+                <p style="color: #94a3b8; margin: 0;">
+                    This tool uses the <strong>customer selection</strong> and <strong>date range</strong> from the QBR Generator tab.<br><br>
+                    Go to <strong>📋 QBR Generator</strong> → Select your customers → Come back here!
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        return
+    
+    # Show current selection info
+    st.markdown(f"""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #10b981;
+            margin: 1rem 0;
+        ">
+            <h4 style="color: #10b981; margin: 0;">✅ Using QBR Generator Selections</h4>
+            <p style="color: #94a3b8; margin: 0.5rem 0 0 0;">
+                <strong>Customers:</strong> {', '.join(selected_customers[:3])}{'...' if len(selected_customers) > 3 else ''} ({len(selected_customers)} selected)<br>
+                <strong>Date Range:</strong> {period_type}
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
     
     # Load data
     with st.spinner("Loading data..."):
@@ -6690,44 +6735,57 @@ def render_sku_order_history_tool():
         st.error("❌ Customer column not found in Invoice Line Item data.")
         return
     
-    # Get unique customers
-    customers = invoice_line_items_df[customer_col].dropna().unique()
-    customers = sorted([c for c in customers if c and str(c).strip() and str(c).lower() != 'nan'])
+    # ===== APPLY DATE RANGE FILTER =====
+    today = datetime.now()
+    start_date = None
+    end_date = None
+    date_label = period_type
     
-    if not customers:
-        st.error("❌ No customers found in data.")
-        return
+    if period_type == "This Month":
+        start_date = today.replace(day=1)
+        end_date = today
+    elif period_type == "Last Month":
+        first_of_month = today.replace(day=1)
+        last_month_end = first_of_month - timedelta(days=1)
+        start_date = last_month_end.replace(day=1)
+        end_date = last_month_end
+    elif period_type == "This Quarter":
+        quarter = (today.month - 1) // 3
+        start_date = datetime(today.year, quarter * 3 + 1, 1)
+        end_date = today
+    elif period_type == "Last Quarter":
+        quarter = (today.month - 1) // 3
+        if quarter == 0:
+            start_date = datetime(today.year - 1, 10, 1)
+            end_date = datetime(today.year - 1, 12, 31)
+        else:
+            start_date = datetime(today.year, (quarter - 1) * 3 + 1, 1)
+            end_month = quarter * 3
+            if end_month == 3:
+                end_date = datetime(today.year, 3, 31)
+            elif end_month == 6:
+                end_date = datetime(today.year, 6, 30)
+            else:
+                end_date = datetime(today.year, 9, 30)
+    elif period_type == "This Year":
+        start_date = datetime(today.year, 1, 1)
+        end_date = today
+    elif period_type == "Last Year":
+        start_date = datetime(today.year - 1, 1, 1)
+        end_date = datetime(today.year - 1, 12, 31)
     
-    # ===== CUSTOMER SELECTION =====
-    st.markdown("""
-        <div style="
-            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
-            padding: 1rem 1.5rem;
-            border-radius: 10px;
-            border-left: 4px solid #3b82f6;
-            margin: 1rem 0;
-        ">
-            <h4 style="color: #f1f5f9; margin: 0;">🔍 Select Customer</h4>
-        </div>
-    """, unsafe_allow_html=True)
+    # Filter by date range if applicable
+    filtered_df = invoice_line_items_df.copy()
+    if start_date is not None:
+        filtered_df = filtered_df[filtered_df['Date'] >= pd.Timestamp(start_date)]
+    if end_date is not None:
+        filtered_df = filtered_df[filtered_df['Date'] <= pd.Timestamp(end_date)]
     
-    selected_customer = st.selectbox(
-        "CUSTOMER",
-        options=customers,
-        index=None,
-        placeholder="Select a customer...",
-        key="sku_history_customer"
-    )
-    
-    if not selected_customer:
-        st.info("👆 Select a customer above to generate their SKU order history report.")
-        return
-    
-    # ===== FILTER DATA FOR CUSTOMER =====
-    customer_df = invoice_line_items_df[invoice_line_items_df[customer_col] == selected_customer].copy()
+    # ===== FILTER DATA FOR SELECTED CUSTOMERS =====
+    customer_df = filtered_df[filtered_df[customer_col].isin(selected_customers)].copy()
     
     if customer_df.empty:
-        st.warning(f"No invoice line items found for {selected_customer}.")
+        st.warning(f"No invoice line items found for selected customers in {date_label}.")
         return
     
     # ===== EXCLUDE FEES, SHIPPING, TAX =====
@@ -6755,7 +6813,7 @@ def render_sku_order_history_tool():
     customer_df = customer_df[customer_df['Date'].notna()]
     
     if customer_df.empty:
-        st.warning(f"No product SKUs found for {selected_customer} (fees/shipping excluded).")
+        st.warning(f"No product SKUs found for selected customers (fees/shipping excluded).")
         return
     
     # ===== BUILD SKU ORDER HISTORY =====
@@ -6777,6 +6835,9 @@ def render_sku_order_history_tool():
         sku_str = str(sku).strip()
         display_name = sku_display_names.get(sku_str, '')
         
+        # Get which customers ordered this SKU
+        sku_customers = sku_df[customer_col].unique().tolist()
+        
         # Build order history
         orders = []
         for _, row in sku_df.iterrows():
@@ -6784,12 +6845,14 @@ def render_sku_order_history_tool():
             qty = row[qty_col] if qty_col and pd.notna(row[qty_col]) else 0
             amt = row[amt_col] if amt_col and pd.notna(row[amt_col]) else 0
             doc = row[doc_col] if doc_col and pd.notna(row[doc_col]) else ''
+            cust = row[customer_col] if customer_col in row else ''
             
             orders.append({
                 'date': order_date,
                 'qty': qty,
                 'amount': amt,
-                'doc': doc
+                'doc': doc,
+                'customer': cust
             })
         
         # Calculate stats
@@ -6826,13 +6889,15 @@ def render_sku_order_history_tool():
             'total_amount': total_amount,
             'avg_days': avg_days,
             'predicted_next': predicted_next,
-            'days_until': days_until
+            'days_until': days_until,
+            'customers': sku_customers
         })
     
     # Sort by number of orders (most active SKUs first)
     sku_histories = sorted(sku_histories, key=lambda x: x['num_orders'], reverse=True)
     
     # ===== DISPLAY HEADER =====
+    customer_display = ', '.join(selected_customers[:2]) + ('...' if len(selected_customers) > 2 else '')
     st.markdown(f"""
         <div style="
             background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
@@ -6840,9 +6905,9 @@ def render_sku_order_history_tool():
             border-radius: 12px;
             margin: 1rem 0;
         ">
-            <h2 style="color: white; margin: 0; font-size: 1.5rem;">📦 {selected_customer}</h2>
+            <h2 style="color: white; margin: 0; font-size: 1.5rem;">📦 SKU Order History</h2>
             <p style="color: rgba(255,255,255,0.8); margin: 0.5rem 0 0 0;">
-                SKU Order History Report &nbsp;|&nbsp; {len(sku_histories)} Active SKUs &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y')}
+                {customer_display} &nbsp;|&nbsp; {date_label} &nbsp;|&nbsp; {len(sku_histories)} Active SKUs &nbsp;|&nbsp; Generated: {datetime.now().strftime('%B %d, %Y')}
             </p>
         </div>
     """, unsafe_allow_html=True)
@@ -7006,8 +7071,13 @@ def render_sku_order_history_tool():
     st.markdown("---")
     st.markdown("### 📥 Export Report")
     
+    # Generate combined customer name for filename
+    combined_customer_name = '_'.join(selected_customers[:3]).replace(' ', '_')[:50]
+    if len(selected_customers) > 3:
+        combined_customer_name += '_and_more'
+    
     # Generate HTML report
-    html_report = generate_sku_order_history_html(selected_customer, filtered_histories, sku_display_names)
+    html_report = generate_sku_order_history_html(customer_display, filtered_histories, sku_display_names)
     
     col_btn1, col_btn2 = st.columns(2)
     
@@ -7015,18 +7085,18 @@ def render_sku_order_history_tool():
         st.download_button(
             label="📄 Download HTML Report",
             data=html_report,
-            file_name=f"SKU_Order_History_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+            file_name=f"SKU_Order_History_{combined_customer_name}_{datetime.now().strftime('%Y%m%d')}.html",
             mime="text/html",
             use_container_width=True
         )
     
     with col_btn2:
         # Generate plain text version for easy copy/paste
-        text_report = generate_sku_order_history_text(selected_customer, filtered_histories)
+        text_report = generate_sku_order_history_text(customer_display, filtered_histories)
         st.download_button(
             label="📋 Download Text Summary",
             data=text_report,
-            file_name=f"SKU_Order_History_{selected_customer.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.txt",
+            file_name=f"SKU_Order_History_{combined_customer_name}_{datetime.now().strftime('%Y%m%d')}.txt",
             mime="text/plain",
             use_container_width=True
         )
