@@ -9280,6 +9280,15 @@ def render_yearly_planning_2026():
         selected_stages = []
         st.info("No HubSpot deal stages available")
     
+    # Add toggle for including pending orders without dates
+    with filter_col1:
+        include_no_date_orders = st.checkbox(
+            "Include PA/PF orders without dates",
+            value=False,
+            key="include_no_date_orders",
+            help="When enabled, includes Pending Approval and Pending Fulfillment orders that don't have expected ship dates. These will be assumed to ship within the selected period."
+        )
+    
     # Calculate data for each source
     # 1. Actuals (from line_items_df) - filtered by selected time period
     actuals_by_category = pd.DataFrame()
@@ -9306,9 +9315,10 @@ def render_yearly_planning_2026():
     # Uses Updated Status from _NS_SalesOrders_Data and the appropriate date based on status:
     # - Pending Fulfillment (PF): Customer Promise Last Date to Ship or Projected Date
     # - Pending Approval (PA): Pending Approval Date
-    # Records without dates are excluded from projections
+    # Records without dates are excluded from projections unless toggle is enabled
     pending_by_category = pd.DataFrame()
     pending_by_pipeline = pd.DataFrame()
+    no_date_orders_included = 0  # Track how many no-date orders were included
     
     if not sales_order_line_items_df.empty:
         pending_orders = sales_order_line_items_df.copy()
@@ -9328,13 +9338,24 @@ def render_yearly_planning_2026():
             ]
         
         # Filter by Expected Ship Date within the selected time period
-        # This excludes records without dates (PA No Date, PF No Date, PA Old)
+        # OR include orders without dates if toggle is enabled
         if 'Expected Ship Date' in pending_orders.columns:
-            pending_orders = pending_orders[
+            # Orders WITH dates in the period
+            orders_with_dates = pending_orders[
                 (pending_orders['Expected Ship Date'].notna()) &
                 (pending_orders['Expected Ship Date'] >= period_start) & 
                 (pending_orders['Expected Ship Date'] <= period_end)
             ]
+            
+            if include_no_date_orders:
+                # Also include orders WITHOUT dates (PA No Date, PF No Date, PA Old, etc.)
+                orders_without_dates = pending_orders[
+                    pending_orders['Expected Ship Date'].isna()
+                ]
+                no_date_orders_included = len(orders_without_dates)
+                pending_orders = pd.concat([orders_with_dates, orders_without_dates], ignore_index=True)
+            else:
+                pending_orders = orders_with_dates
         
         if 'Forecast Category' in pending_orders.columns:
             pending_by_category = pending_orders.groupby('Forecast Category')['Amount'].sum().reset_index()
@@ -9472,6 +9493,8 @@ def render_yearly_planning_2026():
             # Show pending orders breakdown
             st.markdown("---")
             st.markdown("**After Filtering (Pending + Has Date + In Period):**")
+            if include_no_date_orders:
+                st.info(f"ℹ️ **Including orders without dates:** {no_date_orders_included:,} line items added")
             if not pending_by_category.empty:
                 st.dataframe(pending_by_category, hide_index=True)
                 st.write(f"Total Pending: ${pending_by_category['Pending'].sum():,.0f}")
@@ -9597,7 +9620,11 @@ def render_yearly_planning_2026():
     
     # ===== COMPREHENSIVE CATEGORY CHART - Plan vs Full Pipeline =====
     st.markdown(f"### 📊 Plan vs. Full Pipeline by Category ({period_label})")
-    st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
+    if include_no_date_orders and no_date_orders_included > 0:
+        st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
+        st.info(f"⚠️ **Includes {no_date_orders_included:,} pending order line items without dates** — assumed to ship this period")
+    else:
+        st.caption(f"Compare your {period_label} plan against realized revenue plus everything in the pipeline")
     
     # Calculate period plan based on time selection (using through_month from sidebar)
     if time_period == "Month":
