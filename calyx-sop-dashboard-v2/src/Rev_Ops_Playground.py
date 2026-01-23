@@ -6725,49 +6725,62 @@ def load_annual_tracker_data():
             # Ensure Document Number is string for joining
             sales_order_line_items_df['Document Number'] = sales_order_line_items_df['Document Number'].astype(str).str.strip()
             
-            # Create lookup from sales_orders_df
-            so_lookup_cols = ['Document Number']
-            if 'Updated Status' in sales_orders_df.columns:
-                so_lookup_cols.append('Updated Status')
-            if 'Customer Promise Last Date to Ship' in sales_orders_df.columns:
-                so_lookup_cols.append('Customer Promise Last Date to Ship')
-            if 'Projected Date' in sales_orders_df.columns:
-                so_lookup_cols.append('Projected Date')
-            if 'Pending Approval Date' in sales_orders_df.columns:
-                so_lookup_cols.append('Pending Approval Date')
+            # Find the document number column in sales_orders_df
+            # It might be "Document Number", "SO Number", "SO #", "Sales Order Number", etc.
+            so_doc_col = None
+            possible_doc_cols = ['SO Number', 'Document Number', 'SO #', 'Sales Order Number', 'Order Number']
+            for col in possible_doc_cols:
+                if col in sales_orders_df.columns:
+                    so_doc_col = col
+                    break
             
-            if len(so_lookup_cols) > 1:
-                so_header_lookup = sales_orders_df[so_lookup_cols].copy()
-                so_header_lookup['Document Number'] = so_header_lookup['Document Number'].astype(str).str.strip()
-                so_header_lookup = so_header_lookup.drop_duplicates(subset=['Document Number'])
+            # If we found a matching column, proceed with the join
+            if so_doc_col:
+                # Create lookup from sales_orders_df
+                so_lookup_cols = [so_doc_col]
+                if 'Updated Status' in sales_orders_df.columns:
+                    so_lookup_cols.append('Updated Status')
+                if 'Customer Promise Last Date to Ship' in sales_orders_df.columns:
+                    so_lookup_cols.append('Customer Promise Last Date to Ship')
+                if 'Projected Date' in sales_orders_df.columns:
+                    so_lookup_cols.append('Projected Date')
+                if 'Pending Approval Date' in sales_orders_df.columns:
+                    so_lookup_cols.append('Pending Approval Date')
                 
-                # Join to line items
-                sales_order_line_items_df = sales_order_line_items_df.merge(
-                    so_header_lookup, 
-                    on='Document Number', 
-                    how='left',
-                    suffixes=('', '_header')
-                )
-                
-                # Create a computed Expected Date based on Updated Status
-                def get_expected_date(row):
-                    status = str(row.get('Updated Status', '')).lower() if pd.notna(row.get('Updated Status')) else ''
+                if len(so_lookup_cols) > 1:
+                    so_header_lookup = sales_orders_df[so_lookup_cols].copy()
+                    # Rename to Document Number for the join
+                    so_header_lookup = so_header_lookup.rename(columns={so_doc_col: 'Document Number'})
+                    so_header_lookup['Document Number'] = so_header_lookup['Document Number'].astype(str).str.strip()
+                    so_header_lookup = so_header_lookup.drop_duplicates(subset=['Document Number'])
                     
-                    if 'pending fulfillment' in status:
-                        # PF: Use Customer Promise Last Date to Ship, then Projected Date
-                        if pd.notna(row.get('Customer Promise Last Date to Ship')):
-                            return row['Customer Promise Last Date to Ship']
-                        elif pd.notna(row.get('Projected Date')):
-                            return row['Projected Date']
-                    elif 'pending approval' in status:
-                        # PA: Use Pending Approval Date
-                        if pd.notna(row.get('Pending Approval Date')):
-                            return row['Pending Approval Date']
+                    # Join to line items
+                    sales_order_line_items_df = sales_order_line_items_df.merge(
+                        so_header_lookup, 
+                        on='Document Number', 
+                        how='left',
+                        suffixes=('', '_header')
+                    )
                     
-                    # No date available
-                    return pd.NaT
-                
-                sales_order_line_items_df['Expected Ship Date'] = sales_order_line_items_df.apply(get_expected_date, axis=1)
+                    # Create a computed Expected Date based on Updated Status
+                    def get_expected_date(row):
+                        status = str(row.get('Updated Status', '')).lower() if pd.notna(row.get('Updated Status')) else ''
+                        
+                        if 'pending fulfillment' in status:
+                            # PF: Use Customer Promise Last Date to Ship, then Projected Date
+                            if pd.notna(row.get('Customer Promise Last Date to Ship')):
+                                return row['Customer Promise Last Date to Ship']
+                            elif pd.notna(row.get('Projected Date')):
+                                return row['Projected Date']
+                        elif 'pending approval' in status:
+                            # PA: Use Pending Approval Date
+                            if pd.notna(row.get('Pending Approval Date')):
+                                return row['Pending Approval Date']
+                        
+                        # No date available
+                        return pd.NaT
+                    
+                    sales_order_line_items_df['Expected Ship Date'] = sales_order_line_items_df.apply(get_expected_date, axis=1)
     
     # Process HubSpot Deals
     if not deals_df.empty:
