@@ -9114,7 +9114,8 @@ def categorize_sku_for_pipeline(sku, description):
 
 
 def create_product_forecast_html(product_data, date_label="All Time", rep_name="All Reps", pairing_info=None,
-                                  pending_orders_df=None, historical_df=None, concentrate_inventory=None):
+                                  pending_orders_df=None, historical_df=None, concentrate_inventory=None,
+                                  selected_categories=None):
     """Generate a comprehensive HTML report for product forecasting including Pipeline, Pending Orders, and Historical data"""
     
     generated_date = datetime.now().strftime('%B %d, %Y')
@@ -9131,6 +9132,8 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
         historical_df = pd.DataFrame()
     if concentrate_inventory is None:
         concentrate_inventory = {'in_transit': 0, 'seized': 0, 'on_hand': 0, 'lead_time_weeks': 12}
+    if selected_categories is None:
+        selected_categories = []
     
     # =========================================================================
     # PIPELINE METRICS (Forward-looking forecast from HubSpot)
@@ -9156,7 +9159,10 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             customer_col = col
             break
     if customer_col and 'Quantity' in product_data.columns:
-        pipeline_by_customer = product_data.groupby(customer_col)['Quantity'].sum().sort_values(ascending=False).head(15).to_dict()
+        # Filter out empty/nan customer names before grouping
+        valid_data = product_data[product_data[customer_col].notna() & (product_data[customer_col].astype(str).str.strip() != '') & (product_data[customer_col].astype(str).str.lower() != 'nan')]
+        if not valid_data.empty:
+            pipeline_by_customer = valid_data.groupby(customer_col)['Quantity'].sum().sort_values(ascending=False).head(15).to_dict()
     
     # =========================================================================
     # PENDING ORDERS METRICS (Actualized demand from NetSuite Sales Orders)
@@ -9188,12 +9194,15 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 customer_col = col
                 break
         if customer_col and qty_col in pending_orders_df.columns:
-            pending_by_customer = pending_orders_df.groupby(customer_col)[qty_col].sum().sort_values(ascending=False).head(15).to_dict()
+            # Filter out empty/nan customer names before grouping
+            valid_pending = pending_orders_df[pending_orders_df[customer_col].notna() & (pending_orders_df[customer_col].astype(str).str.strip() != '') & (pending_orders_df[customer_col].astype(str).str.lower() != 'nan')]
+            if not valid_pending.empty:
+                pending_by_customer = valid_pending.groupby(customer_col)[qty_col].sum().sort_values(ascending=False).head(15).to_dict()
     
     # =========================================================================
     # HISTORICAL METRICS (YTD Actuals from Invoice Line Items)
     # Filter to current year for YTD display
-    # Apply concentrate base-only filter to match dashboard calculations
+    # Apply category filter and concentrate base-only filter to match dashboard
     # =========================================================================
     historical_total_qty = 0
     historical_total_revenue = 0
@@ -9205,6 +9214,10 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     if not historical_df.empty and 'Date' in historical_df.columns:
         # Filter to current year for YTD metrics
         ytd_df = historical_df[historical_df['Date'].dt.year == current_year].copy()
+        
+        # Apply category filter if categories were selected (matches dashboard behavior)
+        if selected_categories and len(selected_categories) > 0 and 'Product Category' in ytd_df.columns:
+            ytd_df = ytd_df[ytd_df['Product Category'].isin(selected_categories)]
         
         # Apply concentrate base-only filter to match dashboard
         # For Concentrates category, only count base SKUs (not lids/labels)
@@ -9228,14 +9241,17 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                 if 'Quantity' in ytd_df.columns:
                     historical_by_category = ytd_df.groupby('Product Category')['Quantity'].sum().to_dict()
             
-            # Build customer breakdown for invoiced
+            # Build customer breakdown for invoiced - use 'Correct Customer' for invoice data
             customer_col = None
             for col in ['Correct Customer', 'Customer Companyname', 'Company Name']:
                 if col in ytd_df.columns:
                     customer_col = col
                     break
             if customer_col and 'Quantity' in ytd_df.columns:
-                invoiced_by_customer = ytd_df.groupby(customer_col)['Quantity'].sum().sort_values(ascending=False).head(15).to_dict()
+                # Filter out empty/nan customer names before grouping
+                valid_customers = ytd_df[ytd_df[customer_col].notna() & (ytd_df[customer_col].str.strip() != '') & (ytd_df[customer_col].str.lower() != 'nan')]
+                if not valid_customers.empty:
+                    invoiced_by_customer = valid_customers.groupby(customer_col)['Quantity'].sum().sort_values(ascending=False).head(15).to_dict()
     
     # =========================================================================
     # 2025 HISTORICAL DEMAND (for validation)
@@ -10930,6 +10946,7 @@ def render_product_forecasting_tool():
     
     # Generate HTML report (using all data sources)
     # Pass full invoice_line_items_df for historical validation - it has all years and categories
+    # Pass selected_categories so YTD calculation matches dashboard
     html_report = create_product_forecast_html(
         product_data=forecast_df, 
         date_label=date_label, 
@@ -10937,7 +10954,8 @@ def render_product_forecasting_tool():
         pairing_info=pairing_info,
         pending_orders_df=pending_orders_df,
         historical_df=invoice_line_items_df,  # Full history for 2024/2025 validation
-        concentrate_inventory=concentrate_inventory
+        concentrate_inventory=concentrate_inventory,
+        selected_categories=selected_categories  # Apply same category filter as dashboard
     )
     
     st.download_button(
