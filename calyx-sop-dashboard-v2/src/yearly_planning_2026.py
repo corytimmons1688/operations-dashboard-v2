@@ -6788,6 +6788,29 @@ def render_sku_order_history_tool():
         st.warning(f"No invoice line items found for selected customers in {date_label}.")
         return
     
+    # ===== EXCLUDE ECOMMERCE PIPELINE ORDERS =====
+    # For enterprise accounts, Ecommerce pipeline orders are often misattributed
+    # (e.g., orders with matching company name but different shipping address)
+    pipeline_col = None
+    for col_name in ['Pipeline', 'pipeline', 'Sales Channel', 'Channel']:
+        if col_name in customer_df.columns:
+            pipeline_col = col_name
+            break
+    
+    if pipeline_col:
+        # Exclude Ecommerce/Ecom pipeline orders
+        ecom_patterns = ['ecom', 'e-com', 'ecommerce', 'e-commerce']
+        customer_df['_pipeline_lower'] = customer_df[pipeline_col].astype(str).str.lower().str.strip()
+        
+        for pattern in ecom_patterns:
+            customer_df = customer_df[~customer_df['_pipeline_lower'].str.contains(pattern, na=False)]
+        
+        customer_df = customer_df.drop(columns=['_pipeline_lower'])
+        
+        if customer_df.empty:
+            st.warning(f"No non-Ecommerce orders found for selected customers in {date_label}.")
+            return
+    
     # ===== EXCLUDE FEES, SHIPPING, TAX =====
     EXCLUDED_SKUS = [
         'AVATAX', 'UPS GROUND', 'UPS NEXT DAY SAVER', 'Estes Express',
@@ -7076,30 +7099,452 @@ def render_sku_order_history_tool():
     if len(selected_customers) > 3:
         combined_customer_name += '_and_more'
     
-    # Generate HTML report
-    html_report = generate_sku_order_history_html(customer_display, filtered_histories, sku_display_names)
+    # Generate exports
+    xlsx_bytes = generate_sku_order_history_xlsx(customer_display, filtered_histories, date_label)
+    html_report = generate_sku_order_history_html_printable(customer_display, filtered_histories, date_label)
     
     col_btn1, col_btn2 = st.columns(2)
     
     with col_btn1:
         st.download_button(
-            label="📄 Download HTML Report",
-            data=html_report,
-            file_name=f"SKU_Order_History_{combined_customer_name}_{datetime.now().strftime('%Y%m%d')}.html",
-            mime="text/html",
+            label="📊 Download Excel (XLSX)",
+            data=xlsx_bytes,
+            file_name=f"SKU_Order_History_{combined_customer_name}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
     
     with col_btn2:
-        # Generate plain text version for easy copy/paste
-        text_report = generate_sku_order_history_text(customer_display, filtered_histories)
         st.download_button(
-            label="📋 Download Text Summary",
-            data=text_report,
-            file_name=f"SKU_Order_History_{combined_customer_name}_{datetime.now().strftime('%Y%m%d')}.txt",
-            mime="text/plain",
-            use_container_width=True
+            label="📄 Download PDF-Ready HTML",
+            data=html_report,
+            file_name=f"SKU_Order_History_{combined_customer_name}_{datetime.now().strftime('%Y%m%d')}.html",
+            mime="text/html",
+            use_container_width=True,
+            help="Open in browser and print to PDF"
         )
+
+
+def generate_sku_order_history_xlsx(customer_name, sku_histories, date_label):
+    """
+    Generate Excel file with SKU order history in wide format.
+    Format: SKU | Description | First Order Date | Quantity | Second Order Date | Quantity | ...
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from io import BytesIO
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "SKU Order History"
+    
+    # Styles
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="1e40af")
+    data_font = Font(size=10)
+    date_font = Font(size=10, color="1e40af")
+    qty_font = Font(size=10, bold=True)
+    border = Border(
+        left=Side(style='thin', color='e2e8f0'),
+        right=Side(style='thin', color='e2e8f0'),
+        top=Side(style='thin', color='e2e8f0'),
+        bottom=Side(style='thin', color='e2e8f0')
+    )
+    center_align = Alignment(horizontal='center', vertical='center')
+    left_align = Alignment(horizontal='left', vertical='center')
+    
+    # Find max number of orders across all SKUs
+    max_orders = max(len(s['orders']) for s in sku_histories) if sku_histories else 1
+    
+    # Title row
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4 + max_orders * 2)
+    title_cell = ws.cell(row=1, column=1, value=f"SKU Order History - {customer_name}")
+    title_cell.font = Font(bold=True, size=14, color="1e40af")
+    title_cell.alignment = Alignment(horizontal='left', vertical='center')
+    ws.row_dimensions[1].height = 25
+    
+    # Subtitle row
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4 + max_orders * 2)
+    subtitle_cell = ws.cell(row=2, column=1, value=f"Period: {date_label} | Generated: {datetime.now().strftime('%B %d, %Y')}")
+    subtitle_cell.font = Font(size=10, color="64748b")
+    subtitle_cell.alignment = Alignment(horizontal='left', vertical='center')
+    ws.row_dimensions[2].height = 20
+    
+    # Header row
+    header_row = 4
+    headers = ['SKU', 'Description', 'Total Orders', 'Total Qty']
+    
+    # Add order columns dynamically
+    ordinal_names = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth']
+    for i in range(max_orders):
+        ordinal = ordinal_names[i] if i < len(ordinal_names) else f"Order {i+1}"
+        headers.append(f"{ordinal} Order Date")
+        headers.append("Quantity")
+    
+    # Add prediction columns
+    headers.extend(['Avg Days Between', 'Predicted Next', 'Status'])
+    
+    # Write headers
+    for col, header in enumerate(headers, 1):
+        cell = ws.cell(row=header_row, column=col, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = border
+    
+    ws.row_dimensions[header_row].height = 22
+    
+    # Write data rows
+    for row_idx, sku_data in enumerate(sku_histories, start=header_row + 1):
+        col = 1
+        
+        # SKU
+        cell = ws.cell(row=row_idx, column=col, value=sku_data['sku'])
+        cell.font = Font(size=10, bold=True, name='Consolas')
+        cell.alignment = left_align
+        cell.border = border
+        col += 1
+        
+        # Description
+        cell = ws.cell(row=row_idx, column=col, value=sku_data['display_name'] or '')
+        cell.font = data_font
+        cell.alignment = left_align
+        cell.border = border
+        col += 1
+        
+        # Total Orders
+        cell = ws.cell(row=row_idx, column=col, value=sku_data['num_orders'])
+        cell.font = data_font
+        cell.alignment = center_align
+        cell.border = border
+        col += 1
+        
+        # Total Qty
+        cell = ws.cell(row=row_idx, column=col, value=sku_data['total_qty'])
+        cell.font = qty_font
+        cell.number_format = '#,##0'
+        cell.alignment = center_align
+        cell.border = border
+        col += 1
+        
+        # Order dates and quantities
+        for i in range(max_orders):
+            if i < len(sku_data['orders']):
+                order = sku_data['orders'][i]
+                # Date
+                cell = ws.cell(row=row_idx, column=col, value=order['date'])
+                cell.font = date_font
+                cell.number_format = 'YYYY-MM-DD'
+                cell.alignment = center_align
+                cell.border = border
+                col += 1
+                
+                # Quantity
+                cell = ws.cell(row=row_idx, column=col, value=order['qty'])
+                cell.font = qty_font
+                cell.number_format = '#,##0'
+                cell.alignment = center_align
+                cell.border = border
+                col += 1
+            else:
+                # Empty cells for orders that don't exist
+                for _ in range(2):
+                    cell = ws.cell(row=row_idx, column=col, value='')
+                    cell.border = border
+                    col += 1
+        
+        # Avg Days Between
+        cell = ws.cell(row=row_idx, column=col, value=round(sku_data['avg_days']) if sku_data['avg_days'] else '')
+        cell.font = data_font
+        cell.alignment = center_align
+        cell.border = border
+        col += 1
+        
+        # Predicted Next
+        if sku_data['predicted_next']:
+            cell = ws.cell(row=row_idx, column=col, value=sku_data['predicted_next'])
+            cell.number_format = 'YYYY-MM-DD'
+        else:
+            cell = ws.cell(row=row_idx, column=col, value='')
+        cell.font = data_font
+        cell.alignment = center_align
+        cell.border = border
+        col += 1
+        
+        # Status
+        days_until = sku_data['days_until']
+        if days_until is not None:
+            if days_until < -14:
+                status = f"Overdue ({abs(days_until)}d)"
+            elif days_until < 0:
+                status = f"Past ({abs(days_until)}d)"
+            elif days_until <= 30:
+                status = f"Due Soon ({days_until}d)"
+            else:
+                status = f"Upcoming ({days_until}d)"
+        else:
+            status = "N/A"
+        
+        cell = ws.cell(row=row_idx, column=col, value=status)
+        cell.font = data_font
+        cell.alignment = center_align
+        cell.border = border
+        
+        # Color code status
+        if days_until is not None:
+            if days_until < -14:
+                cell.font = Font(size=10, bold=True, color="dc2626")
+            elif days_until < 0:
+                cell.font = Font(size=10, bold=True, color="d97706")
+            elif days_until <= 30:
+                cell.font = Font(size=10, bold=True, color="059669")
+            else:
+                cell.font = Font(size=10, color="2563eb")
+    
+    # Auto-adjust column widths
+    ws.column_dimensions['A'].width = 22  # SKU
+    ws.column_dimensions['B'].width = 45  # Description
+    ws.column_dimensions['C'].width = 12  # Total Orders
+    ws.column_dimensions['D'].width = 12  # Total Qty
+    
+    # Order columns
+    col_idx = 5
+    for i in range(max_orders):
+        ws.column_dimensions[get_column_letter(col_idx)].width = 14  # Date
+        ws.column_dimensions[get_column_letter(col_idx + 1)].width = 12  # Qty
+        col_idx += 2
+    
+    # Prediction columns
+    ws.column_dimensions[get_column_letter(col_idx)].width = 14  # Avg Days
+    ws.column_dimensions[get_column_letter(col_idx + 1)].width = 14  # Predicted
+    ws.column_dimensions[get_column_letter(col_idx + 2)].width = 16  # Status
+    
+    # Freeze header row
+    ws.freeze_panes = 'A5'
+    
+    # Save to bytes
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+def generate_sku_order_history_html_printable(customer_name, sku_histories, date_label):
+    """Generate a printable HTML report for SKU order history (PDF-ready)"""
+    
+    generated_date = datetime.now().strftime('%B %d, %Y')
+    
+    # Find max orders
+    max_orders = max(len(s['orders']) for s in sku_histories) if sku_histories else 1
+    ordinal_names = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth']
+    
+    # Build header columns
+    header_cols = '<th>SKU</th><th>Description</th><th>Orders</th><th>Total Qty</th>'
+    for i in range(max_orders):
+        ordinal = ordinal_names[i] if i < len(ordinal_names) else f"Order {i+1}"
+        header_cols += f'<th>{ordinal} Date</th><th>Qty</th>'
+    header_cols += '<th>Avg Days</th><th>Predicted Next</th><th>Status</th>'
+    
+    # Build data rows
+    data_rows = ""
+    for sku_data in sku_histories:
+        days_until = sku_data['days_until']
+        
+        # Status styling
+        if days_until is not None:
+            if days_until < -14:
+                status_text = f"🔴 Overdue ({abs(days_until)}d)"
+                status_style = "color: #dc2626; font-weight: bold;"
+            elif days_until < 0:
+                status_text = f"🟠 Past ({abs(days_until)}d)"
+                status_style = "color: #d97706; font-weight: bold;"
+            elif days_until <= 30:
+                status_text = f"🟢 Due Soon ({days_until}d)"
+                status_style = "color: #059669; font-weight: bold;"
+            else:
+                status_text = f"🔵 Upcoming ({days_until}d)"
+                status_style = "color: #2563eb;"
+        else:
+            status_text = "—"
+            status_style = "color: #94a3b8;"
+        
+        row = f"""
+        <tr>
+            <td style="font-family: monospace; font-weight: 600; white-space: nowrap;">{sku_data['sku']}</td>
+            <td style="font-size: 0.85rem;">{sku_data['display_name'] or ''}</td>
+            <td style="text-align: center;">{sku_data['num_orders']}</td>
+            <td style="text-align: right; font-weight: 600;">{sku_data['total_qty']:,.0f}</td>
+        """
+        
+        # Order columns
+        for i in range(max_orders):
+            if i < len(sku_data['orders']):
+                order = sku_data['orders'][i]
+                date_str = order['date'].strftime('%Y-%m-%d')
+                qty_str = f"{order['qty']:,.0f}"
+                row += f'<td style="text-align: center; color: #1e40af;">{date_str}</td>'
+                row += f'<td style="text-align: right; font-weight: 600;">{qty_str}</td>'
+            else:
+                row += '<td></td><td></td>'
+        
+        # Prediction columns
+        avg_days = f"{sku_data['avg_days']:.0f}" if sku_data['avg_days'] else "—"
+        pred_date = sku_data['predicted_next'].strftime('%Y-%m-%d') if sku_data['predicted_next'] else "—"
+        
+        row += f"""
+            <td style="text-align: center;">{avg_days}</td>
+            <td style="text-align: center;">{pred_date}</td>
+            <td style="{status_style}">{status_text}</td>
+        </tr>
+        """
+        data_rows += row
+    
+    # Summary stats
+    total_skus = len(sku_histories)
+    repeat_skus = sum(1 for s in sku_histories if s['num_orders'] >= 2)
+    total_qty = sum(s['total_qty'] for s in sku_histories)
+    overdue_count = sum(1 for s in sku_histories if s['days_until'] is not None and s['days_until'] < 0)
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>SKU Order History - {customer_name}</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+            
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            
+            body {{
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: white;
+                color: #1e293b;
+                line-height: 1.4;
+                padding: 20px;
+                font-size: 11px;
+            }}
+            
+            .header {{
+                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+                color: white;
+                padding: 20px 30px;
+                border-radius: 12px;
+                margin-bottom: 20px;
+            }}
+            
+            .header h1 {{ font-size: 1.5rem; margin-bottom: 5px; }}
+            .header .subtitle {{ font-size: 0.9rem; opacity: 0.9; }}
+            
+            .summary {{
+                display: flex;
+                gap: 15px;
+                margin-bottom: 20px;
+            }}
+            
+            .summary-card {{
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                padding: 12px 20px;
+                text-align: center;
+                flex: 1;
+            }}
+            
+            .summary-value {{ font-size: 1.5rem; font-weight: 700; color: #1e40af; }}
+            .summary-label {{ font-size: 0.7rem; color: #64748b; text-transform: uppercase; }}
+            
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 10px;
+            }}
+            
+            th {{
+                background: #1e40af;
+                color: white;
+                padding: 8px 6px;
+                text-align: left;
+                font-weight: 600;
+                font-size: 9px;
+                white-space: nowrap;
+            }}
+            
+            td {{
+                padding: 6px;
+                border-bottom: 1px solid #e2e8f0;
+                vertical-align: middle;
+            }}
+            
+            tr:nth-child(even) {{ background: #f8fafc; }}
+            tr:hover {{ background: #f1f5f9; }}
+            
+            .footer {{
+                margin-top: 20px;
+                padding-top: 15px;
+                border-top: 1px solid #e2e8f0;
+                text-align: center;
+                color: #64748b;
+                font-size: 0.8rem;
+            }}
+            
+            @media print {{
+                body {{ padding: 10px; }}
+                .header {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+                th {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+                table {{ font-size: 8px; }}
+            }}
+            
+            @page {{
+                size: landscape;
+                margin: 0.5in;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>📦 SKU Order History Report</h1>
+            <div class="subtitle">{customer_name} &nbsp;|&nbsp; {date_label} &nbsp;|&nbsp; Generated: {generated_date}</div>
+        </div>
+        
+        <div class="summary">
+            <div class="summary-card">
+                <div class="summary-value">{total_skus}</div>
+                <div class="summary-label">Total SKUs</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{repeat_skus}</div>
+                <div class="summary-label">Repeat SKUs</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{total_qty:,.0f}</div>
+                <div class="summary-label">Total Units</div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{overdue_count}</div>
+                <div class="summary-label">Overdue</div>
+            </div>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>{header_cols}</tr>
+            </thead>
+            <tbody>
+                {data_rows}
+            </tbody>
+        </table>
+        
+        <div class="footer">
+            <p>Prepared by Calyx Containers &nbsp;|&nbsp; {generated_date}</p>
+            <p style="font-size: 0.7rem; margin-top: 5px;">Predictions based on historical ordering patterns. Print in landscape mode for best results.</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 
 
 def generate_sku_order_history_html(customer_name, sku_histories, sku_display_names):
@@ -8076,6 +8521,23 @@ def render_qbr_generator_content():
                         (filtered_line_items_df['Correct Customer'] == customer_name) &
                         (filtered_line_items_df['Rep Master'] == selected_rep)
                     ].copy()
+                
+                # Exclude Ecommerce pipeline orders for enterprise accounts
+                # These are often misattributed orders from different companies
+                if not customer_line_items.empty:
+                    pipeline_col = None
+                    for col_name in ['Pipeline', 'pipeline', 'Sales Channel', 'Channel']:
+                        if col_name in customer_line_items.columns:
+                            pipeline_col = col_name
+                            break
+                    
+                    if pipeline_col:
+                        ecom_patterns = ['ecom', 'e-com', 'ecommerce', 'e-commerce']
+                        customer_line_items['_pl'] = customer_line_items[pipeline_col].astype(str).str.lower().str.strip()
+                        for pattern in ecom_patterns:
+                            customer_line_items = customer_line_items[~customer_line_items['_pl'].str.contains(pattern, na=False)]
+                        if '_pl' in customer_line_items.columns:
+                            customer_line_items = customer_line_items.drop(columns=['_pl'])
             else:
                 customer_line_items = pd.DataFrame()
             
