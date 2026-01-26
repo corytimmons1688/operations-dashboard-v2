@@ -6903,6 +6903,17 @@ def render_sku_order_history_tool():
             predicted_next = last_order + timedelta(days=avg_days)
             days_until = (predicted_next - pd.Timestamp.now()).days
         
+        # Collect all invoice numbers for this SKU
+        all_invoices = [o['doc'] for o in orders if o['doc'] and str(o['doc']).strip()]
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_invoices = []
+        for inv in all_invoices:
+            inv_str = str(inv).strip()
+            if inv_str and inv_str not in seen:
+                seen.add(inv_str)
+                unique_invoices.append(inv_str)
+        
         sku_histories.append({
             'sku': sku,
             'display_name': display_name,
@@ -6913,7 +6924,8 @@ def render_sku_order_history_tool():
             'avg_days': avg_days,
             'predicted_next': predicted_next,
             'days_until': days_until,
-            'customers': sku_customers
+            'customers': sku_customers,
+            'invoices': unique_invoices
         })
     
     # Sort by number of orders (most active SKUs first)
@@ -7158,14 +7170,14 @@ def generate_sku_order_history_xlsx(customer_name, sku_histories, date_label):
     max_orders = max(len(s['orders']) for s in sku_histories) if sku_histories else 1
     
     # Title row
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4 + max_orders * 2)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=5 + max_orders * 2)
     title_cell = ws.cell(row=1, column=1, value=f"SKU Order History - {customer_name}")
     title_cell.font = Font(bold=True, size=14, color="1e40af")
     title_cell.alignment = Alignment(horizontal='left', vertical='center')
     ws.row_dimensions[1].height = 25
     
     # Subtitle row
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4 + max_orders * 2)
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=5 + max_orders * 2)
     subtitle_cell = ws.cell(row=2, column=1, value=f"Period: {date_label} | Generated: {datetime.now().strftime('%B %d, %Y')}")
     subtitle_cell.font = Font(size=10, color="64748b")
     subtitle_cell.alignment = Alignment(horizontal='left', vertical='center')
@@ -7173,7 +7185,7 @@ def generate_sku_order_history_xlsx(customer_name, sku_histories, date_label):
     
     # Header row
     header_row = 4
-    headers = ['SKU', 'Description', 'Total Orders', 'Total Qty']
+    headers = ['SKU', 'Description', 'Invoices', 'Total Orders', 'Total Qty']
     
     # Add order columns dynamically
     ordinal_names = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth']
@@ -7209,6 +7221,14 @@ def generate_sku_order_history_xlsx(customer_name, sku_histories, date_label):
         # Description
         cell = ws.cell(row=row_idx, column=col, value=sku_data['display_name'] or '')
         cell.font = data_font
+        cell.alignment = left_align
+        cell.border = border
+        col += 1
+        
+        # Invoices (comma-separated list)
+        invoices_str = ', '.join(sku_data.get('invoices', []))
+        cell = ws.cell(row=row_idx, column=col, value=invoices_str)
+        cell.font = Font(size=9, color="64748b")
         cell.alignment = left_align
         cell.border = border
         col += 1
@@ -7305,11 +7325,12 @@ def generate_sku_order_history_xlsx(customer_name, sku_histories, date_label):
     # Auto-adjust column widths
     ws.column_dimensions['A'].width = 22  # SKU
     ws.column_dimensions['B'].width = 45  # Description
-    ws.column_dimensions['C'].width = 12  # Total Orders
-    ws.column_dimensions['D'].width = 12  # Total Qty
+    ws.column_dimensions['C'].width = 35  # Invoices
+    ws.column_dimensions['D'].width = 12  # Total Orders
+    ws.column_dimensions['E'].width = 12  # Total Qty
     
-    # Order columns
-    col_idx = 5
+    # Order columns start at F (index 6)
+    col_idx = 6
     for i in range(max_orders):
         ws.column_dimensions[get_column_letter(col_idx)].width = 14  # Date
         ws.column_dimensions[get_column_letter(col_idx + 1)].width = 12  # Qty
@@ -7340,7 +7361,7 @@ def generate_sku_order_history_html_printable(customer_name, sku_histories, date
     ordinal_names = ['First', 'Second', 'Third', 'Fourth', 'Fifth', 'Sixth', 'Seventh', 'Eighth', 'Ninth', 'Tenth']
     
     # Build header columns
-    header_cols = '<th>SKU</th><th>Description</th><th>Orders</th><th>Total Qty</th>'
+    header_cols = '<th>SKU</th><th>Description</th><th>Invoices</th><th>Orders</th><th>Total Qty</th>'
     for i in range(max_orders):
         ordinal = ordinal_names[i] if i < len(ordinal_names) else f"Order {i+1}"
         header_cols += f'<th>{ordinal} Date</th><th>Qty</th>'
@@ -7369,10 +7390,14 @@ def generate_sku_order_history_html_printable(customer_name, sku_histories, date
             status_text = "—"
             status_style = "color: #94a3b8;"
         
+        # Format invoices list
+        invoices_str = ', '.join(sku_data.get('invoices', []))
+        
         row = f"""
         <tr>
             <td style="font-family: monospace; font-weight: 600; white-space: nowrap;">{sku_data['sku']}</td>
             <td style="font-size: 0.85rem;">{sku_data['display_name'] or ''}</td>
+            <td style="font-size: 0.75rem; color: #64748b; max-width: 200px; word-wrap: break-word;">{invoices_str}</td>
             <td style="text-align: center;">{sku_data['num_orders']}</td>
             <td style="text-align: right; font-weight: 600;">{sku_data['total_qty']:,.0f}</td>
         """
