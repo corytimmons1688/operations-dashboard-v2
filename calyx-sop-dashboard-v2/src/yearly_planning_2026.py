@@ -9148,12 +9148,23 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     else:
         commit_qty = expect_qty = bestcase_qty = opportunity_qty = 0
     
+    # Customer breakdown for pipeline
+    pipeline_by_customer = {}
+    customer_col = None
+    for col in ['Company Name', 'Customer', 'Account Name']:
+        if col in product_data.columns:
+            customer_col = col
+            break
+    if customer_col and 'Quantity' in product_data.columns:
+        pipeline_by_customer = product_data.groupby(customer_col)['Quantity'].sum().sort_values(ascending=False).head(15).to_dict()
+    
     # =========================================================================
     # PENDING ORDERS METRICS (Actualized demand from NetSuite Sales Orders)
     # =========================================================================
     pending_total_qty = 0
     pending_total_value = 0
     pending_by_category = {}
+    pending_by_customer = {}
     
     if not pending_orders_df.empty:
         if 'Qty Remaining' in pending_orders_df.columns:
@@ -9168,18 +9179,44 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             qty_col = 'Qty Remaining' if 'Qty Remaining' in pending_orders_df.columns else 'Quantity Ordered'
             if qty_col in pending_orders_df.columns:
                 pending_by_category = pending_orders_df.groupby('Product Category')[qty_col].sum().to_dict()
+        
+        # Build customer breakdown for pending orders
+        qty_col = 'Qty Remaining' if 'Qty Remaining' in pending_orders_df.columns else 'Quantity Ordered'
+        customer_col = None
+        for col in ['Customer Companyname', 'Correct Customer', 'Company Name']:
+            if col in pending_orders_df.columns:
+                customer_col = col
+                break
+        if customer_col and qty_col in pending_orders_df.columns:
+            pending_by_customer = pending_orders_df.groupby(customer_col)[qty_col].sum().sort_values(ascending=False).head(15).to_dict()
     
     # =========================================================================
     # HISTORICAL METRICS (YTD Actuals from Invoice Line Items)
     # Filter to current year for YTD display
+    # Apply concentrate base-only filter to match dashboard calculations
     # =========================================================================
     historical_total_qty = 0
     historical_total_revenue = 0
     historical_by_category = {}
     
+    # Customer breakdowns for each signal
+    invoiced_by_customer = {}
+    
     if not historical_df.empty and 'Date' in historical_df.columns:
         # Filter to current year for YTD metrics
         ytd_df = historical_df[historical_df['Date'].dt.year == current_year].copy()
+        
+        # Apply concentrate base-only filter to match dashboard
+        # For Concentrates category, only count base SKUs (not lids/labels)
+        if not ytd_df.empty and 'Product Category' in ytd_df.columns:
+            is_concentrate = ytd_df['Product Category'] == 'Concentrates'
+            is_base = pd.Series(False, index=ytd_df.index)
+            if 'Product Subcategory' in ytd_df.columns:
+                is_base = ytd_df['Product Subcategory'].str.contains('Base', case=False, na=False)
+            elif 'Item' in ytd_df.columns:
+                is_base = ytd_df['Item'].str.contains(r'GB-\d+ML', case=False, na=False, regex=True)
+            # Keep: all non-concentrates + concentrate bases only
+            ytd_df = ytd_df[~is_concentrate | (is_concentrate & is_base)]
         
         if not ytd_df.empty:
             if 'Quantity' in ytd_df.columns:
@@ -9190,6 +9227,15 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             if 'Product Category' in ytd_df.columns:
                 if 'Quantity' in ytd_df.columns:
                     historical_by_category = ytd_df.groupby('Product Category')['Quantity'].sum().to_dict()
+            
+            # Build customer breakdown for invoiced
+            customer_col = None
+            for col in ['Correct Customer', 'Customer Companyname', 'Company Name']:
+                if col in ytd_df.columns:
+                    customer_col = col
+                    break
+            if customer_col and 'Quantity' in ytd_df.columns:
+                invoiced_by_customer = ytd_df.groupby(customer_col)['Quantity'].sum().sort_values(ascending=False).head(15).to_dict()
     
     # =========================================================================
     # 2025 HISTORICAL DEMAND (for validation)
@@ -9381,6 +9427,42 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
                     <td style="font-weight: 600; padding: 10px; font-family: monospace;">{row['SKU']}</td>
                     <td style="text-align: right; padding: 10px; color: #f59e0b; font-weight: 600;">{row['Quantity']:,.0f}</td>
                 </tr>"""
+    
+    # =========================================================================
+    # CUSTOMER BREAKDOWN TABLES
+    # =========================================================================
+    # Pipeline customers
+    pipeline_customer_rows = ""
+    for customer, qty in pipeline_by_customer.items():
+        if customer and str(customer).strip() and str(customer).lower() != 'nan':
+            cust_display = str(customer)[:35] + '...' if len(str(customer)) > 35 else str(customer)
+            pipeline_customer_rows += f"""
+            <tr>
+                <td style="font-weight: 500; padding: 10px;">{cust_display}</td>
+                <td style="text-align: right; padding: 10px; color: #3b82f6; font-weight: 600;">{qty:,.0f}</td>
+            </tr>"""
+    
+    # Pending orders customers
+    pending_customer_rows = ""
+    for customer, qty in pending_by_customer.items():
+        if customer and str(customer).strip() and str(customer).lower() != 'nan':
+            cust_display = str(customer)[:35] + '...' if len(str(customer)) > 35 else str(customer)
+            pending_customer_rows += f"""
+            <tr>
+                <td style="font-weight: 500; padding: 10px;">{cust_display}</td>
+                <td style="text-align: right; padding: 10px; color: #f59e0b; font-weight: 600;">{qty:,.0f}</td>
+            </tr>"""
+    
+    # Invoiced YTD customers
+    invoiced_customer_rows = ""
+    for customer, qty in invoiced_by_customer.items():
+        if customer and str(customer).strip() and str(customer).lower() != 'nan':
+            cust_display = str(customer)[:35] + '...' if len(str(customer)) > 35 else str(customer)
+            invoiced_customer_rows += f"""
+            <tr>
+                <td style="font-weight: 500; padding: 10px;">{cust_display}</td>
+                <td style="text-align: right; padding: 10px; color: #10b981; font-weight: 600;">{qty:,.0f}</td>
+            </tr>"""
     
     # =========================================================================
     # MONTHLY FORECAST BY QUARTER (2026)
@@ -9974,6 +10056,79 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
             </table>
         </div>
         ''' if pending_sku_rows else ''}
+        
+        <!-- CUSTOMER BREAKDOWNS SECTION -->
+        <div class="section" style="page-break-before: always;">
+            <div class="section-header">
+                <div class="section-icon" style="background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);">👥</div>
+                <div>
+                    <div class="section-title">Customer Breakdowns</div>
+                    <div class="section-subtitle">Top customers by Pipeline, Pending Orders, and YTD Invoiced</div>
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 25px;">
+                <!-- Pipeline by Customer -->
+                <div style="background: #f8fafc; border-radius: 12px; padding: 20px; border-top: 4px solid #3b82f6;">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: #3b82f6; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px;">
+                        📈 Pipeline
+                    </div>
+                    {f'''
+                    <table style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 8px; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0;">Customer</th>
+                                <th style="text-align: right; padding: 8px; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0;">Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pipeline_customer_rows}
+                        </tbody>
+                    </table>
+                    ''' if pipeline_customer_rows else '<div style="color: #94a3b8; font-size: 0.85rem; text-align: center; padding: 20px;">No customer data available</div>'}
+                </div>
+                
+                <!-- Pending Orders by Customer -->
+                <div style="background: #f8fafc; border-radius: 12px; padding: 20px; border-top: 4px solid #f59e0b;">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: #f59e0b; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px;">
+                        📦 Pending Orders
+                    </div>
+                    {f'''
+                    <table style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 8px; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0;">Customer</th>
+                                <th style="text-align: right; padding: 8px; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0;">Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {pending_customer_rows}
+                        </tbody>
+                    </table>
+                    ''' if pending_customer_rows else '<div style="color: #94a3b8; font-size: 0.85rem; text-align: center; padding: 20px;">No pending orders</div>'}
+                </div>
+                
+                <!-- Invoiced YTD by Customer -->
+                <div style="background: #f8fafc; border-radius: 12px; padding: 20px; border-top: 4px solid #10b981;">
+                    <div style="font-size: 0.85rem; font-weight: 700; color: #10b981; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px;">
+                        ✅ YTD Invoiced
+                    </div>
+                    {f'''
+                    <table style="width: 100%;">
+                        <thead>
+                            <tr>
+                                <th style="text-align: left; padding: 8px; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0;">Customer</th>
+                                <th style="text-align: right; padding: 8px; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0;">Qty</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {invoiced_customer_rows}
+                        </tbody>
+                    </table>
+                    ''' if invoiced_customer_rows else '<div style="color: #94a3b8; font-size: 0.85rem; text-align: center; padding: 20px;">No invoiced data</div>'}
+                </div>
+            </div>
+        </div>
         
         <!-- FOOTER -->
         <div class="footer">
