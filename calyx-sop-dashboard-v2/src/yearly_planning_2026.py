@@ -489,9 +489,18 @@ def generate_qbr_html(customer_name, rep_name, customer_orders, customer_invoice
                     sku_orders = analysis_df[analysis_df[item_col] == sku].copy()
                     sku_orders = sku_orders.sort_values('Date')
                     
-                    # Get description from Raw_Items lookup
+                    # Get description from Raw_Items lookup, fallback to Item Description from line items
                     sku_str = str(sku).strip()
                     description = sku_display_names.get(sku_str, '')
+                    
+                    # If no description from Raw_Items lookup, try Item Description from line items
+                    if not description and 'Item Description' in sku_orders.columns:
+                        item_descs = sku_orders['Item Description'].dropna()
+                        if not item_descs.empty:
+                            item_desc = str(item_descs.iloc[0]).strip()
+                            if item_desc and item_desc.lower() != 'nan':
+                                description = item_desc
+                    
                     if description:
                         description = description[:40] + '...' if len(description) > 40 else description
                     
@@ -5996,9 +6005,18 @@ def render_sku_reorder_analysis_section(customer_line_items, customer_name):
         sku_orders = analysis_df[analysis_df[item_col] == sku].copy()
         sku_orders = sku_orders.sort_values('Date')
         
-        # Get description from Raw_Items lookup
+        # Get description from Raw_Items lookup, fallback to Item Description from line items
         sku_str = str(sku).strip()
         description = sku_display_names.get(sku_str, '')
+        
+        # If no description from Raw_Items lookup, try Item Description from line items
+        if not description and 'Item Description' in sku_orders.columns:
+            item_descs = sku_orders['Item Description'].dropna()
+            if not item_descs.empty:
+                item_desc = str(item_descs.iloc[0]).strip()
+                if item_desc and item_desc.lower() != 'nan':
+                    description = item_desc
+        
         if description:
             description = description[:50] + '...' if len(description) > 50 else description
         
@@ -6854,9 +6872,17 @@ def render_sku_order_history_tool():
         sku_df = customer_df[customer_df[item_col] == sku].copy()
         sku_df = sku_df.sort_values('Date')
         
-        # Get display name from lookup
+        # Get display name from lookup, fallback to Item Description
         sku_str = str(sku).strip()
         display_name = sku_display_names.get(sku_str, '')
+        
+        # If no display name from lookup, try Item Description from line items
+        if not display_name and 'Item Description' in sku_df.columns:
+            item_descs = sku_df['Item Description'].dropna()
+            if not item_descs.empty:
+                item_desc = str(item_descs.iloc[0]).strip()
+                if item_desc and item_desc.lower() != 'nan':
+                    display_name = item_desc
         
         # Get which customers ordered this SKU
         sku_customers = sku_df[customer_col].unique().tolist()
