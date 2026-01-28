@@ -3633,23 +3633,32 @@ def clean_numeric(value):
 @st.cache_data
 def load_sku_display_names(version=CACHE_VERSION):
     """
-    Load SKU → Display Name mapping from Raw_Items sheet.
+    Load SKU → Description mapping from Raw_Items sheet.
     Used for enriching SKU data with human-readable descriptions.
+    Priority: Column C "Description", fallback to Column B "Display Name"
     """
     raw_items_df = load_google_sheets_data("Raw_Items", "A:C", version=version, silent=True)
     
     sku_lookup = {}
     if not raw_items_df.empty:
-        # Expected columns: SKU, Display Name, Description
+        # Expected columns: A=SKU, B=Display Name, C=Description
         sku_col = 'SKU' if 'SKU' in raw_items_df.columns else None
+        desc_col = 'Description' if 'Description' in raw_items_df.columns else None
         name_col = 'Display Name' if 'Display Name' in raw_items_df.columns else None
         
-        if sku_col and name_col:
+        if sku_col and (desc_col or name_col):
             for _, row in raw_items_df.iterrows():
                 sku = str(row[sku_col]).strip() if pd.notna(row[sku_col]) else ''
-                display_name = str(row[name_col]).strip() if pd.notna(row[name_col]) else ''
-                if sku and display_name and display_name.lower() != 'nan':
-                    sku_lookup[sku] = display_name
+                
+                # Prefer Description (Column C), fallback to Display Name (Column B)
+                description = ''
+                if desc_col and pd.notna(row[desc_col]):
+                    description = str(row[desc_col]).strip()
+                if (not description or description.lower() == 'nan') and name_col and pd.notna(row[name_col]):
+                    description = str(row[name_col]).strip()
+                
+                if sku and description and description.lower() != 'nan':
+                    sku_lookup[sku] = description
     
     return sku_lookup
 
