@@ -3663,6 +3663,85 @@ def load_sku_display_names(version=CACHE_VERSION):
     return sku_lookup
 
 
+@st.cache_data
+def load_raw_inventory(version=CACHE_VERSION):
+    """
+    Load inventory data from Raw_Inventory sheet.
+    Returns a DataFrame with SKU-level inventory quantities.
+    Expected columns: Item (SKU), Location, Quantity Available, etc.
+    """
+    raw_inventory_df = load_google_sheets_data("Raw_Inventory", "A:Z", version=version, silent=True)
+    
+    if raw_inventory_df.empty:
+        return pd.DataFrame()
+    
+    # Clean numeric columns
+    numeric_cols = ['Quantity Available', 'Quantity On Hand', 'Quantity Committed', 'Quantity On Order']
+    for col in numeric_cols:
+        if col in raw_inventory_df.columns:
+            raw_inventory_df[col] = raw_inventory_df[col].apply(clean_numeric)
+    
+    # Normalize Item/SKU column
+    item_col = None
+    for col in ['Item', 'SKU', 'Item Name']:
+        if col in raw_inventory_df.columns:
+            item_col = col
+            break
+    
+    if item_col and item_col != 'SKU':
+        raw_inventory_df['SKU'] = raw_inventory_df[item_col]
+    
+    return raw_inventory_df
+
+
+def get_inventory_for_skus(inventory_df, target_skus):
+    """
+    Get inventory quantities for a list of SKUs.
+    Returns dict: SKU -> {'available': qty, 'on_hand': qty, 'on_order': qty, 'location': location}
+    """
+    inventory_by_sku = {}
+    
+    if inventory_df.empty or 'SKU' not in inventory_df.columns:
+        return inventory_by_sku
+    
+    # Normalize target SKUs for matching
+    target_skus_upper = [sku.upper() for sku in target_skus]
+    
+    for sku in target_skus:
+        sku_upper = sku.upper()
+        # Find matching rows (could be multiple locations)
+        matches = inventory_df[inventory_df['SKU'].astype(str).str.upper().str.strip() == sku_upper]
+        
+        if not matches.empty:
+            # Sum across all locations
+            available = matches['Quantity Available'].sum() if 'Quantity Available' in matches.columns else 0
+            on_hand = matches['Quantity On Hand'].sum() if 'Quantity On Hand' in matches.columns else 0
+            on_order = matches['Quantity On Order'].sum() if 'Quantity On Order' in matches.columns else 0
+            
+            # Get locations as list
+            locations = []
+            if 'Location' in matches.columns:
+                locations = matches['Location'].dropna().unique().tolist()
+            
+            inventory_by_sku[sku] = {
+                'available': available,
+                'on_hand': on_hand,
+                'on_order': on_order,
+                'locations': locations,
+                'total_qty': available + on_order
+            }
+        else:
+            inventory_by_sku[sku] = {
+                'available': 0,
+                'on_hand': 0,
+                'on_order': 0,
+                'locations': [],
+                'total_qty': 0
+            }
+    
+    return inventory_by_sku
+
+
 def load_qbr_data():
     """Load all data needed for QBR generation"""
     
@@ -10200,6 +10279,693 @@ def create_product_forecast_html(product_data, date_label="All Time", rep_name="
     return html
 
 
+# ============================================================================
+# CALYX CURE SKU FORECAST MODULE
+# ============================================================================
+
+CALYX_CURE_CONFIG = {
+    # Target SKUs for Calyx Cure (ordered by size: 1/2 LB → 10 LB)
+    'TARGET_SKUS': [
+        'CC-HFP-102-11',   # 1/2 LB
+        'CC-ONP-102-11',   # 1 LB White
+        'CC-ONP-103-10',   # 1 LB Dark
+        'CC-TWP-102-11',   # 2 LB
+        'CC-FVP-102-11',   # 5 LB White
+        'CC-FVP-104-11',   # 5 LB Green
+        'CC-TNP-102-11',   # 7 LB White
+        'CC-TNP-105-11',   # 7 LB Dark
+        'CC-TN2-103-14'    # 10 LB (Larger)
+    ],
+    
+    # SKU Descriptions
+    'SKU_NAMES': {
+        'CC-FVP-102-11': 'Calyx Cure 5 LB Calyx Branded-White Side Gusset',
+        'CC-FVP-104-11': 'Calyx Cure 5 LB Calyx Branded - Green Side Gusset',
+        'CC-HFP-102-11': 'Calyx Cure 1/2 LB Calyx Branded-White Side Gusset',
+        'CC-ONP-102-11': 'Calyx Cure 1 LB Calyx Branded-White Side Gusset',
+        'CC-ONP-103-10': 'Calyx Cure 1 LB Calyx Branded - Dark Stand up',
+        'CC-TN2-103-14': 'Calyx Cure Larger 10 LB Calyx Branded - Dark Side Gusset / Terminated Bottom',
+        'CC-TNP-102-11': 'Calyx Cure 7 LB Calyx Branded-White Side Gusset',
+        'CC-TNP-105-11': 'Calyx Cure 7 LB Calyx Branded - Dark v2 Side Gusset',
+        'CC-TWP-102-11': 'Calyx Cure 2 LB Calyx Branded-White Side Gusset'
+    },
+    
+    # Short display names for tables
+    'SKU_SHORT_NAMES': {
+        'CC-FVP-102-11': '5 LB White',
+        'CC-FVP-104-11': '5 LB Green',
+        'CC-HFP-102-11': '1/2 LB White',
+        'CC-ONP-102-11': '1 LB White',
+        'CC-ONP-103-10': '1 LB Dark',
+        'CC-TN2-103-14': '10 LB Dark (Larger)',
+        'CC-TNP-102-11': '7 LB White',
+        'CC-TNP-105-11': '7 LB Dark v2',
+        'CC-TWP-102-11': '2 LB White'
+    },
+    
+    # SKU Groupings for Health Summary (ordered by size)
+    'SKU_GROUPS': {
+        '1/2 LB': ['CC-HFP-102-11'],
+        '1 LB': ['CC-ONP-102-11', 'CC-ONP-103-10'],
+        '2 LB': ['CC-TWP-102-11'],
+        '5 LB': ['CC-FVP-102-11', 'CC-FVP-104-11'],
+        '7 LB': ['CC-TNP-102-11', 'CC-TNP-105-11'],
+        '10 LB': ['CC-TN2-103-14']
+    },
+    
+    # Valid Close Statuses for pipeline
+    'VALID_CLOSE_STATUSES': ['Opportunity', 'Best Case', 'Expect', 'Commit'],
+    
+    # Valid Order Statuses
+    'VALID_ORDER_STATUSES': ['Pending Approval', 'Pending Fulfillment'],
+    
+    # Date filter - deals from Dec 2025 onwards
+    'MIN_CLOSE_DATE': datetime(2025, 12, 1)
+}
+
+
+def filter_calyx_cure_skus(df, sku_column='SKU'):
+    """Filter dataframe to only include Calyx Cure SKUs."""
+    if df.empty or sku_column not in df.columns:
+        return pd.DataFrame()
+    
+    df = df.copy()
+    df['_sku_normalized'] = df[sku_column].astype(str).str.upper().str.strip()
+    
+    # Check for exact matches first
+    exact_matches = df[df['_sku_normalized'].isin(CALYX_CURE_CONFIG['TARGET_SKUS'])]
+    
+    if not exact_matches.empty:
+        return exact_matches.drop(columns=['_sku_normalized'])
+    
+    # Try partial matches
+    partial_matches = []
+    for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+        matches = df[df['_sku_normalized'].str.contains(sku, na=False)]
+        if not matches.empty:
+            partial_matches.append(matches)
+    
+    if partial_matches:
+        result = pd.concat(partial_matches, ignore_index=True).drop_duplicates()
+        return result.drop(columns=['_sku_normalized'])
+    
+    return pd.DataFrame()
+
+
+def identify_calyx_cure_sku(item_value):
+    """Identify which Calyx Cure SKU an item belongs to."""
+    if pd.isna(item_value):
+        return None
+    
+    item_str = str(item_value).upper().strip()
+    
+    for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+        if sku in item_str or item_str == sku:
+            return sku
+    
+    return None
+
+
+def calculate_cure_pipeline_metrics(deals_line_items_df):
+    """Calculate pipeline metrics from Deals Line Item data for Calyx Cure."""
+    metrics = {}
+    
+    # Initialize metrics for all target SKUs
+    for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+        metrics[sku] = {
+            'opportunity': {'qty': 0, 'deals': []},
+            'best_case': {'qty': 0, 'deals': []},
+            'expect': {'qty': 0, 'deals': []},
+            'commit': {'qty': 0, 'deals': []},
+            'total': 0
+        }
+    
+    if deals_line_items_df.empty:
+        return metrics
+    
+    # Filter to Calyx Cure SKUs
+    sku_col = 'SKU' if 'SKU' in deals_line_items_df.columns else 'Item'
+    cure_deals = filter_calyx_cure_skus(deals_line_items_df, sku_col)
+    
+    if cure_deals.empty:
+        return metrics
+    
+    # Add matched SKU column
+    cure_deals = cure_deals.copy()
+    cure_deals['Matched SKU'] = cure_deals[sku_col].apply(identify_calyx_cure_sku)
+    cure_deals = cure_deals[cure_deals['Matched SKU'].notna()]
+    
+    # Filter by date and close status
+    if 'Close Date' in cure_deals.columns:
+        cure_deals['Close Date'] = pd.to_datetime(cure_deals['Close Date'], errors='coerce')
+        cure_deals = cure_deals[cure_deals['Close Date'] >= CALYX_CURE_CONFIG['MIN_CLOSE_DATE']]
+    
+    if 'Close Status' in cure_deals.columns:
+        cure_deals = cure_deals[cure_deals['Close Status'].isin(CALYX_CURE_CONFIG['VALID_CLOSE_STATUSES'])]
+    
+    # Ensure Quantity column exists
+    qty_col = 'Quantity' if 'Quantity' in cure_deals.columns else 'Qty'
+    if qty_col not in cure_deals.columns:
+        return metrics
+    
+    # Calculate metrics per SKU
+    for _, row in cure_deals.iterrows():
+        sku = row['Matched SKU']
+        if sku not in metrics:
+            continue
+        
+        qty = float(row.get(qty_col, 0) or 0)
+        status = str(row.get('Close Status', '')).lower().replace(' ', '_')
+        
+        deal_info = {
+            'deal_name': row.get('Deal Name', ''),
+            'company': row.get('Company Name', ''),
+            'quantity': qty,
+            'close_date': row.get('Close Date'),
+            'deal_owner': row.get('Deal Owner', '')
+        }
+        
+        if status in metrics[sku]:
+            metrics[sku][status]['qty'] += qty
+            metrics[sku][status]['deals'].append(deal_info)
+        
+        metrics[sku]['total'] += qty
+    
+    return metrics
+
+
+def calculate_cure_order_metrics(sales_order_line_items_df):
+    """Calculate active order metrics from Sales Order Line Items for Calyx Cure."""
+    metrics = {}
+    
+    # Initialize metrics for all target SKUs
+    for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+        metrics[sku] = {
+            'pending_approval': {'qty': 0, 'amount': 0},
+            'pending_fulfillment': {'qty': 0, 'amount': 0},
+            'total_qty': 0,
+            'total_amount': 0
+        }
+    
+    if sales_order_line_items_df.empty:
+        return metrics
+    
+    # Filter to Calyx Cure SKUs
+    item_col = 'Item' if 'Item' in sales_order_line_items_df.columns else 'SKU'
+    cure_orders = filter_calyx_cure_skus(sales_order_line_items_df, item_col)
+    
+    if cure_orders.empty:
+        return metrics
+    
+    # Filter by status
+    if 'Status' in cure_orders.columns:
+        cure_orders = cure_orders[cure_orders['Status'].isin(CALYX_CURE_CONFIG['VALID_ORDER_STATUSES'])]
+    
+    # Add matched SKU column
+    cure_orders = cure_orders.copy()
+    cure_orders['Matched SKU'] = cure_orders[item_col].apply(identify_calyx_cure_sku)
+    cure_orders = cure_orders[cure_orders['Matched SKU'].notna()]
+    
+    # Calculate Qty Remaining
+    if 'Qty Remaining' not in cure_orders.columns:
+        qty_ordered = cure_orders.get('Quantity Ordered', cure_orders.get('Quantity', 0))
+        qty_fulfilled = cure_orders.get('Quantity Fulfilled', 0)
+        cure_orders['Qty Remaining'] = pd.to_numeric(qty_ordered, errors='coerce').fillna(0) - pd.to_numeric(qty_fulfilled, errors='coerce').fillna(0)
+    
+    # Calculate metrics per SKU
+    for _, row in cure_orders.iterrows():
+        sku = row['Matched SKU']
+        if sku not in metrics:
+            continue
+        
+        qty = float(row.get('Qty Remaining', 0) or 0)
+        amount = float(row.get('Amount', 0) or 0)
+        status = str(row.get('Status', '')).lower().replace(' ', '_')
+        
+        if status == 'pending_approval':
+            metrics[sku]['pending_approval']['qty'] += qty
+            metrics[sku]['pending_approval']['amount'] += amount
+        elif status == 'pending_fulfillment':
+            metrics[sku]['pending_fulfillment']['qty'] += qty
+            metrics[sku]['pending_fulfillment']['amount'] += amount
+        
+        metrics[sku]['total_qty'] += qty
+        metrics[sku]['total_amount'] += amount
+    
+    return metrics
+
+
+def calculate_cure_historical_demand(invoice_line_items_df, months=12):
+    """Calculate historical demand metrics from Invoice Line Items for Calyx Cure."""
+    metrics = {}
+    
+    # Initialize metrics for all target SKUs
+    for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+        metrics[sku] = {
+            'total_qty': 0,
+            'total_revenue': 0,
+            'monthly_avg': 0,
+            'order_count': 0
+        }
+    
+    if invoice_line_items_df.empty or 'Date' not in invoice_line_items_df.columns:
+        return metrics
+    
+    # Filter to Calyx Cure SKUs
+    item_col = 'Item' if 'Item' in invoice_line_items_df.columns else 'SKU'
+    cure_invoices = filter_calyx_cure_skus(invoice_line_items_df, item_col)
+    
+    if cure_invoices.empty:
+        return metrics
+    
+    # Filter to last N months
+    cure_invoices = cure_invoices.copy()
+    cure_invoices['Date'] = pd.to_datetime(cure_invoices['Date'], errors='coerce')
+    cutoff_date = datetime.now() - timedelta(days=months * 30)
+    cure_invoices = cure_invoices[cure_invoices['Date'] >= cutoff_date]
+    
+    # Add matched SKU column
+    cure_invoices['Matched SKU'] = cure_invoices[item_col].apply(identify_calyx_cure_sku)
+    cure_invoices = cure_invoices[cure_invoices['Matched SKU'].notna()]
+    
+    # Calculate metrics per SKU
+    for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+        sku_data = cure_invoices[cure_invoices['Matched SKU'] == sku]
+        
+        if not sku_data.empty:
+            total_qty = sku_data['Quantity'].sum() if 'Quantity' in sku_data.columns else 0
+            total_revenue = sku_data['Amount'].sum() if 'Amount' in sku_data.columns else 0
+            order_count = len(sku_data)
+            
+            metrics[sku] = {
+                'total_qty': total_qty,
+                'total_revenue': total_revenue,
+                'monthly_avg': total_qty / months,
+                'order_count': order_count
+            }
+    
+    return metrics
+
+
+def render_calyx_cure_forecast_section(deals_line_items_df, sales_order_line_items_df, invoice_line_items_df):
+    """Render the Calyx Cure SKU Forecast section with inventory data."""
+    
+    st.markdown("---")
+    st.markdown("""
+        <div style="
+            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            border-left: 4px solid #10b981;
+            margin: 1rem 0;
+        ">
+            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.3rem; border: none !important;">🧪 Calyx Cure SKU Forecast</h3>
+            <p style="color: #94a3b8; margin: 0.25rem 0 0 0; font-size: 0.85rem;">
+                Dedicated visibility into Calyx Cure inventory position and pipeline
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    show_cure_forecast = st.checkbox(
+        "Show Calyx Cure SKU Forecast",
+        value=False,
+        key="show_calyx_cure_forecast",
+        help="Display detailed SKU-level forecast for Calyx Cure products"
+    )
+    
+    if show_cure_forecast:
+        # Load Raw Inventory data
+        with st.spinner("Loading inventory data..."):
+            raw_inventory_df = load_raw_inventory()
+            inventory_by_sku = get_inventory_for_skus(raw_inventory_df, CALYX_CURE_CONFIG['TARGET_SKUS'])
+        
+        # Calculate all metrics
+        pipeline_metrics = calculate_cure_pipeline_metrics(deals_line_items_df)
+        active_order_metrics = calculate_cure_order_metrics(sales_order_line_items_df)
+        historical_metrics = calculate_cure_historical_demand(invoice_line_items_df)
+        
+        # Calculate totals
+        total_pipeline = sum(m['total'] for m in pipeline_metrics.values())
+        total_active = sum(m['total_qty'] for m in active_order_metrics.values())
+        total_commit = sum(m['commit']['qty'] for m in pipeline_metrics.values())
+        total_expect = sum(m['expect']['qty'] for m in pipeline_metrics.values())
+        total_bestcase = sum(m['best_case']['qty'] for m in pipeline_metrics.values())
+        total_opportunity = sum(m['opportunity']['qty'] for m in pipeline_metrics.values())
+        total_inventory = sum(inv.get('available', 0) for inv in inventory_by_sku.values())
+        total_on_order = sum(inv.get('on_order', 0) for inv in inventory_by_sku.values())
+        
+        # =========================================================================
+        # HEADER
+        # =========================================================================
+        st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #10b981 0%, #3b82f6 50%, #8b5cf6 100%);
+                padding: 1.5rem 2rem;
+                border-radius: 12px;
+                margin-bottom: 1rem;
+                text-align: center;
+            ">
+                <h1 style="color: white; margin: 0; font-size: 2rem; text-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+                    🧪 Calyx Cure SKU Forecast
+                </h1>
+                <p style="color: rgba(255,255,255,0.9); margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+                    Generated: {datetime.now().strftime('%B %d, %Y at %I:%M %p')}
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # =========================================================================
+        # EXECUTIVE SUMMARY CARDS
+        # =========================================================================
+        col1, col2, col3, col4, col5 = st.columns(5)
+        
+        with col1:
+            st.markdown(f"""
+                <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center;">
+                    <div style="font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">📦 Inventory</div>
+                    <div style="font-size: 1.8rem; font-weight: 700; color: #4ade80;">{total_inventory:,.0f}</div>
+                    <div style="font-size: 0.75rem; color: #94a3b8;">available + {total_on_order:,.0f} on order</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+                <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center;">
+                    <div style="font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">📊 Pipeline</div>
+                    <div style="font-size: 1.8rem; font-weight: 700; color: #60a5fa;">{total_pipeline:,.0f}</div>
+                    <div style="font-size: 0.75rem; color: #94a3b8;">bags in deals</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col3:
+            st.markdown(f"""
+                <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center;">
+                    <div style="font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">📋 Active Orders</div>
+                    <div style="font-size: 1.8rem; font-weight: 700; color: #fbbf24;">{total_active:,.0f}</div>
+                    <div style="font-size: 0.75rem; color: #94a3b8;">bags to fulfill</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col4:
+            st.markdown(f"""
+                <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center;">
+                    <div style="font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">✅ Firm</div>
+                    <div style="font-size: 1.8rem; font-weight: 700; color: #4ade80;">{total_commit + total_expect:,.0f}</div>
+                    <div style="font-size: 0.75rem; color: #94a3b8;">commit + expect</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        with col5:
+            st.markdown(f"""
+                <div style="background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center;">
+                    <div style="font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: 1px;">🎯 Upside</div>
+                    <div style="font-size: 1.8rem; font-weight: 700; color: #a78bfa;">{total_bestcase + total_opportunity:,.0f}</div>
+                    <div style="font-size: 0.75rem; color: #94a3b8;">best case + opp</div>
+                </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # =========================================================================
+        # 7 LB → 10 LB TRANSITION CALLOUT
+        # =========================================================================
+        st.markdown("""
+            <div style="
+                margin: 15px 0;
+                padding: 15px;
+                background: rgba(139, 92, 246, 0.1);
+                border-left: 4px solid #8b5cf6;
+                border-radius: 4px;
+            ">
+                <div style="font-size: 13px; font-weight: 600; color: #a78bfa; margin-bottom: 8px;">📦 7 LB → 10 LB Transition</div>
+                <div style="font-size: 12px; color: #cbd5e1; line-height: 1.7;">
+                    The <strong style="color: #f1f5f9;">Calyx Cure 7 LB</strong> pipeline is largely transitioning to the new <strong style="color: #f1f5f9;">10 LB (Larger)</strong> bag. 
+                    Customers expected a 10lb capacity but the original bag came in closer to 7lb. We're moving these accounts over to the actual 10lb SKU—so the 7 LB pipeline numbers effectively represent future 10 LB demand.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # =========================================================================
+        # INVENTORY & DEMAND TABLE
+        # =========================================================================
+        st.markdown("---")
+        st.markdown("""
+            <div style="background: #10b981; color: white; padding: 10px 15px; border-radius: 8px 8px 0 0; font-size: 14px; font-weight: 700;">
+                📦 Inventory vs Demand (Raw_Inventory + Pipeline + Orders)
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Build combined dataframe
+        combined_data = []
+        for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+            inv = inventory_by_sku.get(sku, {})
+            pipeline = pipeline_metrics.get(sku, {})
+            orders = active_order_metrics.get(sku, {})
+            historical = historical_metrics.get(sku, {})
+            
+            available = inv.get('available', 0)
+            on_order = inv.get('on_order', 0)
+            total_supply = available + on_order
+            
+            pipeline_total = pipeline.get('total', 0)
+            orders_total = orders.get('total_qty', 0)
+            firm_demand = pipeline.get('commit', {}).get('qty', 0) + pipeline.get('expect', {}).get('qty', 0) + orders_total
+            total_demand = pipeline_total + orders_total
+            
+            coverage = (total_supply / firm_demand * 100) if firm_demand > 0 else float('inf')
+            net_position = total_supply - firm_demand
+            
+            # Status indicator
+            if net_position > 0:
+                status = '🟢 OK'
+            elif net_position > -1000:
+                status = '🟡 Watch'
+            else:
+                status = '🔴 Low'
+            
+            combined_data.append({
+                'SKU': sku,
+                'Product': CALYX_CURE_CONFIG['SKU_SHORT_NAMES'].get(sku, sku),
+                'Available': available,
+                'On Order': on_order,
+                'Total Supply': total_supply,
+                'Active Orders': orders_total,
+                'Firm Pipeline': pipeline.get('commit', {}).get('qty', 0) + pipeline.get('expect', {}).get('qty', 0),
+                'Upside': pipeline.get('best_case', {}).get('qty', 0) + pipeline.get('opportunity', {}).get('qty', 0),
+                'Total Demand': total_demand,
+                'Net Position': net_position,
+                'Status': status
+            })
+        
+        combined_df = pd.DataFrame(combined_data)
+        
+        # Add totals row
+        totals_row = pd.DataFrame([{
+            'SKU': '',
+            'Product': 'TOTAL',
+            'Available': combined_df['Available'].sum(),
+            'On Order': combined_df['On Order'].sum(),
+            'Total Supply': combined_df['Total Supply'].sum(),
+            'Active Orders': combined_df['Active Orders'].sum(),
+            'Firm Pipeline': combined_df['Firm Pipeline'].sum(),
+            'Upside': combined_df['Upside'].sum(),
+            'Total Demand': combined_df['Total Demand'].sum(),
+            'Net Position': combined_df['Net Position'].sum(),
+            'Status': ''
+        }])
+        
+        display_combined = pd.concat([combined_df, totals_row], ignore_index=True)
+        
+        # Format for display
+        for col in ['Available', 'On Order', 'Total Supply', 'Active Orders', 'Firm Pipeline', 'Upside', 'Total Demand', 'Net Position']:
+            display_combined[col] = display_combined[col].apply(lambda x: f"{x:,.0f}")
+        
+        st.dataframe(
+            display_combined[['Product', 'Available', 'On Order', 'Total Supply', 'Active Orders', 'Firm Pipeline', 'Upside', 'Net Position', 'Status']],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # =========================================================================
+        # PIPELINE BY SKU TABLE
+        # =========================================================================
+        st.markdown("""
+            <div style="background: #3b82f6; color: white; padding: 10px 15px; border-radius: 8px 8px 0 0; font-size: 14px; font-weight: 700; margin-top: 20px;">
+                📊 Pipeline Forecast (HubSpot Deals Line Items)
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Build pipeline dataframe
+        pipeline_data = []
+        for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+            m = pipeline_metrics.get(sku, {})
+            pipeline_data.append({
+                'SKU': sku,
+                'Product': CALYX_CURE_CONFIG['SKU_SHORT_NAMES'].get(sku, sku),
+                'Opportunity': m.get('opportunity', {}).get('qty', 0),
+                'Best Case': m.get('best_case', {}).get('qty', 0),
+                'Expect': m.get('expect', {}).get('qty', 0),
+                'Commit': m.get('commit', {}).get('qty', 0),
+                'Total': m.get('total', 0)
+            })
+        
+        pipeline_df = pd.DataFrame(pipeline_data)
+        
+        # Add totals row
+        totals_row = pd.DataFrame([{
+            'SKU': '',
+            'Product': 'TOTAL',
+            'Opportunity': pipeline_df['Opportunity'].sum(),
+            'Best Case': pipeline_df['Best Case'].sum(),
+            'Expect': pipeline_df['Expect'].sum(),
+            'Commit': pipeline_df['Commit'].sum(),
+            'Total': pipeline_df['Total'].sum()
+        }])
+        
+        display_pipeline = pd.concat([pipeline_df, totals_row], ignore_index=True)
+        
+        # Format for display
+        for col in ['Opportunity', 'Best Case', 'Expect', 'Commit', 'Total']:
+            display_pipeline[col] = display_pipeline[col].apply(lambda x: f"{x:,.0f}")
+        
+        st.dataframe(
+            display_pipeline[['Product', 'Opportunity', 'Best Case', 'Expect', 'Commit', 'Total']],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # =========================================================================
+        # ACTIVE ORDERS TABLE
+        # =========================================================================
+        st.markdown("""
+            <div style="background: #f59e0b; color: white; padding: 10px 15px; border-radius: 8px 8px 0 0; font-size: 14px; font-weight: 700; margin-top: 20px;">
+                📋 Active Orders (NetSuite Sales Order Line Items)
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Build active orders dataframe
+        orders_data = []
+        for sku in CALYX_CURE_CONFIG['TARGET_SKUS']:
+            m = active_order_metrics.get(sku, {})
+            orders_data.append({
+                'SKU': sku,
+                'Product': CALYX_CURE_CONFIG['SKU_SHORT_NAMES'].get(sku, sku),
+                'Pend Approval': m.get('pending_approval', {}).get('qty', 0),
+                'Pend Fulfill': m.get('pending_fulfillment', {}).get('qty', 0),
+                'Total Qty': m.get('total_qty', 0),
+                'Total $': m.get('total_amount', 0)
+            })
+        
+        orders_df = pd.DataFrame(orders_data)
+        
+        # Add totals row
+        totals_row = pd.DataFrame([{
+            'SKU': '',
+            'Product': 'TOTAL',
+            'Pend Approval': orders_df['Pend Approval'].sum(),
+            'Pend Fulfill': orders_df['Pend Fulfill'].sum(),
+            'Total Qty': orders_df['Total Qty'].sum(),
+            'Total $': orders_df['Total $'].sum()
+        }])
+        
+        display_orders = pd.concat([orders_df, totals_row], ignore_index=True)
+        
+        # Format for display
+        for col in ['Pend Approval', 'Pend Fulfill', 'Total Qty']:
+            display_orders[col] = display_orders[col].apply(lambda x: f"{x:,.0f}")
+        display_orders['Total $'] = display_orders['Total $'].apply(lambda x: f"${x:,.0f}")
+        
+        st.dataframe(
+            display_orders[['Product', 'Pend Approval', 'Pend Fulfill', 'Total Qty', 'Total $']],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # =========================================================================
+        # SKU GROUP HEALTH CARDS
+        # =========================================================================
+        st.markdown("---")
+        st.markdown("### 📦 Demand by Size Group")
+        
+        # Calculate group totals
+        group_data = []
+        for group_name, skus in CALYX_CURE_CONFIG['SKU_GROUPS'].items():
+            group_pipeline = sum(pipeline_metrics.get(sku, {}).get('total', 0) for sku in skus)
+            group_active = sum(active_order_metrics.get(sku, {}).get('total_qty', 0) for sku in skus)
+            group_inventory = sum(inventory_by_sku.get(sku, {}).get('available', 0) for sku in skus)
+            group_firm = sum(
+                pipeline_metrics.get(sku, {}).get('commit', {}).get('qty', 0) +
+                pipeline_metrics.get(sku, {}).get('expect', {}).get('qty', 0)
+                for sku in skus
+            )
+            
+            group_data.append({
+                'group': group_name,
+                'pipeline': group_pipeline,
+                'active': group_active,
+                'inventory': group_inventory,
+                'firm': group_firm,
+                'total': group_pipeline + group_active
+            })
+        
+        # Display as cards
+        cols = st.columns(len(group_data))
+        colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4']
+        
+        for i, (col, data) in enumerate(zip(cols, group_data)):
+            color = colors[i % len(colors)]
+            with col:
+                st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, {color}20 0%, {color}10 100%);
+                        border: 2px solid {color};
+                        border-radius: 12px;
+                        padding: 15px;
+                        text-align: center;
+                    ">
+                        <div style="color: {color}; font-size: 0.9rem; font-weight: 700;">{data['group']} Bags</div>
+                        <div style="color: white; font-size: 1.5rem; font-weight: 700; margin: 8px 0;">
+                            {data['total']:,.0f}
+                        </div>
+                        <div style="color: #94a3b8; font-size: 0.75rem;">
+                            {data['inventory']:,.0f} inv | {data['active']:,.0f} active | {data['firm']:,.0f} firm
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+        
+        # =========================================================================
+        # DETAILED DEAL BREAKDOWN (Expander)
+        # =========================================================================
+        with st.expander("📋 View Full Pipeline Details"):
+            # Collect all deals from pipeline metrics
+            all_deals = []
+            for sku, metrics in pipeline_metrics.items():
+                for status_key in ['commit', 'expect', 'best_case', 'opportunity']:
+                    for deal in metrics.get(status_key, {}).get('deals', []):
+                        all_deals.append({
+                            'SKU': sku,
+                            'Product': CALYX_CURE_CONFIG['SKU_SHORT_NAMES'].get(sku, sku),
+                            'Company': deal.get('company', ''),
+                            'Quantity': deal.get('quantity', 0),
+                            'Status': status_key.replace('_', ' ').title(),
+                            'Close Date': deal.get('close_date'),
+                            'Rep': deal.get('deal_owner', '')
+                        })
+            
+            if all_deals:
+                deals_detail_df = pd.DataFrame(all_deals)
+                deals_detail_df = deals_detail_df.sort_values('Quantity', ascending=False)
+                deals_detail_df['Quantity'] = deals_detail_df['Quantity'].apply(lambda x: f"{x:,.0f}")
+                if 'Close Date' in deals_detail_df.columns:
+                    deals_detail_df['Close Date'] = pd.to_datetime(
+                        deals_detail_df['Close Date'], errors='coerce'
+                    ).dt.strftime('%Y-%m-%d').fillna('')
+                
+                st.dataframe(deals_detail_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No pipeline deals found for Calyx Cure SKUs.")
+
+
 def render_product_forecasting_tool():
     """Main render function for Product Forecasting Tool"""
     
@@ -10920,59 +11686,13 @@ def render_product_forecasting_tool():
             """, unsafe_allow_html=True)
     
     # =========================================================================
-    # CONCENTRATE SUPPLY PLANNING INPUTS
+    # CALYX CURE FORECAST SECTION
     # =========================================================================
-    st.markdown("---")
-    st.markdown("### 🚢 Concentrate Supply Planning")
-    st.caption("Enter current inventory status for concentrate supply calculations")
-    
-    col_inv1, col_inv2, col_inv3, col_inv4 = st.columns(4)
-    
-    with col_inv1:
-        conc_in_transit = st.number_input(
-            "📦 In Transit (units)",
-            min_value=0,
-            value=300000,
-            step=10000,
-            help="Concentrate units currently being shipped from international supplier"
-        )
-    
-    with col_inv2:
-        conc_seized = st.number_input(
-            "🚫 Seized/Lost (units)",
-            min_value=0,
-            value=400000,
-            step=10000,
-            help="Concentrate units seized at customs or otherwise unrecoverable"
-        )
-    
-    with col_inv3:
-        conc_on_hand = st.number_input(
-            "📍 On Hand (units)",
-            min_value=0,
-            value=0,
-            step=10000,
-            help="Concentrate units currently in warehouse"
-        )
-    
-    with col_inv4:
-        conc_lead_time = st.number_input(
-            "⏱️ Lead Time (weeks)",
-            min_value=1,
-            value=12,
-            step=1,
-            help="Typical lead time for new concentrate orders"
-        )
-    
-    # Build concentrate inventory dict
-    concentrate_inventory = {
-        'in_transit': conc_in_transit,
-        'seized': conc_seized,
-        'on_hand': conc_on_hand,
-        'lead_time_weeks': conc_lead_time,
-        'total_available': conc_in_transit + conc_on_hand,
-        'total_lost': conc_seized
-    }
+    render_calyx_cure_forecast_section(
+        deals_line_items_df,
+        sales_order_line_items_df,
+        invoice_line_items_df
+    )
     
     # =========================================================================
     # DOWNLOAD BUTTON
@@ -10989,7 +11709,6 @@ def render_product_forecasting_tool():
         pairing_info=pairing_info,
         pending_orders_df=pending_orders_df,
         historical_df=invoice_line_items_df,  # Full history for 2024/2025 validation
-        concentrate_inventory=concentrate_inventory,
         selected_categories=selected_categories  # Apply same category filter as dashboard
     )
     
