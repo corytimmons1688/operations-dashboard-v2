@@ -1076,6 +1076,12 @@ def load_all_data():
             if len(invoices_df.columns) > 24:
                 rename_dict[invoices_df.columns[24]] = 'Product Type'  # Column Y
             
+            # NEW: Map Shipping (Column Q - index 16) and Tax (Column R - index 17) for shipping toggle
+            if len(invoices_df.columns) > 16:
+                rename_dict[invoices_df.columns[16]] = 'Amount_Shipping'  # Column Q - Amount (Shipping)
+            if len(invoices_df.columns) > 17:
+                rename_dict[invoices_df.columns[17]] = 'Amount_Tax'  # Column R - Amount (Transaction Tax Total)
+            
             # Try to find HubSpot Pipeline and CSM columns
             for idx, col in enumerate(invoices_df.columns):
                 col_str = str(col).lower()
@@ -1127,6 +1133,20 @@ def load_all_data():
             invoices_df['Amount'] = invoices_df['Amount'].apply(clean_numeric)
             invoices_df['Date'] = pd.to_datetime(invoices_df['Date'], errors='coerce')
             
+            # NEW: Calculate Net_Amount (Amount without Shipping and Tax) for shipping toggle
+            if 'Amount_Shipping' in invoices_df.columns:
+                invoices_df['Amount_Shipping'] = invoices_df['Amount_Shipping'].apply(clean_numeric)
+            else:
+                invoices_df['Amount_Shipping'] = 0
+            
+            if 'Amount_Tax' in invoices_df.columns:
+                invoices_df['Amount_Tax'] = invoices_df['Amount_Tax'].apply(clean_numeric)
+            else:
+                invoices_df['Amount_Tax'] = 0
+            
+            # Net_Amount = Transaction Total - Shipping - Tax
+            invoices_df['Net_Amount'] = invoices_df['Amount'] - invoices_df['Amount_Shipping'] - invoices_df['Amount_Tax']
+            
             # Filter to Q1 2026 only (1/1/2026 - 3/31/2026)
             # This should match exactly what your boss filters in the sheet
             q1_start = pd.Timestamp('2026-01-01')
@@ -1158,26 +1178,41 @@ def load_all_data():
                 if before_dedupe != after_dedupe:
                     st.sidebar.warning(f"⚠️ Removed {before_dedupe - after_dedupe} duplicate invoices!")
             
-            # Calculate invoice totals by rep
+            # Calculate invoice totals by rep - store both with and without shipping
             invoice_totals = invoices_df.groupby('Sales Rep')['Amount'].sum().reset_index()
             invoice_totals.columns = ['Rep Name', 'Invoice Total']
+            
+            # Also calculate Net_Amount totals (without shipping/tax)
+            if 'Net_Amount' in invoices_df.columns:
+                invoice_totals_net = invoices_df.groupby('Sales Rep')['Net_Amount'].sum().reset_index()
+                invoice_totals_net.columns = ['Rep Name', 'Invoice Total Net']
+                invoice_totals = invoice_totals.merge(invoice_totals_net, on='Rep Name', how='left')
+                invoice_totals['Invoice Total Net'] = invoice_totals['Invoice Total Net'].fillna(0)
+            else:
+                invoice_totals['Invoice Total Net'] = invoice_totals['Invoice Total']
             
             dashboard_df['Rep Name'] = dashboard_df['Rep Name'].str.strip()
             
             dashboard_df = dashboard_df.merge(invoice_totals, on='Rep Name', how='left')
             dashboard_df['Invoice Total'] = dashboard_df['Invoice Total'].fillna(0)
+            dashboard_df['Invoice Total Net'] = dashboard_df['Invoice Total Net'].fillna(0)
             
+            # Store both values - NetSuite Orders will be the default (with shipping)
+            # NetSuite Orders Net will be without shipping
             dashboard_df['NetSuite Orders'] = dashboard_df['Invoice Total']
-            dashboard_df = dashboard_df.drop('Invoice Total', axis=1)
+            dashboard_df['NetSuite Orders Net'] = dashboard_df['Invoice Total Net']
+            dashboard_df = dashboard_df.drop(['Invoice Total', 'Invoice Total Net'], axis=1)
             
             # Add Shopify ECommerce to dashboard if it has invoices but isn't in dashboard yet
             if 'Shopify ECommerce' in invoice_totals['Rep Name'].values:
                 if 'Shopify ECommerce' not in dashboard_df['Rep Name'].values:
                     shopify_total = invoice_totals[invoice_totals['Rep Name'] == 'Shopify ECommerce']['Invoice Total'].iloc[0]
+                    shopify_total_net = invoice_totals[invoice_totals['Rep Name'] == 'Shopify ECommerce']['Invoice Total Net'].iloc[0] if 'Invoice Total Net' in invoice_totals.columns else shopify_total
                     new_shopify_row = pd.DataFrame([{
                         'Rep Name': 'Shopify ECommerce',
                         'Quota': 0,
-                        'NetSuite Orders': shopify_total
+                        'NetSuite Orders': shopify_total,
+                        'NetSuite Orders Net': shopify_total_net
                     }])
                     dashboard_df = pd.concat([dashboard_df, new_shopify_row], ignore_index=True)
     
@@ -1215,6 +1250,12 @@ def load_all_data():
             rename_dict[col_names[11]] = 'Customer Promise Date'  # Column L
         if len(col_names) > 12 and 'Projected Date' not in rename_dict.values():
             rename_dict[col_names[12]] = 'Projected Date'  # Column M
+        
+        # NEW: Map Shipping (Column U - index 20) and Tax (Column V - index 21) for shipping toggle
+        if len(col_names) > 20:
+            rename_dict[col_names[20]] = 'Amount_Shipping'  # Column U - Amount (Shipping)
+        if len(col_names) > 21:
+            rename_dict[col_names[21]] = 'Amount_Tax'  # Column V - Amount (Transaction Tax Total)
         
         # COLUMN POSITIONS - Updated after "Location (no hierarchy)" added at AC
         if len(col_names) > 28:
@@ -1288,6 +1329,21 @@ def load_all_data():
         
         if 'Amount' in sales_orders_df.columns:
             sales_orders_df['Amount'] = sales_orders_df['Amount'].apply(clean_numeric_so)
+        
+        # NEW: Calculate Net_Amount (Amount without Shipping and Tax) for shipping toggle
+        if 'Amount_Shipping' in sales_orders_df.columns:
+            sales_orders_df['Amount_Shipping'] = sales_orders_df['Amount_Shipping'].apply(clean_numeric_so)
+        else:
+            sales_orders_df['Amount_Shipping'] = 0
+        
+        if 'Amount_Tax' in sales_orders_df.columns:
+            sales_orders_df['Amount_Tax'] = sales_orders_df['Amount_Tax'].apply(clean_numeric_so)
+        else:
+            sales_orders_df['Amount_Tax'] = 0
+        
+        # Net_Amount = Transaction Total - Shipping - Tax
+        if 'Amount' in sales_orders_df.columns:
+            sales_orders_df['Net_Amount'] = sales_orders_df['Amount'] - sales_orders_df['Amount_Shipping'] - sales_orders_df['Amount_Tax']
         
         if 'Sales Rep' in sales_orders_df.columns:
             sales_orders_df['Sales Rep'] = sales_orders_df['Sales Rep'].astype(str).str.strip()
@@ -1799,7 +1855,12 @@ def display_invoices_drill_down(invoices_df, rep_name=None):
     Display invoices with drill-down capability, similar to sales orders
     """
     st.markdown("### 💰 Invoices Detail")
-    st.caption("Completed and billed orders from NetSuite")
+    
+    # Determine which amount column to use based on shipping toggle
+    include_shipping = st.session_state.get('include_shipping', True)
+    amount_col = 'Amount' if include_shipping else 'Net_Amount'
+    caption_suffix = "" if include_shipping else " (excluding shipping & tax)"
+    st.caption(f"Completed and billed orders from NetSuite{caption_suffix}")
     
     if invoices_df.empty:
         st.info("No invoice data available")
@@ -1815,9 +1876,13 @@ def display_invoices_drill_down(invoices_df, rep_name=None):
         st.info(f"No invoices found{' for ' + rep_name if rep_name else ''}")
         return
     
-    # Calculate totals
+    # Calculate totals using the appropriate column
     total_invoiced = 0
-    if 'Amount' in filtered_invoices.columns:
+    if amount_col in filtered_invoices.columns:
+        filtered_invoices['Amount_Numeric'] = pd.to_numeric(filtered_invoices[amount_col], errors='coerce')
+        total_invoiced = filtered_invoices['Amount_Numeric'].sum()
+    elif 'Amount' in filtered_invoices.columns:
+        # Fallback to Amount if Net_Amount doesn't exist
         filtered_invoices['Amount_Numeric'] = pd.to_numeric(filtered_invoices['Amount'], errors='coerce')
         total_invoiced = filtered_invoices['Amount_Numeric'].sum()
     
@@ -3330,9 +3395,19 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     pf_q2_spillover = pd.DataFrame()
     pa_q2_spillover = pd.DataFrame()
     
-    # Calculate amounts
+    # Calculate amounts - respects shipping toggle
+    # Determine which amount column to use based on shipping toggle
+    include_shipping = st.session_state.get('include_shipping', True)
+    amount_col = 'Amount' if include_shipping else 'Net_Amount'
+    
     def get_amount(df):
-        return df['Amount'].sum() if not df.empty and 'Amount' in df.columns else 0
+        # Try the preferred column first, fall back to Amount if not available
+        if not df.empty:
+            if amount_col in df.columns:
+                return df[amount_col].sum()
+            elif 'Amount' in df.columns:
+                return df['Amount'].sum()
+        return 0
     
     return {
         'pf_date_ext': pf_date_ext,
@@ -3369,7 +3444,17 @@ def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None
         return None
     
     quota = rep_info['Quota'].iloc[0]
-    orders = rep_info['NetSuite Orders'].iloc[0]
+    
+    # Determine which orders column to use based on shipping toggle
+    include_shipping = st.session_state.get('include_shipping', True)
+    if include_shipping:
+        orders = rep_info['NetSuite Orders'].iloc[0]
+    else:
+        # Use Net column if available, otherwise fall back to regular
+        if 'NetSuite Orders Net' in rep_info.columns:
+            orders = rep_info['NetSuite Orders Net'].iloc[0]
+        else:
+            orders = rep_info['NetSuite Orders'].iloc[0]
     
     # Filter deals for this rep - ALL Q1 2026 deals (regardless of spillover)
     # Handle empty deals_df gracefully (e.g., when Google Sheets returns 503)
@@ -4304,6 +4389,13 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     """Display the team-level dashboard"""
    
     st.title("🎯 Team Sales Dashboard - Q1 2026")
+    
+    # Show indicator for shipping mode
+    include_shipping = st.session_state.get('include_shipping', True)
+    if include_shipping:
+        st.caption("💰 Revenue figures include shipping & tax")
+    else:
+        st.caption("📦 Revenue figures exclude shipping & tax (product revenue only)")
    
     # Calculate basic metrics
     basic_metrics = calculate_team_metrics(deals_df, dashboard_df)
@@ -4325,15 +4417,27 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     team_pa_no_date = 0
     team_old_pa = 0
     
+    # Determine which amount column to use based on shipping toggle
+    include_shipping = st.session_state.get('include_shipping', True)
+    amount_col = 'Amount' if include_shipping else 'Net_Amount'
+    
     # FIX: Calculate team_invoiced directly from invoices_df to match Invoice Detail section
-    if not invoices_df.empty and 'Amount' in invoices_df.columns:
+    if not invoices_df.empty and amount_col in invoices_df.columns:
         # Filter out House reps if needed
         if 'Sales Rep' in invoices_df.columns:
             filtered_inv = invoices_df[~invoices_df['Sales Rep'].isin(excluded_reps)].copy()
         else:
             filtered_inv = invoices_df.copy()
         
-        # Calculate total invoiced amount
+        # Calculate total invoiced amount using the appropriate column
+        filtered_inv['Amount_Numeric'] = pd.to_numeric(filtered_inv[amount_col], errors='coerce')
+        team_invoiced = filtered_inv['Amount_Numeric'].sum()
+    elif not invoices_df.empty and 'Amount' in invoices_df.columns:
+        # Fallback to Amount if Net_Amount doesn't exist
+        if 'Sales Rep' in invoices_df.columns:
+            filtered_inv = invoices_df[~invoices_df['Sales Rep'].isin(excluded_reps)].copy()
+        else:
+            filtered_inv = invoices_df.copy()
         filtered_inv['Amount_Numeric'] = pd.to_numeric(filtered_inv['Amount'], errors='coerce')
         team_invoiced = filtered_inv['Amount_Numeric'].sum()
     else:
@@ -4688,6 +4792,13 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
     """Display individual rep dashboard with drill-down capability - REDESIGNED"""
     
     st.title(f"👤 {rep_name}'s Q1 2026 Forecast")
+    
+    # Show indicator for shipping mode
+    include_shipping = st.session_state.get('include_shipping', True)
+    if include_shipping:
+        st.caption("💰 Revenue figures include shipping & tax")
+    else:
+        st.caption("📦 Revenue figures exclude shipping & tax (product revenue only)")
     
     # DEBUG: Show rep name matching info
     with st.expander("🔧 Debug: Sales Order Rep Matching (for Xander)", expanded=False):
@@ -5101,6 +5212,20 @@ def main():
         }
         
         view_mode = view_mapping.get(view_mode, "Team Overview")
+        
+        st.markdown("---")
+        
+        # NEW: Include Shipping Toggle
+        # This controls whether revenue amounts include shipping & tax or just product revenue
+        include_shipping = st.toggle(
+            "💰 Include Shipping & Tax",
+            value=True,
+            key="include_shipping_toggle",
+            help="When ON: Shows total transaction amount (includes shipping & tax). When OFF: Shows product revenue only (excludes shipping & tax)."
+        )
+        
+        # Store in session state for use in display functions
+        st.session_state.include_shipping = include_shipping
         
         st.markdown("---")
         
