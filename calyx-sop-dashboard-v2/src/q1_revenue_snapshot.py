@@ -5133,10 +5133,15 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
 # CRO WEEKLY SCORECARD - Replicates Google Apps Script Email Report
 # ============================================================================
 
+# ============================================================================
+# CRO WEEKLY SCORECARD - Replicates Google Apps Script Email Report
+# ============================================================================
+
 def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     """
     Display CRO Weekly Scorecard - matches the Google Apps Script email report.
     Shows comprehensive forecast metrics for all reps with Face Value and Probability views.
+    Includes forecast inflation/plug support for Alex, House, and Shopify ECommerce.
     """
     
     # Configuration (matches Google Apps Script)
@@ -5189,16 +5194,86 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
                     quota = pd.to_numeric(row.get('Q1 2026 Quota', row.get('Quota', 0)), errors='coerce') or 0
                 quotas[rep_name] = quota
     
-    # --- LOAD FORECAST INFLATIONS FROM DASHBOARD INFO ---
-    inflations = {'alex': 0, 'house': 0, 'ecom': 0}
+    # --- LOAD FORECAST INFLATIONS ---
+    # Try to read from Dashboard Info or use sidebar inputs
+    # The Google Apps Script reads from cells H2, H3, H4
+    
+    # Initialize session state for inflations if not set
+    if 'cro_inflation_alex' not in st.session_state:
+        st.session_state.cro_inflation_alex = 0.0
+    if 'cro_inflation_house' not in st.session_state:
+        st.session_state.cro_inflation_house = 0.0
+    if 'cro_inflation_ecom' not in st.session_state:
+        st.session_state.cro_inflation_ecom = 0.0
+    
+    # Try to read inflations from Dashboard Info sheet
+    # Look for a column that might contain inflation data or specific row patterns
+    inflations_from_sheet = {'alex': 0, 'house': 0, 'ecom': 0}
+    
+    # Method 1: Try to find inflation values in Dashboard Info based on row labels
     if not dashboard_df.empty:
-        # H2 = Alex Gonzalez, H3 = House, H4 = Shopify ECommerce (column index 7)
         try:
-            # These are typically in specific cells - we'll read from the raw data
-            # For now, check if there's a column for inflation
-            pass  # Will implement if needed
+            # Check if there's a column with inflation data
+            for col in dashboard_df.columns:
+                if 'inflation' in str(col).lower() or 'plug' in str(col).lower() or 'adjustment' in str(col).lower():
+                    for _, row in dashboard_df.iterrows():
+                        rep = str(row.get('Rep Name', '')).lower()
+                        val = pd.to_numeric(row.get(col, 0), errors='coerce') or 0
+                        if 'alex' in rep:
+                            inflations_from_sheet['alex'] = val
+                        elif 'house' in rep:
+                            inflations_from_sheet['house'] = val
+                        elif 'shopify' in rep or 'ecom' in rep:
+                            inflations_from_sheet['ecom'] = val
         except:
             pass
+    
+    # Sidebar controls for inflations
+    with st.sidebar:
+        with st.expander("⚡ Forecast Adjustments", expanded=False):
+            st.caption("Add revenue not yet in HubSpot (matches Google Sheet H2-H4)")
+            
+            # Pre-populate from sheet if available, otherwise use session state
+            default_alex = inflations_from_sheet['alex'] if inflations_from_sheet['alex'] > 0 else st.session_state.cro_inflation_alex
+            default_house = inflations_from_sheet['house'] if inflations_from_sheet['house'] > 0 else st.session_state.cro_inflation_house
+            default_ecom = inflations_from_sheet['ecom'] if inflations_from_sheet['ecom'] > 0 else st.session_state.cro_inflation_ecom
+            
+            inflation_alex = st.number_input(
+                "Alex Gonzalez Plug ($)",
+                min_value=0.0,
+                value=float(default_alex),
+                step=1000.0,
+                format="%.0f",
+                key="inflation_alex_input"
+            )
+            inflation_house = st.number_input(
+                "House Plug ($)",
+                min_value=0.0,
+                value=float(default_house),
+                step=1000.0,
+                format="%.0f",
+                key="inflation_house_input"
+            )
+            inflation_ecom = st.number_input(
+                "Shopify ECommerce Plug ($)",
+                min_value=0.0,
+                value=float(default_ecom),
+                step=1000.0,
+                format="%.0f",
+                key="inflation_ecom_input"
+            )
+            
+            # Store in session state
+            st.session_state.cro_inflation_alex = inflation_alex
+            st.session_state.cro_inflation_house = inflation_house
+            st.session_state.cro_inflation_ecom = inflation_ecom
+    
+    inflations = {
+        'Alex Gonzalez': st.session_state.cro_inflation_alex,
+        'House': st.session_state.cro_inflation_house,
+        'Shopify ECommerce': st.session_state.cro_inflation_ecom
+    }
+    total_inflation = sum(inflations.values())
     
     # --- CALCULATE INVOICED BY REP ---
     rep_invoiced = {}
@@ -5252,11 +5327,13 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         rep_orders['Amount_Calc'] = pd.to_numeric(rep_orders[amount_col], errors='coerce').fillna(0)
         
         # Use Updated Status column for categorization
-        if 'Updated Status' in rep_orders.columns:
-            status_col = 'Updated Status'
-        elif 'Updated_Status' in rep_orders.columns:
-            status_col = 'Updated_Status'
-        else:
+        status_col = None
+        for col in ['Updated Status', 'Updated_Status', 'UpdatedStatus']:
+            if col in rep_orders.columns:
+                status_col = col
+                break
+        
+        if not status_col:
             return metrics
         
         # Sum by Updated Status categories
@@ -5303,7 +5380,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         # Check for Q2 spillover column
         spillover_col = None
         for col in rep_deals.columns:
-            if 'spillover' in col.lower() or 'q2' in col.lower():
+            col_lower = str(col).lower()
+            if 'spillover' in col_lower or ('q2' in col_lower and '2026' in col_lower):
                 spillover_col = col
                 break
         
@@ -5346,23 +5424,24 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         hs_metrics = get_hs_metrics(rep)
         
         invoiced = rep_invoiced.get(rep, 0)
+        rep_inflation = inflations.get(rep, 0)
         
-        # Face Value calculations
-        hs_expect_commit = hs_metrics['expect'] + hs_metrics['commit']
+        # Face Value calculations (inflation adds to HS E/C and flows through)
+        hs_expect_commit = hs_metrics['expect'] + hs_metrics['commit'] + rep_inflation
         total_core = invoiced + so_metrics['pf_with_date'] + so_metrics['pa_with_date'] + hs_expect_commit
         all_q1 = total_core + so_metrics['pf_no_date'] + so_metrics['pa_no_date'] + so_metrics['pa_old']
         total_forecast = all_q1 + hs_metrics['best_case'] + hs_metrics['opportunity']
         full_pipeline = total_forecast + hs_metrics['q2_spillover']
         
-        # Probability calculations
-        hs_expect_commit_prob = hs_metrics['expect_prob'] + hs_metrics['commit_prob']
+        # Probability calculations (inflation adds to HS E/C Prob and flows through)
+        hs_expect_commit_prob = hs_metrics['expect_prob'] + hs_metrics['commit_prob'] + rep_inflation
         total_core_prob = invoiced + so_metrics['pf_with_date'] + so_metrics['pa_with_date'] + hs_expect_commit_prob
         all_q1_prob = total_core_prob + so_metrics['pf_no_date'] + so_metrics['pa_no_date'] + so_metrics['pa_old']
         total_forecast_prob = all_q1_prob + hs_metrics['best_case_prob'] + hs_metrics['opportunity_prob']
         full_pipeline_prob = total_forecast_prob + hs_metrics['q2_spillover_prob']
         
-        # Realistic total (for status): Inv + PF (all) + PA with Date + HS Expect only
-        realistic_total = invoiced + so_metrics['pf_with_date'] + so_metrics['pf_no_date'] + so_metrics['pa_with_date'] + hs_metrics['expect']
+        # Realistic total (for status): Inv + PF (all) + PA with Date + HS Expect only + inflation
+        realistic_total = invoiced + so_metrics['pf_with_date'] + so_metrics['pf_no_date'] + so_metrics['pa_with_date'] + hs_metrics['expect'] + rep_inflation
         
         all_metrics[rep] = {
             'invoiced': invoiced,
@@ -5375,8 +5454,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             'hs_expect_prob': hs_metrics['expect_prob'],
             'hs_commit': hs_metrics['commit'],
             'hs_commit_prob': hs_metrics['commit_prob'],
-            'hs_expect_commit': hs_expect_commit,
-            'hs_expect_commit_prob': hs_expect_commit_prob,
+            'hs_expect_commit': hs_expect_commit,  # Now includes inflation
+            'hs_expect_commit_prob': hs_expect_commit_prob,  # Now includes inflation
             'hs_best_case': hs_metrics['best_case'],
             'hs_best_case_prob': hs_metrics['best_case_prob'],
             'hs_opportunity': hs_metrics['opportunity'],
@@ -5392,7 +5471,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             'full_pipeline': full_pipeline,
             'full_pipeline_prob': full_pipeline_prob,
             'realistic_total': realistic_total,
-            'quota': quotas.get(rep, 0)
+            'quota': quotas.get(rep, 0),
+            'inflation': rep_inflation
         }
     
     # --- CALCULATE TEAM TOTALS ---
@@ -5403,7 +5483,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         'hs_opportunity', 'hs_opportunity_prob', 'hs_q2_spillover', 'hs_q2_spillover_prob',
         'total_core', 'total_core_prob', 'all_q1', 'all_q1_prob',
         'total_forecast', 'total_forecast_prob', 'full_pipeline', 'full_pipeline_prob',
-        'realistic_total', 'quota'
+        'realistic_total', 'quota', 'inflation'
     ]}
     
     team_quota = team_totals['quota']
@@ -5426,6 +5506,29 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         st.caption("📦 NetSuite amounts shown **excluding** shipping & tax")
     else:
         st.caption("📦 NetSuite amounts shown **including** shipping & tax (gross totals)")
+    
+    # --- INFLATION INDICATOR ---
+    if total_inflation > 0:
+        inflation_parts = []
+        if inflations.get('Alex Gonzalez', 0) > 0:
+            inflation_parts.append(f"Alex: ${inflations['Alex Gonzalez']:,.0f}")
+        if inflations.get('House', 0) > 0:
+            inflation_parts.append(f"House: ${inflations['House']:,.0f}")
+        if inflations.get('Shopify ECommerce', 0) > 0:
+            inflation_parts.append(f"Ecom: ${inflations['Shopify ECommerce']:,.0f}")
+        
+        st.markdown(f"""
+        <div style="
+            background: rgba(251, 191, 36, 0.1);
+            border-left: 4px solid #fbbf24;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        ">
+            <span style="color: #fbbf24;">⚡</span> 
+            <span style="color: #cbd5e1;">Includes <strong style="color: #fbbf24;">${total_inflation:,.0f}</strong> in forecast adjustments ({', '.join(inflation_parts)}) — deals not yet in HubSpot</span>
+        </div>
+        """, unsafe_allow_html=True)
     
     # --- EXECUTIVE SUMMARY ---
     st.markdown("### 📈 Where We Stand")
@@ -5476,7 +5579,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             st.metric("🟡 PA w/ Date", f"${team_totals['pa_with_date']:,.0f}")
         with real_col2:
             st.metric("🟡 Pending Fulfillment (all)", f"${team_totals['pf_with_date'] + team_totals['pf_no_date']:,.0f}")
-            st.metric("🔵 HubSpot Expect", f"${team_totals['hs_expect']:,.0f}")
+            hs_expect_label = "🔵 HubSpot Expect" + (" + Adj" if total_inflation > 0 else "")
+            st.metric(hs_expect_label, f"${team_totals['hs_expect'] + total_inflation:,.0f}")
         
         st.markdown(f"**= Realistic Total: ${realistic_total:,.0f}**")
     
@@ -5552,7 +5656,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         - **PA** = Pending Approval (orders submitted, awaiting approval)
         
         **🎯 PIPELINE (HubSpot Deals):**
-        - **HS E/C** = Expect + Commit deals (highest probability)
+        - **HS E/C** = Expect + Commit deals (highest probability) + Forecast Adjustments
         - **Best** = Best Case deals (medium probability)
         - **Opp** = Opportunity deals (early stage)
         - **Q2 Spill** = Q2 Spillover (future pipeline)
@@ -5564,160 +5668,266 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         
         💡 **Tip:** The **Total** column sums Inv + PF + PA + HS E/C. **All Q1** adds all pending items (including PA Old). 
         **Forecast** includes Best Case and Opportunity. **Full Pipe** adds Q2 Spillover.
+        
+        ⚡ Reps with forecast adjustments show a lightning bolt next to their name.
         """)
     
-    # --- FACE VALUE TABLE ---
-    st.markdown("---")
-    st.markdown("### 💵 Face Value Forecast")
-    st.caption("Full deal amounts, no probability adjustment")
+    # --- HELPER FUNCTION FOR FORMATTING ---
+    def fmt_currency(val):
+        """Format currency value."""
+        if val == 0:
+            return "$0"
+        return f"${val:,.0f}"
     
-    # Build dataframe for Face Value
-    face_data = []
+    def fmt_pct(val):
+        """Format percentage with color."""
+        color = "#4ade80" if val >= 0 else "#f87171"
+        sign = "+" if val >= 0 else ""
+        return f'<span style="color:{color};font-weight:700;">{sign}{val:.0f}%</span>'
+    
+    # --- FACE VALUE TABLE (HTML STYLED) ---
+    st.markdown("---")
+    st.markdown("""
+    <div style="
+        background: #3b82f6;
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px 8px 0 0;
+        font-size: 16px;
+        font-weight: 700;
+    ">
+        💵 Face Value Forecast <span style="font-weight: 400; font-size: 12px; opacity: 0.9;">— Full deal amounts, no probability adjustment</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Build HTML table for Face Value
+    face_html = """
+    <div style="overflow-x: auto;">
+    <table style="
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+    ">
+    <thead>
+        <tr style="background: #334155; color: #e2e8f0; font-size: 10px; text-transform: uppercase;">
+            <th style="padding: 8px; text-align: left;">REP</th>
+            <th style="padding: 8px; text-align: right;">INV</th>
+            <th style="padding: 8px; text-align: right;">PF</th>
+            <th style="padding: 8px; text-align: right;">PA</th>
+            <th style="padding: 8px; text-align: right;">HS E/C</th>
+            <th style="padding: 8px; text-align: right; background: rgba(59,130,246,0.2);">TOTAL</th>
+            <th style="padding: 8px; text-align: right;">PF ND</th>
+            <th style="padding: 8px; text-align: right;">PA ND</th>
+            <th style="padding: 8px; text-align: right;">PA OLD</th>
+            <th style="padding: 8px; text-align: right; background: rgba(59,130,246,0.2);">ALL Q1</th>
+            <th style="padding: 8px; text-align: right;">BEST</th>
+            <th style="padding: 8px; text-align: right;">OPP</th>
+            <th style="padding: 8px; text-align: right; background: rgba(139,92,246,0.2); color: #a78bfa;">FORECAST</th>
+            <th style="padding: 8px; text-align: right; color: #f472b6;">Q2 SPILL</th>
+            <th style="padding: 8px; text-align: right; background: rgba(244,114,182,0.2); color: #f472b6;">FULL PIPE</th>
+            <th style="padding: 8px; text-align: right;">QUOTA</th>
+            <th style="padding: 8px; text-align: right;">%</th>
+        </tr>
+    </thead>
+    <tbody>
+    """
+    
     for rep in REP_ORDER:
         m = all_metrics.get(rep, {})
         quota = m.get('quota', 0)
         forecast = m.get('total_forecast', 0)
         pct = ((forecast - quota) / quota * 100) if quota > 0 else (100 if forecast > 0 else -100)
+        pct_color = "#4ade80" if pct >= 0 else "#f87171"
         
-        face_data.append({
-            'Rep': rep,
-            'Inv': m.get('invoiced', 0),
-            'PF': m.get('pf_with_date', 0),
-            'PA': m.get('pa_with_date', 0),
-            'HS E/C': m.get('hs_expect_commit', 0),
-            'Total': m.get('total_core', 0),
-            'PF ND': m.get('pf_no_date', 0),
-            'PA ND': m.get('pa_no_date', 0),
-            'PA Old': m.get('pa_old', 0),
-            'All Q1': m.get('all_q1', 0),
-            'Best': m.get('hs_best_case', 0),
-            'Opp': m.get('hs_opportunity', 0),
-            'Forecast': forecast,
-            'Q2 Spill': m.get('hs_q2_spillover', 0),
-            'Full Pipe': m.get('full_pipeline', 0),
-            'Quota': quota,
-            '%': pct
-        })
+        # Add lightning bolt for reps with inflation
+        rep_display = rep
+        if m.get('inflation', 0) > 0:
+            rep_display = f"{rep} ⚡"
+        
+        face_html += f"""
+        <tr style="border-bottom: 1px solid #334155;">
+            <td style="padding: 6px 8px; color: #f1f5f9; font-weight: 600;">{rep_display}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('invoiced', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pf_with_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pa_with_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('hs_expect_commit', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1; background: rgba(59,130,246,0.1);">{fmt_currency(m.get('total_core', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pf_no_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pa_no_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pa_old', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1; background: rgba(59,130,246,0.1);">{fmt_currency(m.get('all_q1', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('hs_best_case', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('hs_opportunity', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #a78bfa; background: rgba(139,92,246,0.15);">{fmt_currency(forecast)}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #f472b6;">{fmt_currency(m.get('hs_q2_spillover', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #f472b6; background: rgba(244,114,182,0.1);">{fmt_currency(m.get('full_pipeline', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(quota)}</td>
+            <td style="padding: 6px 8px; text-align: right; color: {pct_color}; font-weight: 700;">{'+' if pct >= 0 else ''}{pct:.0f}%</td>
+        </tr>
+        """
     
     # Add totals row
     pct_total = ((team_totals['total_forecast'] - team_quota) / team_quota * 100) if team_quota > 0 else 0
-    face_data.append({
-        'Rep': '**TOTAL**',
-        'Inv': team_totals['invoiced'],
-        'PF': team_totals['pf_with_date'],
-        'PA': team_totals['pa_with_date'],
-        'HS E/C': team_totals['hs_expect_commit'],
-        'Total': team_totals['total_core'],
-        'PF ND': team_totals['pf_no_date'],
-        'PA ND': team_totals['pa_no_date'],
-        'PA Old': team_totals['pa_old'],
-        'All Q1': team_totals['all_q1'],
-        'Best': team_totals['hs_best_case'],
-        'Opp': team_totals['hs_opportunity'],
-        'Forecast': team_totals['total_forecast'],
-        'Q2 Spill': team_totals['hs_q2_spillover'],
-        'Full Pipe': team_totals['full_pipeline'],
-        'Quota': team_quota,
-        '%': pct_total
-    })
+    pct_total_color = "#4ade80" if pct_total >= 0 else "#f87171"
     
-    face_df = pd.DataFrame(face_data)
+    face_html += f"""
+    <tr style="background: rgba(59,130,246,0.2); border-top: 2px solid #3b82f6;">
+        <td style="padding: 8px; color: #60a5fa; font-weight: 700;">TOTAL</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['invoiced'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pf_with_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pa_with_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['hs_expect_commit'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700; background: rgba(59,130,246,0.1);">{fmt_currency(team_totals['total_core'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pf_no_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pa_no_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pa_old'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700; background: rgba(59,130,246,0.1);">{fmt_currency(team_totals['all_q1'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['hs_best_case'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['hs_opportunity'])}</td>
+        <td style="padding: 8px; text-align: right; color: #a78bfa; font-weight: 700; background: rgba(139,92,246,0.15);">{fmt_currency(team_totals['total_forecast'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f472b6; font-weight: 700;">{fmt_currency(team_totals['hs_q2_spillover'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f472b6; font-weight: 700; background: rgba(244,114,182,0.1);">{fmt_currency(team_totals['full_pipeline'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_quota)}</td>
+        <td style="padding: 8px; text-align: right; color: {pct_total_color}; font-weight: 700;">{'+' if pct_total >= 0 else ''}{pct_total:.0f}%</td>
+    </tr>
+    """
     
-    # Format columns
-    currency_cols = ['Inv', 'PF', 'PA', 'HS E/C', 'Total', 'PF ND', 'PA ND', 'PA Old', 'All Q1', 'Best', 'Opp', 'Forecast', 'Q2 Spill', 'Full Pipe', 'Quota']
+    face_html += "</tbody></table></div>"
+    st.markdown(face_html, unsafe_allow_html=True)
     
-    st.dataframe(
-        face_df,
-        column_config={
-            'Rep': st.column_config.TextColumn('Rep', width='medium'),
-            **{col: st.column_config.NumberColumn(col, format='$%d') for col in currency_cols},
-            '%': st.column_config.NumberColumn('%', format='%+.0f%%')
-        },
-        hide_index=True,
-        use_container_width=True
-    )
+    # --- PROBABILITY TABLE (HTML STYLED) ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="
+        background: #8b5cf6;
+        color: white;
+        padding: 10px 15px;
+        border-radius: 8px 8px 0 0;
+        font-size: 16px;
+        font-weight: 700;
+    ">
+        📊 Probability Forecast <span style="font-weight: 400; font-size: 12px; opacity: 0.9;">— Weighted by close likelihood</span>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # --- PROBABILITY TABLE ---
-    st.markdown("---")
-    st.markdown("### 📊 Probability Forecast")
-    st.caption("Weighted by close likelihood")
+    # Build HTML table for Probability
+    prob_html = """
+    <div style="overflow-x: auto;">
+    <table style="
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        background: #1e293b;
+        border: 1px solid #334155;
+        border-top: none;
+        border-radius: 0 0 8px 8px;
+    ">
+    <thead>
+        <tr style="background: #334155; color: #e2e8f0; font-size: 10px; text-transform: uppercase;">
+            <th style="padding: 8px; text-align: left;">REP</th>
+            <th style="padding: 8px; text-align: right;">INV</th>
+            <th style="padding: 8px; text-align: right;">PF</th>
+            <th style="padding: 8px; text-align: right;">PA</th>
+            <th style="padding: 8px; text-align: right;">HS E/C</th>
+            <th style="padding: 8px; text-align: right; background: rgba(59,130,246,0.2);">TOTAL</th>
+            <th style="padding: 8px; text-align: right;">PF ND</th>
+            <th style="padding: 8px; text-align: right;">PA ND</th>
+            <th style="padding: 8px; text-align: right;">PA OLD</th>
+            <th style="padding: 8px; text-align: right; background: rgba(59,130,246,0.2);">ALL Q1</th>
+            <th style="padding: 8px; text-align: right;">BEST</th>
+            <th style="padding: 8px; text-align: right;">OPP</th>
+            <th style="padding: 8px; text-align: right; background: rgba(139,92,246,0.2); color: #a78bfa;">FORECAST</th>
+            <th style="padding: 8px; text-align: right; color: #f472b6;">Q2 SPILL</th>
+            <th style="padding: 8px; text-align: right; background: rgba(244,114,182,0.2); color: #f472b6;">FULL PIPE</th>
+            <th style="padding: 8px; text-align: right;">QUOTA</th>
+            <th style="padding: 8px; text-align: right;">%</th>
+        </tr>
+    </thead>
+    <tbody>
+    """
     
-    # Build dataframe for Probability
-    prob_data = []
     for rep in REP_ORDER:
         m = all_metrics.get(rep, {})
         quota = m.get('quota', 0)
         forecast = m.get('total_forecast_prob', 0)
         pct = ((forecast - quota) / quota * 100) if quota > 0 else (100 if forecast > 0 else -100)
+        pct_color = "#4ade80" if pct >= 0 else "#f87171"
         
-        prob_data.append({
-            'Rep': rep,
-            'Inv': m.get('invoiced', 0),
-            'PF': m.get('pf_with_date', 0),
-            'PA': m.get('pa_with_date', 0),
-            'HS E/C': m.get('hs_expect_commit_prob', 0),
-            'Total': m.get('total_core_prob', 0),
-            'PF ND': m.get('pf_no_date', 0),
-            'PA ND': m.get('pa_no_date', 0),
-            'PA Old': m.get('pa_old', 0),
-            'All Q1': m.get('all_q1_prob', 0),
-            'Best': m.get('hs_best_case_prob', 0),
-            'Opp': m.get('hs_opportunity_prob', 0),
-            'Forecast': forecast,
-            'Q2 Spill': m.get('hs_q2_spillover_prob', 0),
-            'Full Pipe': m.get('full_pipeline_prob', 0),
-            'Quota': quota,
-            '%': pct
-        })
+        # Add lightning bolt for reps with inflation
+        rep_display = rep
+        if m.get('inflation', 0) > 0:
+            rep_display = f"{rep} ⚡"
+        
+        prob_html += f"""
+        <tr style="border-bottom: 1px solid #334155;">
+            <td style="padding: 6px 8px; color: #f1f5f9; font-weight: 600;">{rep_display}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('invoiced', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pf_with_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pa_with_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('hs_expect_commit_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1; background: rgba(59,130,246,0.1);">{fmt_currency(m.get('total_core_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pf_no_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pa_no_date', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('pa_old', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1; background: rgba(59,130,246,0.1);">{fmt_currency(m.get('all_q1_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('hs_best_case_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(m.get('hs_opportunity_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #a78bfa; background: rgba(139,92,246,0.15);">{fmt_currency(forecast)}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #f472b6;">{fmt_currency(m.get('hs_q2_spillover_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #f472b6; background: rgba(244,114,182,0.1);">{fmt_currency(m.get('full_pipeline_prob', 0))}</td>
+            <td style="padding: 6px 8px; text-align: right; color: #cbd5e1;">{fmt_currency(quota)}</td>
+            <td style="padding: 6px 8px; text-align: right; color: {pct_color}; font-weight: 700;">{'+' if pct >= 0 else ''}{pct:.0f}%</td>
+        </tr>
+        """
     
     # Add totals row
     pct_total_prob = ((team_totals['total_forecast_prob'] - team_quota) / team_quota * 100) if team_quota > 0 else 0
-    prob_data.append({
-        'Rep': '**TOTAL**',
-        'Inv': team_totals['invoiced'],
-        'PF': team_totals['pf_with_date'],
-        'PA': team_totals['pa_with_date'],
-        'HS E/C': team_totals['hs_expect_commit_prob'],
-        'Total': team_totals['total_core_prob'],
-        'PF ND': team_totals['pf_no_date'],
-        'PA ND': team_totals['pa_no_date'],
-        'PA Old': team_totals['pa_old'],
-        'All Q1': team_totals['all_q1_prob'],
-        'Best': team_totals['hs_best_case_prob'],
-        'Opp': team_totals['hs_opportunity_prob'],
-        'Forecast': team_totals['total_forecast_prob'],
-        'Q2 Spill': team_totals['hs_q2_spillover_prob'],
-        'Full Pipe': team_totals['full_pipeline_prob'],
-        'Quota': team_quota,
-        '%': pct_total_prob
-    })
+    pct_total_prob_color = "#4ade80" if pct_total_prob >= 0 else "#f87171"
     
-    prob_df = pd.DataFrame(prob_data)
+    prob_html += f"""
+    <tr style="background: rgba(139,92,246,0.2); border-top: 2px solid #8b5cf6;">
+        <td style="padding: 8px; color: #a78bfa; font-weight: 700;">TOTAL</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['invoiced'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pf_with_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pa_with_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['hs_expect_commit_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700; background: rgba(59,130,246,0.1);">{fmt_currency(team_totals['total_core_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pf_no_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pa_no_date'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['pa_old'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700; background: rgba(59,130,246,0.1);">{fmt_currency(team_totals['all_q1_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['hs_best_case_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_totals['hs_opportunity_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #a78bfa; font-weight: 700; background: rgba(139,92,246,0.15);">{fmt_currency(team_totals['total_forecast_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f472b6; font-weight: 700;">{fmt_currency(team_totals['hs_q2_spillover_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f472b6; font-weight: 700; background: rgba(244,114,182,0.1);">{fmt_currency(team_totals['full_pipeline_prob'])}</td>
+        <td style="padding: 8px; text-align: right; color: #f1f5f9; font-weight: 700;">{fmt_currency(team_quota)}</td>
+        <td style="padding: 8px; text-align: right; color: {pct_total_prob_color}; font-weight: 700;">{'+' if pct_total_prob >= 0 else ''}{pct_total_prob:.0f}%</td>
+    </tr>
+    """
     
-    st.dataframe(
-        prob_df,
-        column_config={
-            'Rep': st.column_config.TextColumn('Rep', width='medium'),
-            **{col: st.column_config.NumberColumn(col, format='$%d') for col in currency_cols},
-            '%': st.column_config.NumberColumn('%', format='%+.0f%%')
-        },
-        hide_index=True,
-        use_container_width=True
-    )
+    prob_html += "</tbody></table></div>"
+    st.markdown(prob_html, unsafe_allow_html=True)
     
     # --- DEAL LISTS ---
     st.markdown("---")
     
+    # Find spillover column for filtering
+    spillover_col = None
+    if not deals_df.empty:
+        for col in deals_df.columns:
+            col_lower = str(col).lower()
+            if 'spillover' in col_lower or ('q2' in col_lower and '2026' in col_lower):
+                spillover_col = col
+                break
+    
     # Best Case Deals
     if not deals_df.empty and 'Status' in deals_df.columns:
         best_case_deals = deals_df[deals_df['Status'] == 'Best Case'].copy()
-        
-        # Check for Q2 spillover and filter them out
-        spillover_col = None
-        for col in deals_df.columns:
-            if 'spillover' in col.lower() or 'q2' in col.lower():
-                spillover_col = col
-                break
         
         if spillover_col and not best_case_deals.empty:
             best_case_deals = best_case_deals[~best_case_deals[spillover_col].astype(str).str.upper().str.contains('Q2', na=False)]
@@ -5764,6 +5974,12 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             
             opp_deals['Amount_Display'] = pd.to_numeric(opp_deals['Amount'], errors='coerce').fillna(0)
             opp_deals = opp_deals.sort_values('Amount_Display', ascending=False)
+            
+            display_cols = ['Deal Name', 'Deal Owner', 'Amount']
+            if 'Deal Stage' in opp_deals.columns:
+                display_cols.insert(2, 'Deal Stage')
+            if 'Probability Rev' in opp_deals.columns:
+                display_cols.append('Probability Rev')
             
             available_cols = [c for c in display_cols if c in opp_deals.columns]
             
@@ -5816,7 +6032,6 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     # --- FOOTER ---
     st.markdown("---")
     st.caption(f"Calyx Containers • Revenue Operations • Generated {get_mst_time().strftime('%I:%M %p %Z')} • {'Shipping & Tax Excluded' if exclude_shipping_tax else 'Shipping & Tax Included'}")
-
 
 # Main app
 def main():
