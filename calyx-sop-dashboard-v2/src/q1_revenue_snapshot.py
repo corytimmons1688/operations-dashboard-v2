@@ -5497,21 +5497,19 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     # --- SUMMARY CARDS ---
     st.markdown("---")
     
-    card_cols = st.columns(8)
-    card_data = [
-        ("💰 INV", team_totals['invoiced']),
-        ("📦 PF", team_totals['pf_with_date'] + team_totals['pf_no_date']),
-        ("📋 PA", team_totals['pa_with_date'] + team_totals['pa_no_date']),
-        ("⚠️ PA OLD", team_totals['pa_old']),
-        ("🎯 HS E/C", team_totals['hs_expect_commit']),
-        ("📈 FORECAST", team_totals['total_forecast']),
-        ("📅 Q2", team_totals['hs_q2_spillover']),
-        ("🏁 QUOTA", team_quota),
-    ]
+    # Row 1
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("💰 Invoiced", f"${team_totals['invoiced']:,.0f}")
+    c2.metric("📦 Pend Fulfill", f"${team_totals['pf_with_date'] + team_totals['pf_no_date']:,.0f}")
+    c3.metric("📋 Pend Apprv", f"${team_totals['pa_with_date'] + team_totals['pa_no_date']:,.0f}")
+    c4.metric("⚠️ PA >2wk", f"${team_totals['pa_old']:,.0f}")
     
-    for col, (label, value) in zip(card_cols, card_data):
-        with col:
-            st.metric(label, f"${value:,.0f}")
+    # Row 2
+    c5, c6, c7, c8 = st.columns(4)
+    c5.metric("🎯 HS E/C", f"${team_totals['hs_expect_commit']:,.0f}")
+    c6.metric("📈 Forecast", f"${team_totals['total_forecast']:,.0f}")
+    c7.metric("📅 Q2 Spill", f"${team_totals['hs_q2_spillover']:,.0f}")
+    c8.metric("🏁 Quota", f"${team_quota:,.0f}")
     
     # --- FACE VALUE TABLE ---
     st.markdown("---")
