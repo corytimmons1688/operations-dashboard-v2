@@ -2093,7 +2093,15 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         else:
             so_data['Display_PA_Date'] = pd.to_datetime(get_col_by_index(so_data, 29), errors='coerce') # Col AD: PA Date
 
-        if 'Amount' in so_data.columns:
+        # Determine which amount column to use based on shipping toggle
+        include_shipping = st.session_state.get('include_shipping', True)
+        so_amount_col = 'Amount' if include_shipping else 'Net_Amount'
+        
+        # Use the appropriate amount column
+        if so_amount_col in so_data.columns:
+            so_data['Amount_Numeric'] = pd.to_numeric(so_data[so_amount_col], errors='coerce').fillna(0)
+        elif 'Amount' in so_data.columns:
+            # Fallback to Amount if Net_Amount doesn't exist
             so_data['Amount_Numeric'] = pd.to_numeric(so_data['Amount'], errors='coerce').fillna(0)
         else:
             so_data['Amount_Numeric'] = 0
@@ -2167,11 +2175,23 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     # === USE CENTRALIZED CATEGORIZATION FUNCTION ===
     so_categories = categorize_sales_orders(sales_orders_df, rep_name)
     
+    # Determine which amount column to use based on shipping toggle
+    include_shipping = st.session_state.get('include_shipping', True)
+    ns_amount_col = 'Amount' if include_shipping else 'Net_Amount'
+    
     # Helper function to add display columns for UI
     def format_ns_view(df, date_col_name):
         if df.empty: 
             return df
         d = df.copy()
+        
+        # Create Amount_Numeric based on shipping toggle
+        if ns_amount_col in d.columns:
+            d['Amount_Numeric'] = pd.to_numeric(d[ns_amount_col], errors='coerce').fillna(0)
+        elif 'Amount' in d.columns:
+            d['Amount_Numeric'] = pd.to_numeric(d['Amount'], errors='coerce').fillna(0)
+        else:
+            d['Amount_Numeric'] = 0
         
         # CRITICAL: Ensure Sales Rep column is preserved
         # Sales Rep should already exist from Rep Master (Column AF)
@@ -2219,7 +2239,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             # For PF/PA no date or other: show blank
             d['Ship Date'] = ''
         
-        return d.sort_values('Amount', ascending=False) if 'Amount' in d.columns else d
+        return d.sort_values('Amount_Numeric', ascending=False) if 'Amount_Numeric' in d.columns else d
     
     # Map centralized categories to display dataframes
     ns_dfs = {
@@ -2321,7 +2341,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             # Select all NetSuite categories that have data
             for key in ns_categories.keys():
                 df = ns_dfs.get(key, pd.DataFrame())
-                val = df['Amount'].sum() if not df.empty and 'Amount' in df.columns else 0
+                val = df['Amount_Numeric'].sum() if not df.empty and 'Amount_Numeric' in df.columns else 0
                 if val > 0 or key == 'PA_Date':
                     st.session_state[f"chk_{key}_{rep_name}"] = True
             # Select all HubSpot categories that have data
@@ -2353,7 +2373,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             for key, data in ns_categories.items():
                 # Get value for label
                 df = ns_dfs.get(key, pd.DataFrame())
-                val = df['Amount'].sum() if not df.empty and 'Amount' in df.columns else 0
+                val = df['Amount_Numeric'].sum() if not df.empty and 'Amount_Numeric' in df.columns else 0
                 
                 # Determine default checkbox value based on planning status
                 checkbox_key = f"chk_{key}_{rep_name}"
@@ -2502,7 +2522,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     
                                     export_buckets[key] = selected_rows
                                     
-                                    current_total = selected_rows['Amount'].sum() if 'Amount' in selected_rows.columns else 0
+                                    current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
                                     st.caption(f"Selected: ${current_total:,.0f}")
                                 else:
                                     # Read-only view
