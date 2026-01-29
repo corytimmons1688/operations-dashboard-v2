@@ -5477,8 +5477,11 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             <div style="font-size: 12px; color: #64748b; text-transform: uppercase;">Realistic vs Quota</div>
             <div style="font-size: 42px; font-weight: 700; color: {status_color};">{status_emoji} {realistic_pct:.0f}%</div>
             <div style="font-size: 16px; color: #f1f5f9; font-weight: 600;">{status_text}</div>
-            <div style="font-size: 14px; color: #94a3b8;">
+            <div style="font-size: 14px; color: #94a3b8; margin-top: 5px;">
                 {'${:,.0f} gap'.format(realistic_gap) if realistic_gap > 0 else '${:,.0f} over'.format(abs(realistic_gap))}
+            </div>
+            <div style="font-size: 13px; color: #64748b; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(100,116,139,0.3);">
+                🏁 Quota: <span style="color: #f1f5f9; font-weight: 600;">${team_quota:,.0f}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -5492,7 +5495,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             st.metric("🟡 PF (all)", f"${team_totals['pf_with_date'] + team_totals['pf_no_date']:,.0f}")
             st.metric("🔵 HS Expect + Plugs", f"${team_totals['hs_expect_commit']:,.0f}")
         
-        st.markdown(f"**Realistic Total: ${realistic_total:,.0f}**")
+        st.markdown(f"**Realistic Total: ${realistic_total:,.0f}** vs **Quota: ${team_quota:,.0f}**")
     
     # --- SUMMARY CARDS ---
     st.markdown("---")
