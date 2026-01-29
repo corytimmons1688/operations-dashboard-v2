@@ -1251,11 +1251,15 @@ def load_all_data():
         if len(col_names) > 12 and 'Projected Date' not in rename_dict.values():
             rename_dict[col_names[12]] = 'Projected Date'  # Column M
         
-        # NEW: Map Shipping (Column U - index 20) and Tax (Column V - index 21) for shipping toggle
-        if len(col_names) > 20:
-            rename_dict[col_names[20]] = 'Amount_Shipping'  # Column U - Amount (Shipping)
-        if len(col_names) > 21:
-            rename_dict[col_names[21]] = 'Amount_Tax'  # Column V - Amount (Transaction Tax Total)
+        # NEW: Map Shipping and Tax columns by keyword search (more robust than position)
+        for idx, col in enumerate(col_names):
+            col_lower = str(col).lower()
+            # Look for Amount (Shipping) column
+            if 'amount' in col_lower and 'shipping' in col_lower and 'Amount_Shipping' not in rename_dict.values():
+                rename_dict[col] = 'Amount_Shipping'
+            # Look for Amount (Transaction Tax Total) column
+            elif 'amount' in col_lower and 'tax' in col_lower and 'Amount_Tax' not in rename_dict.values():
+                rename_dict[col] = 'Amount_Tax'
         
         # COLUMN POSITIONS - Updated after "Location (no hierarchy)" added at AC
         if len(col_names) > 28:
@@ -5320,6 +5324,35 @@ def main():
     # Load data
     with st.spinner("Loading data from Google Sheets..."):
         deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df = load_all_data()
+    
+    # DEBUG: Show shipping toggle column detection (for Xander)
+    with st.sidebar.expander("🔧 Shipping Toggle Debug", expanded=False):
+        include_shipping = st.session_state.get('include_shipping', True)
+        st.write(f"**Toggle State:** {'Include Shipping' if include_shipping else 'Exclude Shipping'}")
+        
+        st.markdown("**Invoices Columns:**")
+        if not invoices_df.empty:
+            has_shipping = 'Amount_Shipping' in invoices_df.columns
+            has_tax = 'Amount_Tax' in invoices_df.columns
+            has_net = 'Net_Amount' in invoices_df.columns
+            st.write(f"- Amount_Shipping: {'✅' if has_shipping else '❌'}")
+            st.write(f"- Amount_Tax: {'✅' if has_tax else '❌'}")
+            st.write(f"- Net_Amount: {'✅' if has_net else '❌'}")
+            if has_net:
+                st.write(f"- Sample Net_Amount: ${invoices_df['Net_Amount'].head(3).tolist()}")
+        
+        st.markdown("**Sales Orders Columns:**")
+        if not sales_orders_df.empty:
+            has_shipping = 'Amount_Shipping' in sales_orders_df.columns
+            has_tax = 'Amount_Tax' in sales_orders_df.columns
+            has_net = 'Net_Amount' in sales_orders_df.columns
+            st.write(f"- Amount_Shipping: {'✅' if has_shipping else '❌'}")
+            st.write(f"- Amount_Tax: {'✅' if has_tax else '❌'}")
+            st.write(f"- Net_Amount: {'✅' if has_net else '❌'}")
+            if has_net:
+                st.write(f"- Sample Net_Amount: ${sales_orders_df['Net_Amount'].head(3).tolist()}")
+            # Show all column names for debugging
+            st.write(f"**All SO Columns:** {sales_orders_df.columns.tolist()}")
     
     # Store snapshot for change tracking
     store_snapshot(deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
