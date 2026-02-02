@@ -4,14 +4,9 @@ Reads from Google Sheets and displays gap-to-goal analysis with interactive visu
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
 
 VERSION 10 CHANGES:
-- Added search filter to Build Your Own Forecast sections
-- Search by Customer name for NetSuite orders
-- Search by Deal Name for HubSpot deals
-- Fixed buggy Customize UI with clean individual checkboxes per row
-- Each deal/order has its own checkbox - click to include/exclude
-- Excluded items show strikethrough amounts
-- Include All / Exclude All quick action buttons
-- Real-time included/excluded totals
+- Added search filter to Build Your Own Forecast sections (search by Customer/SO# or Deal Name)
+- Fixed buggy checkbox behavior in Customize mode - removed conflicting state management
+- Checkboxes now respond reliably on first click
 
 VERSION 9 CHANGES:
 - Extended All Reps All Pipelines data range from A:U to A:X
@@ -2413,26 +2408,26 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     if is_checked:
                         with st.expander(f"🔎 View Orders ({data['label']})"):
                             if not df.empty:
-                                # Search filter for deal/customer name
+                                # Search filter for customer name
                                 search_key = f"search_ns_{key}_{rep_name}"
                                 search_term = st.text_input(
-                                    "🔍 Search by Customer",
+                                    "🔍 Search by Customer or SO#",
                                     key=search_key,
-                                    placeholder="Type to filter by customer name..."
+                                    placeholder="Type to filter..."
                                 )
                                 
                                 # Filter dataframe based on search term
-                                df_filtered = df.copy()
+                                df_display = df.copy()
                                 if search_term:
                                     search_lower = search_term.lower()
-                                    if 'Customer' in df_filtered.columns:
-                                        df_filtered = df_filtered[df_filtered['Customer'].astype(str).str.lower().str.contains(search_lower, na=False)]
-                                    # Also check SO # for direct matches
-                                    elif 'SO #' in df.columns:
-                                        so_matches = df[df['SO #'].astype(str).str.lower().str.contains(search_lower, na=False)]
-                                        df_filtered = pd.concat([df_filtered, so_matches]).drop_duplicates()
+                                    mask = pd.Series([False] * len(df_display), index=df_display.index)
+                                    if 'Customer' in df_display.columns:
+                                        mask |= df_display['Customer'].astype(str).str.lower().str.contains(search_lower, na=False)
+                                    if 'SO #' in df_display.columns:
+                                        mask |= df_display['SO #'].astype(str).str.lower().str.contains(search_lower, na=False)
+                                    df_display = df_display[mask]
                                     
-                                    if df_filtered.empty:
+                                    if df_display.empty:
                                         st.info(f"No orders matching '{search_term}'")
                                 
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
@@ -2446,96 +2441,92 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 if 'Ship Date' in df.columns: display_cols.append('Ship Date')
                                 if 'Amount' in df.columns: display_cols.append('Amount')
                                 
-                                if enable_edit and display_cols:
-                                    df_edit = df_filtered.copy()
+                                if enable_edit and display_cols and not df_display.empty:
+                                    df_edit = df_display.copy()
                                     
-                                    # Determine ID column for matching
+                                    # Add Status column based on planning status
+                                    if 'SO #' in df_edit.columns:
+                                        df_edit['Status'] = df_edit['SO #'].apply(
+                                            lambda so: get_planning_status(so) if get_planning_status(so) else '—'
+                                        )
+                                        df_edit['Notes'] = df_edit['SO #'].apply(
+                                            lambda so: get_planning_notes(so)
+                                        )
+                                    
                                     id_col = 'SO #' if 'SO #' in df_edit.columns else 'Deal ID'
+                                    editor_key = f"edit_{key}_{rep_name}"
                                     
-                                    # Initialize included items in session state (default: all included)
-                                    included_key = f"included_{key}_{rep_name}"
-                                    if included_key not in st.session_state:
-                                        if id_col in df_edit.columns:
-                                            st.session_state[included_key] = set(df_edit[id_col].astype(str).tolist())
-                                        else:
-                                            st.session_state[included_key] = set()
-                                    
-                                    if id_col in df_edit.columns:
-                                        all_ids = set(df_edit[id_col].astype(str).tolist())
-                                        
-                                        # Quick action buttons
-                                        btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
-                                        with btn_col1:
-                                            if st.button("☑️ Include All", key=f"inc_all_{key}_{rep_name}"):
-                                                st.session_state[included_key] = all_ids.copy()
-                                                st.rerun()
-                                        with btn_col2:
-                                            if st.button("☐ Exclude All", key=f"exc_all_{key}_{rep_name}"):
-                                                st.session_state[included_key] = set()
-                                                st.rerun()
-                                        
-                                        # Display each row with a checkbox
-                                        st.markdown("---")
-                                        
-                                        for idx, row in df_edit.iterrows():
-                                            item_id = str(row[id_col])
-                                            customer = row.get('Customer', 'Unknown')
-                                            amount = row.get('Amount_Numeric', 0)
-                                            ship_date = row.get('Ship Date', '')
-                                            order_type = row.get('Type', '')
-                                            link = row.get('Link', '')
-                                            
-                                            # Check if currently included
-                                            is_included = item_id in st.session_state[included_key]
-                                            
-                                            # Create row with checkbox
-                                            col_chk, col_info, col_amt = st.columns([0.5, 4, 1.5])
-                                            
-                                            with col_chk:
-                                                new_state = st.checkbox(
-                                                    "inc",
-                                                    value=is_included,
-                                                    key=f"chk_{key}_{item_id}_{rep_name}",
-                                                    label_visibility="collapsed"
-                                                )
-                                                # Update state
-                                                if new_state and item_id not in st.session_state[included_key]:
-                                                    st.session_state[included_key].add(item_id)
-                                                elif not new_state and item_id in st.session_state[included_key]:
-                                                    st.session_state[included_key].discard(item_id)
-                                            
-                                            with col_info:
-                                                if link:
-                                                    st.markdown(f"**[{item_id}]({link})** · {customer} · {order_type} · {ship_date}")
-                                                else:
-                                                    st.markdown(f"**{item_id}** · {customer} · {order_type} · {ship_date}")
-                                            
-                                            with col_amt:
-                                                if item_id in st.session_state[included_key]:
-                                                    st.markdown(f"**${amount:,.0f}**")
-                                                else:
-                                                    st.markdown(f"~~${amount:,.0f}~~")
-                                        
-                                        st.markdown("---")
-                                        
-                                        # Filter to only included rows for export
-                                        included_ids = st.session_state[included_key]
-                                        selected_mask = df[id_col].astype(str).isin(included_ids)
-                                        selected_rows = df[selected_mask].copy()
-                                        
-                                        export_buckets[key] = selected_rows
-                                        
-                                        current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
-                                        excluded_total = df_edit[~df_edit[id_col].astype(str).isin(included_ids)]['Amount_Numeric'].sum() if 'Amount_Numeric' in df_edit.columns else 0
-                                        
-                                        st.success(f"**Included: ${current_total:,.0f}** · Excluded: ${excluded_total:,.0f}")
+                                    # Check if we have existing selections in session state from data_editor
+                                    # If editor state exists, use those values; otherwise default all to True
+                                    if editor_key in st.session_state and 'edited_rows' in st.session_state[editor_key]:
+                                        # Get existing edits from data_editor's state
+                                        edited_rows = st.session_state[editor_key].get('edited_rows', {})
+                                        df_edit['Select'] = True
+                                        for row_idx_str, changes in edited_rows.items():
+                                            if 'Select' in changes:
+                                                row_idx = int(row_idx_str)
+                                                if row_idx < len(df_edit):
+                                                    df_edit.iloc[row_idx, df_edit.columns.get_loc('Select')] = changes['Select']
                                     else:
-                                        st.warning("Cannot customize - missing ID column")
-                                        export_buckets[key] = df
+                                        df_edit['Select'] = True
+                                    
+                                    # Reorder columns
+                                    display_with_status = ['Select']
+                                    if 'Status' in df_edit.columns:
+                                        display_with_status.append('Status')
+                                    if 'Notes' in df_edit.columns:
+                                        display_with_status.append('Notes')
+                                    display_with_status.extend(display_cols)
+                                    
+                                    edited = st.data_editor(
+                                        df_edit[display_with_status],
+                                        column_config={
+                                            "Select": st.column_config.CheckboxColumn("✓", width="small"),
+                                            "Status": st.column_config.SelectboxColumn(
+                                                "Status",
+                                                width="small",
+                                                options=['IN', 'MAYBE', 'OUT', '—'],
+                                                required=False
+                                            ),
+                                            "Notes": st.column_config.TextColumn("Notes", width="medium"),
+                                            "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
+                                            "SO #": st.column_config.TextColumn("SO #", width="small"),
+                                            "Type": st.column_config.TextColumn("Type", width="small"),
+                                            "Ship Date": st.column_config.TextColumn("Ship Date", width="small"),
+                                            "Amount": st.column_config.NumberColumn("Amount", format="$%d")
+                                        },
+                                        disabled=[c for c in display_with_status if c not in ['Select', 'Status', 'Notes']],
+                                        hide_index=True,
+                                        key=editor_key,
+                                        num_rows="fixed"
+                                    )
+                                    
+                                    # Update planning status and notes from edited data
+                                    if 'SO #' in edited.columns:
+                                        for idx, row in edited.iterrows():
+                                            so_num = str(row['SO #']).strip()
+                                            if 'Status' in row:
+                                                status = str(row['Status']).strip().upper()
+                                                notes = str(row.get('Notes', '')).strip() if 'Notes' in row else ''
+                                                if status != '—':
+                                                    update_planning_data(so_num, status=status, notes=notes)
+                                    
+                                    # Capture selected rows for export (from FULL df, not filtered)
+                                    selected_ids = edited[edited['Select']][id_col].astype(str).tolist() if id_col in edited.columns else []
+                                    selected_rows = df[df[id_col].astype(str).isin(selected_ids)].copy() if id_col in df.columns else df.copy()
+                                    
+                                    if 'SO #' in selected_rows.columns:
+                                        selected_rows['Status'] = selected_rows['SO #'].apply(get_planning_status)
+                                        selected_rows['Notes'] = selected_rows['SO #'].apply(get_planning_notes)
+                                    
+                                    export_buckets[key] = selected_rows
+                                    
+                                    current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
+                                    st.caption(f"Selected: ${current_total:,.0f}")
                                 else:
                                     # Read-only view
-                                    if display_cols:
-                                        df_readonly = df_filtered.copy()
+                                    if display_cols and not df_display.empty:
+                                        df_readonly = df_display.copy()
                                         
                                         # Add Status column for read-only view too
                                         if 'SO #' in df_readonly.columns:
@@ -2646,27 +2637,26 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 search_term = st.text_input(
                                     "🔍 Search by Deal Name",
                                     key=search_key,
-                                    placeholder="Type to filter by deal name..."
+                                    placeholder="Type to filter..."
                                 )
                                 
                                 # Filter dataframe based on search term
-                                df_filtered = df.copy()
+                                df_display = df.copy()
                                 if search_term:
                                     search_lower = search_term.lower()
-                                    if 'Deal Name' in df_filtered.columns:
-                                        df_filtered = df_filtered[df_filtered['Deal Name'].astype(str).str.lower().str.contains(search_lower, na=False)]
-                                    # Also check Deal ID for direct matches
-                                    elif 'Deal ID' in df.columns:
-                                        id_matches = df[df['Deal ID'].astype(str).str.lower().str.contains(search_lower, na=False)]
-                                        df_filtered = pd.concat([df_filtered, id_matches]).drop_duplicates()
+                                    mask = pd.Series([False] * len(df_display), index=df_display.index)
+                                    if 'Deal Name' in df_display.columns:
+                                        mask |= df_display['Deal Name'].astype(str).str.lower().str.contains(search_lower, na=False)
+                                    if 'Deal ID' in df_display.columns:
+                                        mask |= df_display['Deal ID'].astype(str).str.lower().str.contains(search_lower, na=False)
+                                    df_display = df_display[mask]
                                     
-                                    if df_filtered.empty:
+                                    if df_display.empty:
                                         st.info(f"No deals matching '{search_term}'")
                                 
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
                                 
                                 # Dynamic columns based on probability mode
-                                # Always show both columns but highlight the active one
                                 if use_probability:
                                     cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Prob_Amount_Numeric', 'Amount_Numeric']
                                     primary_amount_col = 'Prob_Amount_Numeric'
@@ -2674,134 +2664,127 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Amount_Numeric', 'Prob_Amount_Numeric']
                                     primary_amount_col = 'Amount_Numeric'
                                 
-                                # Filter cols to only those that exist in df_filtered
-                                cols = [c for c in cols if c in df_filtered.columns]
+                                cols = [c for c in cols if c in df.columns]
                                 
-                                if enable_edit:
-                                    df_edit = df_filtered.copy()
+                                if enable_edit and not df_display.empty:
+                                    df_edit = df_display.copy()
                                     
-                                    # Determine ID column for matching
-                                    id_col = 'Deal ID' if 'Deal ID' in df_edit.columns else 'SO #'
-                                    
-                                    # Determine which amount to show based on probability mode
-                                    amount_col = 'Prob_Amount_Numeric' if use_probability else 'Amount_Numeric'
-                                    
-                                    # Initialize included items in session state (default: all included)
-                                    included_key = f"included_{key}_{rep_name}"
-                                    if included_key not in st.session_state:
-                                        if id_col in df_edit.columns:
-                                            st.session_state[included_key] = set(df_edit[id_col].astype(str).tolist())
-                                        else:
-                                            st.session_state[included_key] = set()
-                                    
-                                    if id_col in df_edit.columns:
-                                        all_ids = set(df_edit[id_col].astype(str).tolist())
-                                        
-                                        # Quick action buttons
-                                        btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
-                                        with btn_col1:
-                                            if st.button("☑️ Include All", key=f"inc_all_{key}_{rep_name}"):
-                                                st.session_state[included_key] = all_ids.copy()
-                                                st.rerun()
-                                        with btn_col2:
-                                            if st.button("☐ Exclude All", key=f"exc_all_{key}_{rep_name}"):
-                                                st.session_state[included_key] = set()
-                                                st.rerun()
-                                        
-                                        # Display each row with a checkbox
-                                        st.markdown("---")
-                                        
-                                        for idx, row in df_edit.iterrows():
-                                            item_id = str(row[id_col])
-                                            deal_name = row.get('Deal Name', 'Unknown')
-                                            amount = row.get(amount_col, row.get('Amount_Numeric', 0))
-                                            close_date = row.get('Close', '')
-                                            deal_type = row.get('Type', '')
-                                            link = row.get('Link', '')
-                                            
-                                            # Check if currently included
-                                            is_included = item_id in st.session_state[included_key]
-                                            
-                                            # Create row with checkbox
-                                            col_chk, col_info, col_amt = st.columns([0.5, 4, 1.5])
-                                            
-                                            with col_chk:
-                                                new_state = st.checkbox(
-                                                    "inc",
-                                                    value=is_included,
-                                                    key=f"chk_{key}_{item_id}_{rep_name}",
-                                                    label_visibility="collapsed"
-                                                )
-                                                # Update state
-                                                if new_state and item_id not in st.session_state[included_key]:
-                                                    st.session_state[included_key].add(item_id)
-                                                elif not new_state and item_id in st.session_state[included_key]:
-                                                    st.session_state[included_key].discard(item_id)
-                                            
-                                            with col_info:
-                                                if link:
-                                                    st.markdown(f"**[{deal_name}]({link})** · {deal_type} · {close_date}")
-                                                else:
-                                                    st.markdown(f"**{deal_name}** · {deal_type} · {close_date}")
-                                            
-                                            with col_amt:
-                                                if item_id in st.session_state[included_key]:
-                                                    st.markdown(f"**${amount:,.0f}**")
-                                                else:
-                                                    st.markdown(f"~~${amount:,.0f}~~")
-                                        
-                                        st.markdown("---")
-                                        
-                                        # Filter to only included rows for export
-                                        included_ids = st.session_state[included_key]
-                                        selected_mask = df[id_col].astype(str).isin(included_ids)
-                                        selected_rows = df[selected_mask].copy()
-                                        
-                                        export_buckets[key] = selected_rows
-                                        
-                                        # Use the appropriate amount column based on toggle
-                                        if use_probability and 'Prob_Amount_Numeric' in selected_rows.columns:
-                                            current_total = selected_rows['Prob_Amount_Numeric'].sum()
-                                            excluded_total = df_edit[~df_edit[id_col].astype(str).isin(included_ids)]['Prob_Amount_Numeric'].sum() if 'Prob_Amount_Numeric' in df_edit.columns else 0
-                                        else:
-                                            current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
-                                            excluded_total = df_edit[~df_edit[id_col].astype(str).isin(included_ids)]['Amount_Numeric'].sum() if 'Amount_Numeric' in df_edit.columns else 0
-                                        
-                                        st.success(f"**Included: ${current_total:,.0f}** · Excluded: ${excluded_total:,.0f}")
-                                    else:
-                                        st.warning("Cannot customize - missing ID column")
-                                        export_buckets[key] = df
-                                else:
-                                    # Read-only view
-                                    df_readonly = df_filtered.copy()
-                                    
-                                    # Add Status column for read-only view too
-                                    if 'Deal ID' in df_readonly.columns:
-                                        df_readonly['Status'] = df_readonly['Deal ID'].apply(
+                                    # Add Status column based on planning status
+                                    if 'Deal ID' in df_edit.columns:
+                                        df_edit['Status'] = df_edit['Deal ID'].apply(
                                             lambda deal_id: get_planning_status(deal_id) if get_planning_status(deal_id) else '—'
                                         )
-                                        display_readonly = ['Status'] + cols
+                                        df_edit['Notes'] = df_edit['Deal ID'].apply(
+                                            lambda deal_id: get_planning_notes(deal_id)
+                                        )
+                                    
+                                    id_col = 'Deal ID' if 'Deal ID' in df_edit.columns else 'SO #'
+                                    editor_key = f"edit_{key}_{rep_name}"
+                                    
+                                    # Check if we have existing selections in session state from data_editor
+                                    if editor_key in st.session_state and 'edited_rows' in st.session_state[editor_key]:
+                                        edited_rows = st.session_state[editor_key].get('edited_rows', {})
+                                        df_edit['Select'] = True
+                                        for row_idx_str, changes in edited_rows.items():
+                                            if 'Select' in changes:
+                                                row_idx = int(row_idx_str)
+                                                if row_idx < len(df_edit):
+                                                    df_edit.iloc[row_idx, df_edit.columns.get_loc('Select')] = changes['Select']
                                     else:
-                                        display_readonly = cols
+                                        df_edit['Select'] = True
                                     
-                                    # Filter display_readonly to only columns that exist
-                                    display_readonly = [c for c in display_readonly if c in df_readonly.columns]
+                                    # Reorder columns
+                                    display_with_status = ['Select']
+                                    if 'Status' in df_edit.columns:
+                                        display_with_status.append('Status')
+                                    if 'Notes' in df_edit.columns:
+                                        display_with_status.append('Notes')
+                                    display_with_status.extend(cols)
                                     
-                                    st.dataframe(
-                                        df_readonly[display_readonly],
+                                    edited = st.data_editor(
+                                        df_edit[display_with_status],
                                         column_config={
-                                            "Status": st.column_config.TextColumn("Status", width="small"),
+                                            "Select": st.column_config.CheckboxColumn("✓", width="small"),
+                                            "Status": st.column_config.SelectboxColumn(
+                                                "Status",
+                                                width="small",
+                                                options=['IN', 'MAYBE', 'OUT', '—'],
+                                                required=False
+                                            ),
+                                            "Notes": st.column_config.TextColumn("Notes", width="medium"),
                                             "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
                                             "Deal ID": st.column_config.TextColumn("Deal ID", width="small"),
+                                            "Deal Name": st.column_config.TextColumn("Deal Name", width="medium"),
                                             "Type": st.column_config.TextColumn("Type", width="small"),
                                             "Close": st.column_config.TextColumn("Close Date", width="small"),
                                             "PA Date": st.column_config.TextColumn("PA Date", width="small"),
                                             "Amount_Numeric": st.column_config.NumberColumn("Raw $" if use_probability else "Amount ✓", format="$%d"),
                                             "Prob_Amount_Numeric": st.column_config.NumberColumn("Prob $ ✓" if use_probability else "Prob $", format="$%d")
                                         },
+                                        disabled=[c for c in display_with_status if c not in ['Select', 'Status', 'Notes']],
                                         hide_index=True,
-                                        use_container_width=True
+                                        key=editor_key,
+                                        num_rows="fixed"
                                     )
+                                    
+                                    # Update planning status and notes from edited data
+                                    if 'Deal ID' in edited.columns:
+                                        for idx, row in edited.iterrows():
+                                            deal_id = str(row['Deal ID']).strip()
+                                            if 'Status' in row:
+                                                status = str(row['Status']).strip().upper()
+                                                notes = str(row.get('Notes', '')).strip() if 'Notes' in row else ''
+                                                if status != '—':
+                                                    update_planning_data(deal_id, status=status, notes=notes)
+                                    
+                                    # Capture selected rows for export (from FULL df, not filtered)
+                                    selected_ids = edited[edited['Select']][id_col].astype(str).tolist() if id_col in edited.columns else []
+                                    selected_rows = df[df[id_col].astype(str).isin(selected_ids)].copy() if id_col in df.columns else df.copy()
+                                    
+                                    if 'Deal ID' in selected_rows.columns:
+                                        selected_rows['Status'] = selected_rows['Deal ID'].apply(get_planning_status)
+                                        selected_rows['Notes'] = selected_rows['Deal ID'].apply(get_planning_notes)
+                                    
+                                    export_buckets[key] = selected_rows
+                                    
+                                    if use_probability and 'Prob_Amount_Numeric' in selected_rows.columns:
+                                        current_total = selected_rows['Prob_Amount_Numeric'].sum()
+                                    else:
+                                        current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
+                                    st.caption(f"Selected: ${current_total:,.0f}")
+                                else:
+                                    # Read-only view
+                                    if not df_display.empty:
+                                        df_readonly = df_display.copy()
+                                        
+                                        # Add Status column for read-only view too
+                                        if 'Deal ID' in df_readonly.columns:
+                                            df_readonly['Status'] = df_readonly['Deal ID'].apply(
+                                                lambda deal_id: get_planning_status(deal_id) if get_planning_status(deal_id) else '—'
+                                            )
+                                            display_readonly = ['Status'] + cols
+                                        else:
+                                            display_readonly = cols
+                                        
+                                        # Filter display_readonly to only columns that exist
+                                        display_readonly = [c for c in display_readonly if c in df_readonly.columns]
+                                        
+                                        st.dataframe(
+                                            df_readonly[display_readonly],
+                                            column_config={
+                                                "Status": st.column_config.TextColumn("Status", width="small"),
+                                                "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
+                                                "Deal ID": st.column_config.TextColumn("Deal ID", width="small"),
+                                                "Deal Name": st.column_config.TextColumn("Deal Name", width="medium"),
+                                                "Type": st.column_config.TextColumn("Type", width="small"),
+                                                "Close": st.column_config.TextColumn("Close Date", width="small"),
+                                                "PA Date": st.column_config.TextColumn("PA Date", width="small"),
+                                                "Amount_Numeric": st.column_config.NumberColumn("Raw $" if use_probability else "Amount ✓", format="$%d"),
+                                                "Prob_Amount_Numeric": st.column_config.NumberColumn("Prob $ ✓" if use_probability else "Prob $", format="$%d")
+                                            },
+                                            hide_index=True,
+                                            use_container_width=True
+                                        )
                                     export_buckets[key] = df
 
     # --- 5. CALCULATE RESULTS ---
