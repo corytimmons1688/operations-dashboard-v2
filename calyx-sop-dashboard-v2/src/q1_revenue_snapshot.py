@@ -3,6 +3,12 @@ Sales Forecasting Dashboard - Q1 2026 Version
 Reads from Google Sheets and displays gap-to-goal analysis with interactive visualizations
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
 
+VERSION 10 CHANGES:
+- Added search filter to Build Your Own Forecast sections
+- Search by Customer name for NetSuite orders
+- Search by Deal Name for HubSpot deals
+- Case-insensitive filtering without affecting selections or exports
+
 VERSION 9 CHANGES:
 - Extended All Reps All Pipelines data range from A:U to A:X
 - Added support for new column Q: "Primary Associated Company"
@@ -2403,6 +2409,28 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     if is_checked:
                         with st.expander(f"🔎 View Orders ({data['label']})"):
                             if not df.empty:
+                                # Search filter for deal/customer name
+                                search_key = f"search_ns_{key}_{rep_name}"
+                                search_term = st.text_input(
+                                    "🔍 Search by Customer",
+                                    key=search_key,
+                                    placeholder="Type to filter by customer name..."
+                                )
+                                
+                                # Filter dataframe based on search term
+                                df_filtered = df.copy()
+                                if search_term:
+                                    search_lower = search_term.lower()
+                                    if 'Customer' in df_filtered.columns:
+                                        df_filtered = df_filtered[df_filtered['Customer'].astype(str).str.lower().str.contains(search_lower, na=False)]
+                                    # Also check SO # for direct matches
+                                    elif 'SO #' in df.columns:
+                                        so_matches = df[df['SO #'].astype(str).str.lower().str.contains(search_lower, na=False)]
+                                        df_filtered = pd.concat([df_filtered, so_matches]).drop_duplicates()
+                                    
+                                    if df_filtered.empty:
+                                        st.info(f"No orders matching '{search_term}'")
+                                
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
                                 
                                 # Display Columns
@@ -2415,7 +2443,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 if 'Amount' in df.columns: display_cols.append('Amount')
                                 
                                 if enable_edit and display_cols:
-                                    df_edit = df.copy()
+                                    df_edit = df_filtered.copy()
                                     
                                     # Add Status column based on planning status
                                     if 'SO #' in df_edit.columns:
@@ -2527,7 +2555,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 else:
                                     # Read-only view
                                     if display_cols:
-                                        df_readonly = df.copy()
+                                        df_readonly = df_filtered.copy()
                                         
                                         # Add Status column for read-only view too
                                         if 'SO #' in df_readonly.columns:
@@ -2633,6 +2661,28 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     if is_checked:
                         with st.expander(f"🔎 View Deals ({data['label']})"):
                             if not df.empty:
+                                # Search filter for deal name
+                                search_key = f"search_hs_{key}_{rep_name}"
+                                search_term = st.text_input(
+                                    "🔍 Search by Deal Name",
+                                    key=search_key,
+                                    placeholder="Type to filter by deal name..."
+                                )
+                                
+                                # Filter dataframe based on search term
+                                df_filtered = df.copy()
+                                if search_term:
+                                    search_lower = search_term.lower()
+                                    if 'Deal Name' in df_filtered.columns:
+                                        df_filtered = df_filtered[df_filtered['Deal Name'].astype(str).str.lower().str.contains(search_lower, na=False)]
+                                    # Also check Deal ID for direct matches
+                                    elif 'Deal ID' in df.columns:
+                                        id_matches = df[df['Deal ID'].astype(str).str.lower().str.contains(search_lower, na=False)]
+                                        df_filtered = pd.concat([df_filtered, id_matches]).drop_duplicates()
+                                    
+                                    if df_filtered.empty:
+                                        st.info(f"No deals matching '{search_term}'")
+                                
                                 enable_edit = st.toggle("Customize", key=f"tgl_{key}_{rep_name}")
                                 
                                 # Dynamic columns based on probability mode
@@ -2644,11 +2694,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     cols = ['Link', 'Deal ID', 'Deal Name', 'Type', 'Close', 'PA Date', 'Amount_Numeric', 'Prob_Amount_Numeric']
                                     primary_amount_col = 'Amount_Numeric'
                                 
-                                # Filter cols to only those that exist in df
-                                cols = [c for c in cols if c in df.columns]
+                                # Filter cols to only those that exist in df_filtered
+                                cols = [c for c in cols if c in df_filtered.columns]
                                 
                                 if enable_edit:
-                                    df_edit = df.copy()
+                                    df_edit = df_filtered.copy()
                                     
                                     # Add Status column based on planning status
                                     if 'Deal ID' in df_edit.columns:
@@ -2765,7 +2815,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     st.caption(f"Selected: ${current_total:,.0f}")
                                 else:
                                     # Read-only view
-                                    df_readonly = df.copy()
+                                    df_readonly = df_filtered.copy()
                                     
                                     # Add Status column for read-only view too
                                     if 'Deal ID' in df_readonly.columns:
