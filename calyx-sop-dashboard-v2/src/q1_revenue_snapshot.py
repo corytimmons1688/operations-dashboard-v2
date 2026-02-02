@@ -7,11 +7,11 @@ VERSION 10 CHANGES:
 - Added search filter to Build Your Own Forecast sections
 - Search by Customer name for NetSuite orders
 - Search by Deal Name for HubSpot deals
-- Case-insensitive filtering without affecting selections or exports
-- Fixed buggy Customize UI - replaced data_editor checkboxes with reliable multiselect
-- New exclusion-based approach: select deals to EXCLUDE rather than include
-- Shows real-time included/excluded totals
+- Fixed buggy Customize UI with clean individual checkboxes per row
+- Each deal/order has its own checkbox - click to include/exclude
+- Excluded items show strikethrough amounts
 - Include All / Exclude All quick action buttons
+- Real-time included/excluded totals
 
 VERSION 9 CHANGES:
 - Extended All Reps All Pipelines data range from A:U to A:X
@@ -2449,113 +2449,86 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 if enable_edit and display_cols:
                                     df_edit = df_filtered.copy()
                                     
-                                    # Add Status column based on planning status
-                                    if 'SO #' in df_edit.columns:
-                                        df_edit['Status'] = df_edit['SO #'].apply(
-                                            lambda so: get_planning_status(so) if get_planning_status(so) else '—'
-                                        )
-                                        # Add Notes column
-                                        df_edit['Notes'] = df_edit['SO #'].apply(
-                                            lambda so: get_planning_notes(so)
-                                        )
-                                    
                                     # Determine ID column for matching
                                     id_col = 'SO #' if 'SO #' in df_edit.columns else 'Deal ID'
                                     
-                                    # Initialize excluded items in session state
-                                    excluded_key = f"excluded_{key}_{rep_name}"
-                                    if excluded_key not in st.session_state:
-                                        st.session_state[excluded_key] = []
+                                    # Initialize included items in session state (default: all included)
+                                    included_key = f"included_{key}_{rep_name}"
+                                    if included_key not in st.session_state:
+                                        if id_col in df_edit.columns:
+                                            st.session_state[included_key] = set(df_edit[id_col].astype(str).tolist())
+                                        else:
+                                            st.session_state[included_key] = set()
                                     
-                                    # Build options list with labels: "SO# - Customer - $Amount"
                                     if id_col in df_edit.columns:
-                                        options_data = []
-                                        for _, row in df_edit.iterrows():
-                                            item_id = str(row[id_col])
-                                            customer = row.get('Customer', 'Unknown')
-                                            amount = row.get('Amount_Numeric', 0)
-                                            label = f"{item_id} - {customer} - ${amount:,.0f}"
-                                            options_data.append((item_id, label))
-                                        
-                                        all_ids = [x[0] for x in options_data]
-                                        id_to_label = {x[0]: x[1] for x in options_data}
-                                        label_to_id = {x[1]: x[0] for x in options_data}
-                                        all_labels = [x[1] for x in options_data]
+                                        all_ids = set(df_edit[id_col].astype(str).tolist())
                                         
                                         # Quick action buttons
                                         btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
                                         with btn_col1:
                                             if st.button("☑️ Include All", key=f"inc_all_{key}_{rep_name}"):
-                                                st.session_state[excluded_key] = []
+                                                st.session_state[included_key] = all_ids.copy()
                                                 st.rerun()
                                         with btn_col2:
                                             if st.button("☐ Exclude All", key=f"exc_all_{key}_{rep_name}"):
-                                                st.session_state[excluded_key] = all_ids.copy()
+                                                st.session_state[included_key] = set()
                                                 st.rerun()
                                         
-                                        # Convert stored IDs to labels for the multiselect
-                                        current_excluded_labels = [id_to_label[id] for id in st.session_state[excluded_key] if id in id_to_label]
+                                        # Display each row with a checkbox
+                                        st.markdown("---")
                                         
-                                        # Multiselect for items to EXCLUDE
-                                        excluded_labels = st.multiselect(
-                                            "Select items to EXCLUDE from forecast:",
-                                            options=all_labels,
-                                            default=current_excluded_labels,
-                                            key=f"ms_{key}_{rep_name}",
-                                            help="Items selected here will NOT be included in your forecast total"
-                                        )
+                                        for idx, row in df_edit.iterrows():
+                                            item_id = str(row[id_col])
+                                            customer = row.get('Customer', 'Unknown')
+                                            amount = row.get('Amount_Numeric', 0)
+                                            ship_date = row.get('Ship Date', '')
+                                            order_type = row.get('Type', '')
+                                            link = row.get('Link', '')
+                                            
+                                            # Check if currently included
+                                            is_included = item_id in st.session_state[included_key]
+                                            
+                                            # Create row with checkbox
+                                            col_chk, col_info, col_amt = st.columns([0.5, 4, 1.5])
+                                            
+                                            with col_chk:
+                                                new_state = st.checkbox(
+                                                    "inc",
+                                                    value=is_included,
+                                                    key=f"chk_{key}_{item_id}_{rep_name}",
+                                                    label_visibility="collapsed"
+                                                )
+                                                # Update state
+                                                if new_state and item_id not in st.session_state[included_key]:
+                                                    st.session_state[included_key].add(item_id)
+                                                elif not new_state and item_id in st.session_state[included_key]:
+                                                    st.session_state[included_key].discard(item_id)
+                                            
+                                            with col_info:
+                                                if link:
+                                                    st.markdown(f"**[{item_id}]({link})** · {customer} · {order_type} · {ship_date}")
+                                                else:
+                                                    st.markdown(f"**{item_id}** · {customer} · {order_type} · {ship_date}")
+                                            
+                                            with col_amt:
+                                                if item_id in st.session_state[included_key]:
+                                                    st.markdown(f"**${amount:,.0f}**")
+                                                else:
+                                                    st.markdown(f"~~${amount:,.0f}~~")
                                         
-                                        # Convert labels back to IDs and update session state
-                                        excluded_ids = [label_to_id[label] for label in excluded_labels]
-                                        st.session_state[excluded_key] = excluded_ids
-                                        
-                                        # Calculate included vs excluded
-                                        included_ids = [id for id in all_ids if id not in excluded_ids]
-                                        
-                                        # Add visual indicator column
-                                        df_edit['Include'] = df_edit[id_col].apply(
-                                            lambda x: '✅' if str(x) in included_ids else '❌'
-                                        )
-                                        
-                                        # Reorder columns for display
-                                        display_with_status = ['Include']
-                                        if 'Status' in df_edit.columns:
-                                            display_with_status.append('Status')
-                                        display_with_status.extend(display_cols)
-                                        display_with_status = [c for c in display_with_status if c in df_edit.columns]
-                                        
-                                        # Show the dataframe (read-only)
-                                        st.dataframe(
-                                            df_edit[display_with_status],
-                                            column_config={
-                                                "Include": st.column_config.TextColumn("✓", width="small"),
-                                                "Status": st.column_config.TextColumn("Status", width="small"),
-                                                "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
-                                                "SO #": st.column_config.TextColumn("SO #", width="small"),
-                                                "Type": st.column_config.TextColumn("Type", width="small"),
-                                                "Customer": st.column_config.TextColumn("Customer", width="medium"),
-                                                "Ship Date": st.column_config.TextColumn("Ship Date", width="small"),
-                                                "Amount": st.column_config.NumberColumn("Amount", format="$%d")
-                                            },
-                                            hide_index=True,
-                                            use_container_width=True
-                                        )
+                                        st.markdown("---")
                                         
                                         # Filter to only included rows for export
+                                        included_ids = st.session_state[included_key]
                                         selected_mask = df[id_col].astype(str).isin(included_ids)
                                         selected_rows = df[selected_mask].copy()
-                                        
-                                        # Add Status and Notes columns to export data
-                                        if 'SO #' in selected_rows.columns:
-                                            selected_rows['Status'] = selected_rows['SO #'].apply(get_planning_status)
-                                            selected_rows['Notes'] = selected_rows['SO #'].apply(get_planning_notes)
                                         
                                         export_buckets[key] = selected_rows
                                         
                                         current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
-                                        excluded_total = df_edit[df_edit[id_col].astype(str).isin(excluded_ids)]['Amount_Numeric'].sum() if 'Amount_Numeric' in df_edit.columns else 0
+                                        excluded_total = df_edit[~df_edit[id_col].astype(str).isin(included_ids)]['Amount_Numeric'].sum() if 'Amount_Numeric' in df_edit.columns else 0
                                         
-                                        st.markdown(f"**Included: ${current_total:,.0f}** · Excluded: ${excluded_total:,.0f}")
+                                        st.success(f"**Included: ${current_total:,.0f}** · Excluded: ${excluded_total:,.0f}")
                                     else:
                                         st.warning("Cannot customize - missing ID column")
                                         export_buckets[key] = df
@@ -2707,123 +2680,94 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 if enable_edit:
                                     df_edit = df_filtered.copy()
                                     
-                                    # Add Status column based on planning status
-                                    if 'Deal ID' in df_edit.columns:
-                                        df_edit['Status'] = df_edit['Deal ID'].apply(
-                                            lambda deal_id: get_planning_status(deal_id) if get_planning_status(deal_id) else '—'
-                                        )
-                                        # Add Notes column
-                                        df_edit['Notes'] = df_edit['Deal ID'].apply(
-                                            lambda deal_id: get_planning_notes(deal_id)
-                                        )
-                                    
                                     # Determine ID column for matching
                                     id_col = 'Deal ID' if 'Deal ID' in df_edit.columns else 'SO #'
-                                    
-                                    # Initialize excluded items in session state
-                                    excluded_key = f"excluded_{key}_{rep_name}"
-                                    if excluded_key not in st.session_state:
-                                        st.session_state[excluded_key] = []
                                     
                                     # Determine which amount to show based on probability mode
                                     amount_col = 'Prob_Amount_Numeric' if use_probability else 'Amount_Numeric'
                                     
-                                    # Build options list with labels: "Deal Name - $Amount"
+                                    # Initialize included items in session state (default: all included)
+                                    included_key = f"included_{key}_{rep_name}"
+                                    if included_key not in st.session_state:
+                                        if id_col in df_edit.columns:
+                                            st.session_state[included_key] = set(df_edit[id_col].astype(str).tolist())
+                                        else:
+                                            st.session_state[included_key] = set()
+                                    
                                     if id_col in df_edit.columns:
-                                        options_data = []
-                                        for _, row in df_edit.iterrows():
-                                            item_id = str(row[id_col])
-                                            deal_name = row.get('Deal Name', 'Unknown')
-                                            amount = row.get(amount_col, row.get('Amount_Numeric', 0))
-                                            label = f"{deal_name} - ${amount:,.0f}"
-                                            options_data.append((item_id, label))
-                                        
-                                        all_ids = [x[0] for x in options_data]
-                                        id_to_label = {x[0]: x[1] for x in options_data}
-                                        label_to_id = {x[1]: x[0] for x in options_data}
-                                        all_labels = [x[1] for x in options_data]
+                                        all_ids = set(df_edit[id_col].astype(str).tolist())
                                         
                                         # Quick action buttons
                                         btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
                                         with btn_col1:
                                             if st.button("☑️ Include All", key=f"inc_all_{key}_{rep_name}"):
-                                                st.session_state[excluded_key] = []
+                                                st.session_state[included_key] = all_ids.copy()
                                                 st.rerun()
                                         with btn_col2:
                                             if st.button("☐ Exclude All", key=f"exc_all_{key}_{rep_name}"):
-                                                st.session_state[excluded_key] = all_ids.copy()
+                                                st.session_state[included_key] = set()
                                                 st.rerun()
                                         
-                                        # Convert stored IDs to labels for the multiselect
-                                        current_excluded_labels = [id_to_label[id] for id in st.session_state[excluded_key] if id in id_to_label]
+                                        # Display each row with a checkbox
+                                        st.markdown("---")
                                         
-                                        # Multiselect for items to EXCLUDE
-                                        excluded_labels = st.multiselect(
-                                            "Select deals to EXCLUDE from forecast:",
-                                            options=all_labels,
-                                            default=current_excluded_labels,
-                                            key=f"ms_{key}_{rep_name}",
-                                            help="Deals selected here will NOT be included in your forecast total"
-                                        )
+                                        for idx, row in df_edit.iterrows():
+                                            item_id = str(row[id_col])
+                                            deal_name = row.get('Deal Name', 'Unknown')
+                                            amount = row.get(amount_col, row.get('Amount_Numeric', 0))
+                                            close_date = row.get('Close', '')
+                                            deal_type = row.get('Type', '')
+                                            link = row.get('Link', '')
+                                            
+                                            # Check if currently included
+                                            is_included = item_id in st.session_state[included_key]
+                                            
+                                            # Create row with checkbox
+                                            col_chk, col_info, col_amt = st.columns([0.5, 4, 1.5])
+                                            
+                                            with col_chk:
+                                                new_state = st.checkbox(
+                                                    "inc",
+                                                    value=is_included,
+                                                    key=f"chk_{key}_{item_id}_{rep_name}",
+                                                    label_visibility="collapsed"
+                                                )
+                                                # Update state
+                                                if new_state and item_id not in st.session_state[included_key]:
+                                                    st.session_state[included_key].add(item_id)
+                                                elif not new_state and item_id in st.session_state[included_key]:
+                                                    st.session_state[included_key].discard(item_id)
+                                            
+                                            with col_info:
+                                                if link:
+                                                    st.markdown(f"**[{deal_name}]({link})** · {deal_type} · {close_date}")
+                                                else:
+                                                    st.markdown(f"**{deal_name}** · {deal_type} · {close_date}")
+                                            
+                                            with col_amt:
+                                                if item_id in st.session_state[included_key]:
+                                                    st.markdown(f"**${amount:,.0f}**")
+                                                else:
+                                                    st.markdown(f"~~${amount:,.0f}~~")
                                         
-                                        # Convert labels back to IDs and update session state
-                                        excluded_ids = [label_to_id[label] for label in excluded_labels]
-                                        st.session_state[excluded_key] = excluded_ids
-                                        
-                                        # Calculate included vs excluded
-                                        included_ids = [id for id in all_ids if id not in excluded_ids]
-                                        
-                                        # Add visual indicator column
-                                        df_edit['Include'] = df_edit[id_col].apply(
-                                            lambda x: '✅' if str(x) in included_ids else '❌'
-                                        )
-                                        
-                                        # Reorder columns for display
-                                        display_with_status = ['Include']
-                                        if 'Status' in df_edit.columns:
-                                            display_with_status.append('Status')
-                                        display_with_status.extend(cols)
-                                        display_with_status = [c for c in display_with_status if c in df_edit.columns]
-                                        
-                                        # Show the dataframe (read-only)
-                                        st.dataframe(
-                                            df_edit[display_with_status],
-                                            column_config={
-                                                "Include": st.column_config.TextColumn("✓", width="small"),
-                                                "Status": st.column_config.TextColumn("Status", width="small"),
-                                                "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
-                                                "Deal ID": st.column_config.TextColumn("Deal ID", width="small"),
-                                                "Deal Name": st.column_config.TextColumn("Deal Name", width="medium"),
-                                                "Type": st.column_config.TextColumn("Type", width="small"),
-                                                "Close": st.column_config.TextColumn("Close Date", width="small"),
-                                                "PA Date": st.column_config.TextColumn("PA Date", width="small"),
-                                                "Amount_Numeric": st.column_config.NumberColumn("Raw $" if use_probability else "Amount ✓", format="$%d"),
-                                                "Prob_Amount_Numeric": st.column_config.NumberColumn("Prob $ ✓" if use_probability else "Prob $", format="$%d")
-                                            },
-                                            hide_index=True,
-                                            use_container_width=True
-                                        )
+                                        st.markdown("---")
                                         
                                         # Filter to only included rows for export
+                                        included_ids = st.session_state[included_key]
                                         selected_mask = df[id_col].astype(str).isin(included_ids)
                                         selected_rows = df[selected_mask].copy()
-                                        
-                                        # Add Status and Notes columns to export data
-                                        if 'Deal ID' in selected_rows.columns:
-                                            selected_rows['Status'] = selected_rows['Deal ID'].apply(get_planning_status)
-                                            selected_rows['Notes'] = selected_rows['Deal ID'].apply(get_planning_notes)
                                         
                                         export_buckets[key] = selected_rows
                                         
                                         # Use the appropriate amount column based on toggle
                                         if use_probability and 'Prob_Amount_Numeric' in selected_rows.columns:
                                             current_total = selected_rows['Prob_Amount_Numeric'].sum()
-                                            excluded_total = df_edit[df_edit[id_col].astype(str).isin(excluded_ids)]['Prob_Amount_Numeric'].sum() if 'Prob_Amount_Numeric' in df_edit.columns else 0
+                                            excluded_total = df_edit[~df_edit[id_col].astype(str).isin(included_ids)]['Prob_Amount_Numeric'].sum() if 'Prob_Amount_Numeric' in df_edit.columns else 0
                                         else:
                                             current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
-                                            excluded_total = df_edit[df_edit[id_col].astype(str).isin(excluded_ids)]['Amount_Numeric'].sum() if 'Amount_Numeric' in df_edit.columns else 0
+                                            excluded_total = df_edit[~df_edit[id_col].astype(str).isin(included_ids)]['Amount_Numeric'].sum() if 'Amount_Numeric' in df_edit.columns else 0
                                         
-                                        st.markdown(f"**Included: ${current_total:,.0f}** · Excluded: ${excluded_total:,.0f}")
+                                        st.success(f"**Included: ${current_total:,.0f}** · Excluded: ${excluded_total:,.0f}")
                                     else:
                                         st.warning("Cannot customize - missing ID column")
                                         export_buckets[key] = df
