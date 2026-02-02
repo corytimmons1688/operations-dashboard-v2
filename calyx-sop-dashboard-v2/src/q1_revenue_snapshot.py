@@ -2456,19 +2456,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     id_col = 'SO #' if 'SO #' in df_edit.columns else 'Deal ID'
                                     editor_key = f"edit_{key}_{rep_name}"
                                     
-                                    # Check if we have existing selections in session state from data_editor
-                                    # If editor state exists, use those values; otherwise default all to True
-                                    if editor_key in st.session_state and 'edited_rows' in st.session_state[editor_key]:
-                                        # Get existing edits from data_editor's state
-                                        edited_rows = st.session_state[editor_key].get('edited_rows', {})
-                                        df_edit['Select'] = True
-                                        for row_idx_str, changes in edited_rows.items():
-                                            if 'Select' in changes:
-                                                row_idx = int(row_idx_str)
-                                                if row_idx < len(df_edit):
-                                                    df_edit.iloc[row_idx, df_edit.columns.get_loc('Select')] = changes['Select']
-                                    else:
-                                        df_edit['Select'] = True
+                                    # Initialize Select column - data_editor will persist changes via its key
+                                    df_edit['Select'] = True
                                     
                                     # Reorder columns
                                     display_with_status = ['Select']
@@ -2478,8 +2467,9 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                         display_with_status.append('Notes')
                                     display_with_status.extend(display_cols)
                                     
+                                    # Use on_change to force state persistence
                                     edited = st.data_editor(
-                                        df_edit[display_with_status],
+                                        df_edit[display_with_status].reset_index(drop=True),
                                         column_config={
                                             "Select": st.column_config.CheckboxColumn("✓", width="small"),
                                             "Status": st.column_config.SelectboxColumn(
@@ -2498,7 +2488,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                         disabled=[c for c in display_with_status if c not in ['Select', 'Status', 'Notes']],
                                         hide_index=True,
                                         key=editor_key,
-                                        num_rows="fixed"
+                                        num_rows="fixed",
+                                        use_container_width=True
                                     )
                                     
                                     # Update planning status and notes from edited data
@@ -2511,17 +2502,23 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                                 if status != '—':
                                                     update_planning_data(so_num, status=status, notes=notes)
                                     
-                                    # Capture selected rows for export (from FULL df, not filtered)
-                                    selected_ids = edited[edited['Select']][id_col].astype(str).tolist() if id_col in edited.columns else []
-                                    selected_rows = df[df[id_col].astype(str).isin(selected_ids)].copy() if id_col in df.columns else df.copy()
+                                    # Get selected rows directly from edited result
+                                    selected_rows = edited[edited['Select']].copy()
                                     
-                                    if 'SO #' in selected_rows.columns:
-                                        selected_rows['Status'] = selected_rows['SO #'].apply(get_planning_status)
-                                        selected_rows['Notes'] = selected_rows['SO #'].apply(get_planning_notes)
+                                    # Match back to original df to get all columns
+                                    if id_col in selected_rows.columns and id_col in df.columns:
+                                        selected_ids = selected_rows[id_col].astype(str).tolist()
+                                        export_rows = df[df[id_col].astype(str).isin(selected_ids)].copy()
+                                    else:
+                                        export_rows = df.copy()
                                     
-                                    export_buckets[key] = selected_rows
+                                    if 'SO #' in export_rows.columns:
+                                        export_rows['Status'] = export_rows['SO #'].apply(get_planning_status)
+                                        export_rows['Notes'] = export_rows['SO #'].apply(get_planning_notes)
                                     
-                                    current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
+                                    export_buckets[key] = export_rows
+                                    
+                                    current_total = export_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in export_rows.columns else 0
                                     st.caption(f"Selected: ${current_total:,.0f}")
                                 else:
                                     # Read-only view
@@ -2681,17 +2678,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     id_col = 'Deal ID' if 'Deal ID' in df_edit.columns else 'SO #'
                                     editor_key = f"edit_{key}_{rep_name}"
                                     
-                                    # Check if we have existing selections in session state from data_editor
-                                    if editor_key in st.session_state and 'edited_rows' in st.session_state[editor_key]:
-                                        edited_rows = st.session_state[editor_key].get('edited_rows', {})
-                                        df_edit['Select'] = True
-                                        for row_idx_str, changes in edited_rows.items():
-                                            if 'Select' in changes:
-                                                row_idx = int(row_idx_str)
-                                                if row_idx < len(df_edit):
-                                                    df_edit.iloc[row_idx, df_edit.columns.get_loc('Select')] = changes['Select']
-                                    else:
-                                        df_edit['Select'] = True
+                                    # Initialize Select column - data_editor will persist changes via its key
+                                    df_edit['Select'] = True
                                     
                                     # Reorder columns
                                     display_with_status = ['Select']
@@ -2702,7 +2690,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                     display_with_status.extend(cols)
                                     
                                     edited = st.data_editor(
-                                        df_edit[display_with_status],
+                                        df_edit[display_with_status].reset_index(drop=True),
                                         column_config={
                                             "Select": st.column_config.CheckboxColumn("✓", width="small"),
                                             "Status": st.column_config.SelectboxColumn(
@@ -2724,7 +2712,8 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                         disabled=[c for c in display_with_status if c not in ['Select', 'Status', 'Notes']],
                                         hide_index=True,
                                         key=editor_key,
-                                        num_rows="fixed"
+                                        num_rows="fixed",
+                                        use_container_width=True
                                     )
                                     
                                     # Update planning status and notes from edited data
@@ -2737,20 +2726,26 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                                 if status != '—':
                                                     update_planning_data(deal_id, status=status, notes=notes)
                                     
-                                    # Capture selected rows for export (from FULL df, not filtered)
-                                    selected_ids = edited[edited['Select']][id_col].astype(str).tolist() if id_col in edited.columns else []
-                                    selected_rows = df[df[id_col].astype(str).isin(selected_ids)].copy() if id_col in df.columns else df.copy()
+                                    # Get selected rows directly from edited result
+                                    selected_rows = edited[edited['Select']].copy()
                                     
-                                    if 'Deal ID' in selected_rows.columns:
-                                        selected_rows['Status'] = selected_rows['Deal ID'].apply(get_planning_status)
-                                        selected_rows['Notes'] = selected_rows['Deal ID'].apply(get_planning_notes)
-                                    
-                                    export_buckets[key] = selected_rows
-                                    
-                                    if use_probability and 'Prob_Amount_Numeric' in selected_rows.columns:
-                                        current_total = selected_rows['Prob_Amount_Numeric'].sum()
+                                    # Match back to original df to get all columns
+                                    if id_col in selected_rows.columns and id_col in df.columns:
+                                        selected_ids = selected_rows[id_col].astype(str).tolist()
+                                        export_rows = df[df[id_col].astype(str).isin(selected_ids)].copy()
                                     else:
-                                        current_total = selected_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in selected_rows.columns else 0
+                                        export_rows = df.copy()
+                                    
+                                    if 'Deal ID' in export_rows.columns:
+                                        export_rows['Status'] = export_rows['Deal ID'].apply(get_planning_status)
+                                        export_rows['Notes'] = export_rows['Deal ID'].apply(get_planning_notes)
+                                    
+                                    export_buckets[key] = export_rows
+                                    
+                                    if use_probability and 'Prob_Amount_Numeric' in export_rows.columns:
+                                        current_total = export_rows['Prob_Amount_Numeric'].sum()
+                                    else:
+                                        current_total = export_rows['Amount_Numeric'].sum() if 'Amount_Numeric' in export_rows.columns else 0
                                     st.caption(f"Selected: ${current_total:,.0f}")
                                 else:
                                     # Read-only view
