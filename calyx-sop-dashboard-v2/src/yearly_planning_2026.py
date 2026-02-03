@@ -6751,7 +6751,7 @@ def render_yearly_planning_2026():
     """, unsafe_allow_html=True)
     
     # Navigation tabs
-    tab1, tab2, tab3 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool", "🔄 SKU Order History"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool", "🔄 SKU Order History", "📊 Period Comparison"])
     
     with tab1:
         render_qbr_generator_content()
@@ -6761,6 +6761,9 @@ def render_yearly_planning_2026():
     
     with tab3:
         render_sku_order_history_tool()
+    
+    with tab4:
+        render_period_comparison_tool()
 
 
 def render_sku_order_history_tool():
@@ -10964,6 +10967,1187 @@ def render_calyx_cure_forecast_section(deals_line_items_df, sales_order_line_ite
                 st.dataframe(deals_detail_df, use_container_width=True, hide_index=True)
             else:
                 st.info("No pipeline deals found for Calyx Cure SKUs.")
+
+
+# =============================================================================
+# PERIOD COMPARISON TOOL
+# Company-wide period-over-period analysis with executive narrative
+# =============================================================================
+
+def generate_executive_narrative(period1_data, period2_data, period1_label, period2_label):
+    """
+    Generate a conversational executive narrative explaining period-over-period differences.
+    Written as if talking directly to the CEO about what the data shows.
+    """
+    
+    # Extract key metrics
+    p1_revenue = period1_data.get('total_revenue', 0)
+    p2_revenue = period2_data.get('total_revenue', 0)
+    revenue_change = p2_revenue - p1_revenue
+    revenue_change_pct = (revenue_change / p1_revenue * 100) if p1_revenue > 0 else 0
+    
+    p1_orders = period1_data.get('order_count', 0)
+    p2_orders = period2_data.get('order_count', 0)
+    order_change = p2_orders - p1_orders
+    
+    p1_customers = period1_data.get('customer_count', 0)
+    p2_customers = period2_data.get('customer_count', 0)
+    
+    # Category analysis
+    p1_categories = period1_data.get('category_breakdown', {})
+    p2_categories = period2_data.get('category_breakdown', {})
+    
+    # Customer analysis
+    p1_customer_revenue = period1_data.get('customer_revenue', {})
+    p2_customer_revenue = period2_data.get('customer_revenue', {})
+    
+    # Churned customers (were in period 1, not in period 2)
+    churned_customers = set(p1_customer_revenue.keys()) - set(p2_customer_revenue.keys())
+    churned_revenue = sum(p1_customer_revenue.get(c, 0) for c in churned_customers)
+    
+    # New customers (in period 2, not in period 1)
+    new_customers = set(p2_customer_revenue.keys()) - set(p1_customer_revenue.keys())
+    new_revenue = sum(p2_customer_revenue.get(c, 0) for c in new_customers)
+    
+    # Decreased customers (in both, but spending less)
+    common_customers = set(p1_customer_revenue.keys()) & set(p2_customer_revenue.keys())
+    decreased_customers = []
+    for c in common_customers:
+        p1_val = p1_customer_revenue.get(c, 0)
+        p2_val = p2_customer_revenue.get(c, 0)
+        if p2_val < p1_val and p1_val > 0:
+            decrease_pct = ((p1_val - p2_val) / p1_val * 100)
+            decreased_customers.append({
+                'name': c,
+                'p1_revenue': p1_val,
+                'p2_revenue': p2_val,
+                'decrease': p1_val - p2_val,
+                'decrease_pct': decrease_pct
+            })
+    decreased_customers = sorted(decreased_customers, key=lambda x: x['decrease'], reverse=True)
+    
+    # Increased customers
+    increased_customers = []
+    for c in common_customers:
+        p1_val = p1_customer_revenue.get(c, 0)
+        p2_val = p2_customer_revenue.get(c, 0)
+        if p2_val > p1_val:
+            increase_pct = ((p2_val - p1_val) / p1_val * 100) if p1_val > 0 else 100
+            increased_customers.append({
+                'name': c,
+                'p1_revenue': p1_val,
+                'p2_revenue': p2_val,
+                'increase': p2_val - p1_val,
+                'increase_pct': increase_pct
+            })
+    increased_customers = sorted(increased_customers, key=lambda x: x['increase'], reverse=True)
+    
+    # Category shifts
+    category_changes = []
+    all_categories = set(p1_categories.keys()) | set(p2_categories.keys())
+    for cat in all_categories:
+        p1_val = p1_categories.get(cat, 0)
+        p2_val = p2_categories.get(cat, 0)
+        p1_pct = (p1_val / p1_revenue * 100) if p1_revenue > 0 else 0
+        p2_pct = (p2_val / p2_revenue * 100) if p2_revenue > 0 else 0
+        change = p2_val - p1_val
+        if abs(change) > 1000:  # Only include significant changes
+            category_changes.append({
+                'category': cat,
+                'p1_revenue': p1_val,
+                'p2_revenue': p2_val,
+                'p1_pct': p1_pct,
+                'p2_pct': p2_pct,
+                'change': change,
+                'pct_change': ((change / p1_val * 100) if p1_val > 0 else (100 if p2_val > 0 else 0))
+            })
+    category_changes = sorted(category_changes, key=lambda x: abs(x['change']), reverse=True)
+    
+    # ===== BUILD THE NARRATIVE =====
+    narrative_parts = []
+    
+    # Opening summary
+    if revenue_change >= 0:
+        direction = "up"
+        trend_emoji = "📈"
+    else:
+        direction = "down"
+        trend_emoji = "📉"
+    
+    narrative_parts.append(f"""
+    <div class="narrative-section opening">
+        <h3>{trend_emoji} The Bottom Line</h3>
+        <p>
+            Looking at {period2_label} compared to {period1_label}, we're <strong>{direction} ${abs(revenue_change):,.0f}</strong> 
+            ({'+' if revenue_change >= 0 else ''}{revenue_change_pct:.1f}%). We went from ${p1_revenue:,.0f} to ${p2_revenue:,.0f}.
+            {"This is solid progress." if revenue_change > 0 else "Let me walk you through what's driving this."}
+        </p>
+    </div>
+    """)
+    
+    # Explain the gap (if negative)
+    if revenue_change < 0:
+        gap_explained = 0
+        explanation_parts = []
+        
+        # Category impact analysis
+        declining_categories = [c for c in category_changes if c['change'] < 0]
+        if declining_categories:
+            top_cat = declining_categories[0]
+            cat_impact_pct = (abs(top_cat['change']) / abs(revenue_change) * 100) if revenue_change != 0 else 0
+            gap_explained += abs(top_cat['change'])
+            
+            explanation_parts.append(f"""
+                <div class="insight-card red">
+                    <div class="insight-icon">🔬</div>
+                    <div class="insight-content">
+                        <strong>{top_cat['category']}</strong> is our biggest category shift. It went from {top_cat['p1_pct']:.1f}% 
+                        of our business (${top_cat['p1_revenue']:,.0f}) down to {top_cat['p2_pct']:.1f}% (${top_cat['p2_revenue']:,.0f}). 
+                        That's ${abs(top_cat['change']):,.0f} of our gap, which explains <strong>{min(cat_impact_pct, 100):.0f}%</strong> of what we're seeing.
+                    </div>
+                </div>
+            """)
+        
+        # Customer churn impact
+        if churned_revenue > 0 and churned_customers:
+            churn_impact_pct = (churned_revenue / abs(revenue_change) * 100) if revenue_change != 0 else 0
+            top_churned = sorted([(c, p1_customer_revenue.get(c, 0)) for c in churned_customers], 
+                                key=lambda x: x[1], reverse=True)[:3]
+            churned_names = ", ".join([f"{c[0]} (${c[1]:,.0f})" for c in top_churned])
+            
+            explanation_parts.append(f"""
+                <div class="insight-card orange">
+                    <div class="insight-icon">👋</div>
+                    <div class="insight-content">
+                        We had <strong>{len(churned_customers)} customers</strong> from {period1_label} that didn't order in {period2_label}. 
+                        That's ${churned_revenue:,.0f} in lost business. Top ones: {churned_names}.
+                    </div>
+                </div>
+            """)
+        
+        # Decreased customer impact
+        if decreased_customers:
+            top_decreased = decreased_customers[:3]
+            total_decrease = sum(d['decrease'] for d in decreased_customers)
+            
+            decrease_details = []
+            for d in top_decreased:
+                decrease_details.append(f"{d['name']} went from ${d['p1_revenue']:,.0f} to ${d['p2_revenue']:,.0f} (-{d['decrease_pct']:.0f}%)")
+            
+            explanation_parts.append(f"""
+                <div class="insight-card yellow">
+                    <div class="insight-icon">📉</div>
+                    <div class="insight-content">
+                        <strong>{len(decreased_customers)} existing customers</strong> decreased their spending, 
+                        totaling ${total_decrease:,.0f} less than {period1_label}.<br><br>
+                        The biggest movers: {'; '.join(decrease_details)}.
+                    </div>
+                </div>
+            """)
+        
+        narrative_parts.append(f"""
+        <div class="narrative-section explanation">
+            <h3>🔍 What's Driving This?</h3>
+            <p>
+                The shortfall isn't some mystery we need to solve. The data tells a clear story:
+            </p>
+            {''.join(explanation_parts)}
+        </div>
+        """)
+    
+    # Positive contributors (even in a down period)
+    positive_parts = []
+    
+    if new_customers and new_revenue > 0:
+        top_new = sorted([(c, p2_customer_revenue.get(c, 0)) for c in new_customers], 
+                        key=lambda x: x[1], reverse=True)[:3]
+        new_names = ", ".join([f"{c[0]} (${c[1]:,.0f})" for c in top_new])
+        
+        positive_parts.append(f"""
+            <div class="insight-card green">
+                <div class="insight-icon">🌟</div>
+                <div class="insight-content">
+                    We brought in <strong>{len(new_customers)} new customers</strong> generating ${new_revenue:,.0f}. 
+                    Welcome: {new_names}.
+                </div>
+            </div>
+        """)
+    
+    if increased_customers:
+        top_increased = increased_customers[:3]
+        total_increase = sum(i['increase'] for i in increased_customers)
+        
+        increase_details = []
+        for i in top_increased:
+            increase_details.append(f"{i['name']} grew from ${i['p1_revenue']:,.0f} to ${i['p2_revenue']:,.0f} (+{i['increase_pct']:.0f}%)")
+        
+        positive_parts.append(f"""
+            <div class="insight-card green">
+                <div class="insight-icon">📈</div>
+                <div class="insight-content">
+                    <strong>{len(increased_customers)} customers increased spending</strong>, adding ${total_increase:,.0f}.<br><br>
+                    Growth leaders: {'; '.join(increase_details)}.
+                </div>
+            </div>
+        """)
+    
+    # Growing categories
+    growing_categories = [c for c in category_changes if c['change'] > 0]
+    if growing_categories:
+        top_growing = growing_categories[:2]
+        growth_details = []
+        for g in top_growing:
+            growth_details.append(f"{g['category']} grew {g['pct_change']:.0f}% (${g['p1_revenue']:,.0f} → ${g['p2_revenue']:,.0f})")
+        
+        positive_parts.append(f"""
+            <div class="insight-card blue">
+                <div class="insight-icon">🚀</div>
+                <div class="insight-content">
+                    Growing product categories: {'; '.join(growth_details)}.
+                </div>
+            </div>
+        """)
+    
+    if positive_parts:
+        narrative_parts.append(f"""
+        <div class="narrative-section positive">
+            <h3>✅ What's Working</h3>
+            {''.join(positive_parts)}
+        </div>
+        """)
+    
+    # Strategic recommendations
+    recommendations = []
+    
+    # Category-based recommendations
+    if declining_categories:
+        top_decline = declining_categories[0]
+        if 'Concentrate' in top_decline['category']:
+            recommendations.append(f"""
+                <li><strong>Concentrate Supply:</strong> {top_decline['category']} is down significantly. 
+                We need to focus on finding a supplier with domestic inventory to help recover this business. 
+                This isn't about sales execution - it's a supply chain opportunity.</li>
+            """)
+        else:
+            recommendations.append(f"""
+                <li><strong>{top_decline['category']} Focus:</strong> This category dropped from {top_decline['p1_pct']:.1f}% 
+                to {top_decline['p2_pct']:.1f}% of our mix. Worth investigating if this is market-driven or if there's 
+                an opportunity to win it back.</li>
+            """)
+    
+    # Customer-based recommendations
+    if decreased_customers and len(decreased_customers) >= 3:
+        recommendations.append(f"""
+            <li><strong>Key Account Review:</strong> Our top {min(5, len(decreased_customers))} customers with decreased 
+            spending represent a combined ${sum(d['decrease'] for d in decreased_customers[:5]):,.0f} opportunity. 
+            Schedule QBRs to understand their changing needs.</li>
+        """)
+    
+    # Growth opportunity
+    if increased_customers:
+        avg_increase = sum(i['increase'] for i in increased_customers) / len(increased_customers)
+        recommendations.append(f"""
+            <li><strong>Scale What's Working:</strong> We have {len(increased_customers)} accounts growing at an average 
+            of ${avg_increase:,.0f} each. Can we identify what's driving this and replicate it across the portfolio?</li>
+        """)
+    
+    if recommendations:
+        narrative_parts.append(f"""
+        <div class="narrative-section recommendations">
+            <h3>💡 The Path Forward</h3>
+            <p>Based on the data, here's where I'd focus:</p>
+            <ul>
+                {''.join(recommendations)}
+            </ul>
+        </div>
+        """)
+    
+    # Closing perspective
+    if revenue_change < 0:
+        narrative_parts.append(f"""
+        <div class="narrative-section closing">
+            <h3>🎯 Putting It In Perspective</h3>
+            <p>
+                Look, the gap we're seeing is explainable. It's not that we have the wrong people or that the team 
+                isn't working hard enough. The data shows specific, addressable factors: {'category shifts, ' if declining_categories else ''}
+                {'customer churn, ' if churned_customers else ''}{'and spending decreases from key accounts' if decreased_customers else ''}.
+            </p>
+            <p>
+                The question isn't "why aren't we hitting numbers" - we know why. The question is "what are we going to 
+                do about the specific gaps we've identified." That's a much more actionable conversation.
+            </p>
+        </div>
+        """)
+    else:
+        narrative_parts.append(f"""
+        <div class="narrative-section closing">
+            <h3>🎯 Putting It In Perspective</h3>
+            <p>
+                We're trending in the right direction. The growth is coming from {f'{len(new_customers)} new customers' if new_customers else 'existing account expansion'}
+                {f' and {len(increased_customers)} accounts increasing their spend' if increased_customers else ''}.
+                Let's double down on what's working while we address any category gaps.
+            </p>
+        </div>
+        """)
+    
+    return ''.join(narrative_parts)
+
+
+def generate_period_comparison_html(period1_data, period2_data, period1_label, period2_label):
+    """Generate a professional HTML report for period comparison"""
+    
+    generated_date = datetime.now().strftime('%B %d, %Y')
+    
+    # Extract metrics
+    p1_revenue = period1_data.get('total_revenue', 0)
+    p2_revenue = period2_data.get('total_revenue', 0)
+    revenue_change = p2_revenue - p1_revenue
+    revenue_change_pct = (revenue_change / p1_revenue * 100) if p1_revenue > 0 else 0
+    
+    p1_orders = period1_data.get('order_count', 0)
+    p2_orders = period2_data.get('order_count', 0)
+    
+    p1_customers = period1_data.get('customer_count', 0)
+    p2_customers = period2_data.get('customer_count', 0)
+    
+    # Generate executive narrative
+    narrative_html = generate_executive_narrative(period1_data, period2_data, period1_label, period2_label)
+    
+    # Build category comparison table
+    p1_categories = period1_data.get('category_breakdown', {})
+    p2_categories = period2_data.get('category_breakdown', {})
+    all_categories = sorted(set(p1_categories.keys()) | set(p2_categories.keys()))
+    
+    category_rows = ""
+    for cat in all_categories:
+        p1_val = p1_categories.get(cat, 0)
+        p2_val = p2_categories.get(cat, 0)
+        change = p2_val - p1_val
+        change_pct = (change / p1_val * 100) if p1_val > 0 else (100 if p2_val > 0 else 0)
+        
+        p1_pct = (p1_val / p1_revenue * 100) if p1_revenue > 0 else 0
+        p2_pct = (p2_val / p2_revenue * 100) if p2_revenue > 0 else 0
+        
+        change_class = 'positive' if change > 0 else 'negative' if change < 0 else ''
+        change_icon = '↑' if change > 0 else '↓' if change < 0 else '→'
+        
+        category_rows += f"""
+        <tr>
+            <td style="font-weight: 600;">{cat}</td>
+            <td style="text-align: right;">${p1_val:,.0f}</td>
+            <td style="text-align: right; color: #64748b;">{p1_pct:.1f}%</td>
+            <td style="text-align: right;">${p2_val:,.0f}</td>
+            <td style="text-align: right; color: #64748b;">{p2_pct:.1f}%</td>
+            <td style="text-align: right;" class="{change_class}">
+                {change_icon} ${abs(change):,.0f} ({'+' if change >= 0 else ''}{change_pct:.1f}%)
+            </td>
+        </tr>
+        """
+    
+    # Build customer comparison table (top changes)
+    p1_customer_revenue = period1_data.get('customer_revenue', {})
+    p2_customer_revenue = period2_data.get('customer_revenue', {})
+    all_customers = set(p1_customer_revenue.keys()) | set(p2_customer_revenue.keys())
+    
+    customer_changes = []
+    for cust in all_customers:
+        p1_val = p1_customer_revenue.get(cust, 0)
+        p2_val = p2_customer_revenue.get(cust, 0)
+        change = p2_val - p1_val
+        customer_changes.append({
+            'name': cust,
+            'p1': p1_val,
+            'p2': p2_val,
+            'change': change,
+            'status': 'New' if p1_val == 0 else ('Lost' if p2_val == 0 else 'Active')
+        })
+    
+    # Sort by absolute change
+    customer_changes = sorted(customer_changes, key=lambda x: abs(x['change']), reverse=True)[:20]
+    
+    customer_rows = ""
+    for cust in customer_changes:
+        change_class = 'positive' if cust['change'] > 0 else 'negative' if cust['change'] < 0 else ''
+        status_badge = f'<span class="badge {cust["status"].lower()}">{cust["status"]}</span>'
+        
+        customer_rows += f"""
+        <tr>
+            <td style="font-weight: 500;">{cust['name'][:40]}{'...' if len(cust['name']) > 40 else ''}</td>
+            <td style="text-align: center;">{status_badge}</td>
+            <td style="text-align: right;">${cust['p1']:,.0f}</td>
+            <td style="text-align: right;">${cust['p2']:,.0f}</td>
+            <td style="text-align: right;" class="{change_class}">
+                {'↑' if cust['change'] > 0 else '↓' if cust['change'] < 0 else '→'} ${abs(cust['change']):,.0f}
+            </td>
+        </tr>
+        """
+    
+    # Build product changes table
+    p1_products = period1_data.get('product_revenue', {})
+    p2_products = period2_data.get('product_revenue', {})
+    all_products = set(p1_products.keys()) | set(p2_products.keys())
+    
+    product_changes = []
+    for prod in all_products:
+        p1_val = p1_products.get(prod, 0)
+        p2_val = p2_products.get(prod, 0)
+        change = p2_val - p1_val
+        if abs(change) > 500:  # Only significant changes
+            product_changes.append({
+                'sku': prod,
+                'p1': p1_val,
+                'p2': p2_val,
+                'change': change
+            })
+    
+    product_changes = sorted(product_changes, key=lambda x: abs(x['change']), reverse=True)[:15]
+    
+    product_rows = ""
+    for prod in product_changes:
+        change_class = 'positive' if prod['change'] > 0 else 'negative' if prod['change'] < 0 else ''
+        product_rows += f"""
+        <tr>
+            <td style="font-family: monospace; font-size: 0.85rem;">{prod['sku'][:35]}{'...' if len(prod['sku']) > 35 else ''}</td>
+            <td style="text-align: right;">${prod['p1']:,.0f}</td>
+            <td style="text-align: right;">${prod['p2']:,.0f}</td>
+            <td style="text-align: right;" class="{change_class}">
+                {'↑' if prod['change'] > 0 else '↓' if prod['change'] < 0 else '→'} ${abs(prod['change']):,.0f}
+            </td>
+        </tr>
+        """
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Period Comparison Report - {period1_label} vs {period2_label}</title>
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+            
+            :root {{
+                --primary: #3b82f6;
+                --success: #10b981;
+                --warning: #f59e0b;
+                --danger: #ef4444;
+                --dark: #0f172a;
+                --dark-light: #1e293b;
+                --gray-100: #f8fafc;
+                --gray-200: #e2e8f0;
+                --gray-500: #64748b;
+            }}
+            
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            
+            body {{
+                font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #ffffff;
+                color: #1e293b;
+                line-height: 1.7;
+                font-size: 14px;
+            }}
+            
+            .cover {{
+                background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+                color: white;
+                padding: 60px;
+                text-align: center;
+            }}
+            
+            .cover-title {{
+                font-size: 2.5rem;
+                font-weight: 800;
+                margin-bottom: 10px;
+            }}
+            
+            .cover-subtitle {{
+                font-size: 1.5rem;
+                font-weight: 300;
+                opacity: 0.9;
+                margin-bottom: 30px;
+            }}
+            
+            .cover-meta {{
+                display: flex;
+                justify-content: center;
+                gap: 30px;
+                font-size: 0.9rem;
+                opacity: 0.8;
+            }}
+            
+            .summary-cards {{
+                display: grid;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 20px;
+                padding: 40px 60px;
+                background: #f8fafc;
+            }}
+            
+            .summary-card {{
+                background: white;
+                border-radius: 16px;
+                padding: 25px;
+                text-align: center;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                border-top: 4px solid var(--primary);
+            }}
+            
+            .summary-card.positive {{ border-top-color: var(--success); }}
+            .summary-card.negative {{ border-top-color: var(--danger); }}
+            
+            .summary-value {{
+                font-size: 2rem;
+                font-weight: 800;
+                color: var(--dark);
+                margin-bottom: 5px;
+            }}
+            
+            .summary-label {{
+                font-size: 0.75rem;
+                color: var(--gray-500);
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }}
+            
+            .summary-change {{
+                font-size: 0.9rem;
+                margin-top: 10px;
+                font-weight: 600;
+            }}
+            
+            .summary-change.positive {{ color: var(--success); }}
+            .summary-change.negative {{ color: var(--danger); }}
+            
+            .main-content {{
+                padding: 40px 60px;
+            }}
+            
+            .section {{
+                margin-bottom: 50px;
+            }}
+            
+            .section-title {{
+                font-size: 1.4rem;
+                font-weight: 700;
+                color: var(--dark);
+                margin-bottom: 20px;
+                padding-bottom: 10px;
+                border-bottom: 2px solid var(--gray-200);
+            }}
+            
+            /* Narrative Styling */
+            .narrative-section {{
+                background: #f8fafc;
+                border-radius: 12px;
+                padding: 25px 30px;
+                margin-bottom: 20px;
+            }}
+            
+            .narrative-section h3 {{
+                font-size: 1.1rem;
+                font-weight: 700;
+                color: var(--dark);
+                margin-bottom: 15px;
+            }}
+            
+            .narrative-section p {{
+                color: #475569;
+                margin-bottom: 15px;
+                line-height: 1.8;
+            }}
+            
+            .narrative-section ul {{
+                margin-left: 20px;
+                color: #475569;
+            }}
+            
+            .narrative-section li {{
+                margin-bottom: 10px;
+                line-height: 1.6;
+            }}
+            
+            .insight-card {{
+                display: flex;
+                gap: 15px;
+                background: white;
+                border-radius: 10px;
+                padding: 20px;
+                margin: 15px 0;
+                border-left: 4px solid #e2e8f0;
+            }}
+            
+            .insight-card.red {{ border-left-color: var(--danger); background: #fef2f2; }}
+            .insight-card.orange {{ border-left-color: var(--warning); background: #fffbeb; }}
+            .insight-card.yellow {{ border-left-color: #eab308; background: #fefce8; }}
+            .insight-card.green {{ border-left-color: var(--success); background: #f0fdf4; }}
+            .insight-card.blue {{ border-left-color: var(--primary); background: #eff6ff; }}
+            
+            .insight-icon {{
+                font-size: 1.5rem;
+                flex-shrink: 0;
+            }}
+            
+            .insight-content {{
+                color: #475569;
+                line-height: 1.6;
+            }}
+            
+            /* Tables */
+            table {{
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 15px;
+                font-size: 0.9rem;
+            }}
+            
+            th {{
+                background: var(--dark);
+                color: white;
+                padding: 12px 15px;
+                text-align: left;
+                font-weight: 600;
+                font-size: 0.8rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            
+            td {{
+                padding: 12px 15px;
+                border-bottom: 1px solid var(--gray-200);
+            }}
+            
+            tr:hover {{ background: #f8fafc; }}
+            
+            .positive {{ color: var(--success); font-weight: 600; }}
+            .negative {{ color: var(--danger); font-weight: 600; }}
+            
+            .badge {{
+                display: inline-block;
+                padding: 3px 10px;
+                border-radius: 20px;
+                font-size: 0.7rem;
+                font-weight: 600;
+                text-transform: uppercase;
+            }}
+            
+            .badge.new {{ background: #d1fae5; color: #065f46; }}
+            .badge.lost {{ background: #fee2e2; color: #991b1b; }}
+            .badge.active {{ background: #e0e7ff; color: #3730a3; }}
+            
+            .footer {{
+                text-align: center;
+                padding: 30px;
+                background: var(--gray-100);
+                color: var(--gray-500);
+                font-size: 0.85rem;
+            }}
+            
+            @media print {{
+                .cover {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+                th {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+                .insight-card {{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+                .summary-card {{ page-break-inside: avoid; }}
+                .section {{ page-break-inside: avoid; }}
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="cover">
+            <div class="cover-title">📊 Period Comparison Report</div>
+            <div class="cover-subtitle">{period1_label} vs {period2_label}</div>
+            <div class="cover-meta">
+                <span>📅 Generated: {generated_date}</span>
+                <span>🏢 Calyx Containers</span>
+            </div>
+        </div>
+        
+        <div class="summary-cards">
+            <div class="summary-card {'positive' if revenue_change >= 0 else 'negative'}">
+                <div class="summary-value">${p2_revenue:,.0f}</div>
+                <div class="summary-label">{period2_label} Revenue</div>
+                <div class="summary-change {'positive' if revenue_change >= 0 else 'negative'}">
+                    {'↑' if revenue_change >= 0 else '↓'} ${abs(revenue_change):,.0f} ({'+' if revenue_change >= 0 else ''}{revenue_change_pct:.1f}%)
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{p2_orders:,}</div>
+                <div class="summary-label">{period2_label} Orders</div>
+                <div class="summary-change {'positive' if p2_orders >= p1_orders else 'negative'}">
+                    vs {p1_orders:,} prior
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">{p2_customers}</div>
+                <div class="summary-label">Active Customers</div>
+                <div class="summary-change {'positive' if p2_customers >= p1_customers else 'negative'}">
+                    vs {p1_customers} prior
+                </div>
+            </div>
+            <div class="summary-card">
+                <div class="summary-value">${(p2_revenue / p2_customers if p2_customers > 0 else 0):,.0f}</div>
+                <div class="summary-label">Avg per Customer</div>
+                <div class="summary-change">
+                    vs ${(p1_revenue / p1_customers if p1_customers > 0 else 0):,.0f} prior
+                </div>
+            </div>
+        </div>
+        
+        <div class="main-content">
+            <div class="section">
+                <div class="section-title">📝 Executive Analysis</div>
+                {narrative_html}
+            </div>
+            
+            <div class="section">
+                <div class="section-title">📦 Category Breakdown</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Category</th>
+                            <th style="text-align: right;">{period1_label}</th>
+                            <th style="text-align: right;">% Mix</th>
+                            <th style="text-align: right;">{period2_label}</th>
+                            <th style="text-align: right;">% Mix</th>
+                            <th style="text-align: right;">Change</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {category_rows}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">👥 Customer Impact (Top Changes)</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Customer</th>
+                            <th style="text-align: center;">Status</th>
+                            <th style="text-align: right;">{period1_label}</th>
+                            <th style="text-align: right;">{period2_label}</th>
+                            <th style="text-align: right;">Change</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {customer_rows}
+                    </tbody>
+                </table>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">🏷️ Product Changes (Top SKUs)</div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>SKU</th>
+                            <th style="text-align: right;">{period1_label}</th>
+                            <th style="text-align: right;">{period2_label}</th>
+                            <th style="text-align: right;">Change</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {product_rows}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <div class="footer">
+            <p>Calyx Containers | Period Comparison Report | Generated {generated_date}</p>
+            <p style="font-size: 0.75rem; margin-top: 5px;">Data reflects invoiced revenue from NetSuite</p>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
+
+
+def render_period_comparison_tool():
+    """
+    Period Comparison Tool - Compare two time periods for company-wide analysis.
+    Generates executive narrative explaining the differences.
+    """
+    
+    st.markdown("### 📊 Period Comparison Report")
+    st.caption("Compare two time periods and generate an executive narrative explaining the differences")
+    
+    # Load data
+    with st.spinner("Loading invoice data..."):
+        invoice_line_items_df = load_google_sheets_data("Invoice Line Item", "A:Z", version=CACHE_VERSION, silent=True)
+    
+    if invoice_line_items_df.empty:
+        st.error("❌ Unable to load Invoice Line Item data. Please check your Google Sheets connection.")
+        return
+    
+    # Process data
+    if 'Date' in invoice_line_items_df.columns:
+        invoice_line_items_df['Date'] = pd.to_datetime(invoice_line_items_df['Date'], errors='coerce')
+    if 'Amount' in invoice_line_items_df.columns:
+        invoice_line_items_df['Amount'] = invoice_line_items_df['Amount'].apply(clean_numeric)
+    if 'Quantity' in invoice_line_items_df.columns:
+        invoice_line_items_df['Quantity'] = invoice_line_items_df['Quantity'].apply(clean_numeric)
+    
+    # Get customer column
+    customer_col = 'Correct Customer' if 'Correct Customer' in invoice_line_items_df.columns else 'Customer'
+    
+    # Header styling
+    st.markdown("""
+        <div style="
+            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+            padding: 1rem 1.5rem;
+            border-radius: 10px;
+            margin-bottom: 1rem;
+        ">
+            <h3 style="color: white; margin: 0; font-size: 1.1rem;">🔄 Compare Time Periods</h3>
+            <p style="color: rgba(255,255,255,0.8); margin: 0.25rem 0 0 0; font-size: 0.85rem;">
+                Select two periods to analyze company-wide performance changes
+            </p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Period selection
+    today = datetime.now()
+    current_year = today.year
+    current_quarter = (today.month - 1) // 3 + 1
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**📅 Period 1 (Baseline)**")
+        period1_type = st.selectbox(
+            "Select Period 1",
+            ["Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025", 
+             "Q1 2024", "Q2 2024", "Q3 2024", "Q4 2024",
+             "Full Year 2024", "Full Year 2025",
+             "Custom Range"],
+            index=0,
+            key="period1_type"
+        )
+        
+        if period1_type == "Custom Range":
+            p1_col1, p1_col2 = st.columns(2)
+            with p1_col1:
+                p1_start = st.date_input("Start", value=datetime(2025, 1, 1), key="p1_start")
+            with p1_col2:
+                p1_end = st.date_input("End", value=datetime(2025, 3, 31), key="p1_end")
+            period1_start = datetime.combine(p1_start, datetime.min.time())
+            period1_end = datetime.combine(p1_end, datetime.max.time())
+            period1_label = f"{p1_start.strftime('%b %d')} - {p1_end.strftime('%b %d, %Y')}"
+        else:
+            period1_start, period1_end, period1_label = parse_period_selection(period1_type)
+    
+    with col2:
+        st.markdown("**📅 Period 2 (Comparison)**")
+        period2_type = st.selectbox(
+            "Select Period 2",
+            ["Q1 2026 YTD", "Q1 2025", "Q2 2025", "Q3 2025", "Q4 2025",
+             "Full Year 2025", "Full Year 2024",
+             "Custom Range"],
+            index=0,
+            key="period2_type"
+        )
+        
+        if period2_type == "Custom Range":
+            p2_col1, p2_col2 = st.columns(2)
+            with p2_col1:
+                p2_start = st.date_input("Start", value=datetime(2026, 1, 1), key="p2_start")
+            with p2_col2:
+                p2_end = st.date_input("End", value=today, key="p2_end")
+            period2_start = datetime.combine(p2_start, datetime.min.time())
+            period2_end = datetime.combine(p2_end, datetime.max.time())
+            period2_label = f"{p2_start.strftime('%b %d')} - {p2_end.strftime('%b %d, %Y')}"
+        else:
+            period2_start, period2_end, period2_label = parse_period_selection(period2_type)
+    
+    # Show selected periods
+    st.markdown(f"""
+        <div style="
+            background: #1e293b;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 1rem 0;
+            display: flex;
+            justify-content: space-around;
+            text-align: center;
+        ">
+            <div>
+                <div style="color: #94a3b8; font-size: 0.75rem; text-transform: uppercase;">Period 1</div>
+                <div style="color: #60a5fa; font-size: 1.1rem; font-weight: 600;">{period1_label}</div>
+                <div style="color: #64748b; font-size: 0.8rem;">{period1_start.strftime('%Y-%m-%d')} to {period1_end.strftime('%Y-%m-%d')}</div>
+            </div>
+            <div style="color: #64748b; font-size: 1.5rem; align-self: center;">→</div>
+            <div>
+                <div style="color: #94a3b8; font-size: 0.75rem; text-transform: uppercase;">Period 2</div>
+                <div style="color: #10b981; font-size: 1.1rem; font-weight: 600;">{period2_label}</div>
+                <div style="color: #64748b; font-size: 0.8rem;">{period2_start.strftime('%Y-%m-%d')} to {period2_end.strftime('%Y-%m-%d')}</div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    # Generate comparison button
+    if st.button("🔄 Generate Comparison Report", type="primary", use_container_width=True):
+        with st.spinner("Analyzing periods..."):
+            # Filter data for each period
+            period1_df = invoice_line_items_df[
+                (invoice_line_items_df['Date'] >= pd.Timestamp(period1_start)) &
+                (invoice_line_items_df['Date'] <= pd.Timestamp(period1_end))
+            ].copy()
+            
+            period2_df = invoice_line_items_df[
+                (invoice_line_items_df['Date'] >= pd.Timestamp(period2_start)) &
+                (invoice_line_items_df['Date'] <= pd.Timestamp(period2_end))
+            ].copy()
+            
+            # Exclude fees and shipping
+            EXCLUDED_PATTERNS = ['fee', 'shipping', 'freight', 'ups ', 'fedex', 'avatax', 'tax', 'tooling', 'expedite']
+            
+            for pattern in EXCLUDED_PATTERNS:
+                if 'Item' in period1_df.columns:
+                    period1_df = period1_df[~period1_df['Item'].astype(str).str.lower().str.contains(pattern, na=False)]
+                if 'Item' in period2_df.columns:
+                    period2_df = period2_df[~period2_df['Item'].astype(str).str.lower().str.contains(pattern, na=False)]
+            
+            # Apply product categories
+            period1_df = apply_product_categories(period1_df)
+            period1_df = create_unified_product_view(period1_df)
+            period2_df = apply_product_categories(period2_df)
+            period2_df = create_unified_product_view(period2_df)
+            
+            # Calculate metrics for Period 1
+            period1_data = calculate_period_metrics(period1_df, customer_col)
+            
+            # Calculate metrics for Period 2
+            period2_data = calculate_period_metrics(period2_df, customer_col)
+            
+            # Store in session state
+            st.session_state['period_comparison_data'] = {
+                'period1_data': period1_data,
+                'period2_data': period2_data,
+                'period1_label': period1_label,
+                'period2_label': period2_label
+            }
+    
+    # Display results if available
+    if 'period_comparison_data' in st.session_state:
+        data = st.session_state['period_comparison_data']
+        period1_data = data['period1_data']
+        period2_data = data['period2_data']
+        period1_label = data['period1_label']
+        period2_label = data['period2_label']
+        
+        st.markdown("---")
+        
+        # Summary metrics
+        p1_revenue = period1_data.get('total_revenue', 0)
+        p2_revenue = period2_data.get('total_revenue', 0)
+        revenue_change = p2_revenue - p1_revenue
+        revenue_change_pct = (revenue_change / p1_revenue * 100) if p1_revenue > 0 else 0
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                f"{period1_label} Revenue",
+                f"${p1_revenue:,.0f}",
+                f"{period1_data.get('order_count', 0)} orders"
+            )
+        
+        with col2:
+            st.metric(
+                f"{period2_label} Revenue",
+                f"${p2_revenue:,.0f}",
+                f"{period2_data.get('order_count', 0)} orders"
+            )
+        
+        with col3:
+            delta_color = "normal" if revenue_change >= 0 else "inverse"
+            st.metric(
+                "Change",
+                f"${revenue_change:,.0f}",
+                f"{'+' if revenue_change >= 0 else ''}{revenue_change_pct:.1f}%",
+                delta_color=delta_color
+            )
+        
+        with col4:
+            p1_customers = period1_data.get('customer_count', 0)
+            p2_customers = period2_data.get('customer_count', 0)
+            st.metric(
+                "Customers",
+                f"{p2_customers}",
+                f"vs {p1_customers} prior"
+            )
+        
+        # Download button
+        st.markdown("---")
+        
+        html_report = generate_period_comparison_html(
+            period1_data, period2_data, period1_label, period2_label
+        )
+        
+        col_spacer1, col_btn, col_spacer2 = st.columns([1, 2, 1])
+        with col_btn:
+            st.download_button(
+                label="📥 Download Executive Report (HTML)",
+                data=html_report,
+                file_name=f"Period_Comparison_{period1_label.replace(' ', '_')}_vs_{period2_label.replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.html",
+                mime="text/html",
+                use_container_width=True
+            )
+        
+        st.markdown("---")
+        
+        # Display narrative preview
+        st.markdown("### 📝 Executive Analysis Preview")
+        
+        narrative_html = generate_executive_narrative(
+            period1_data, period2_data, period1_label, period2_label
+        )
+        
+        # Render narrative in Streamlit
+        st.markdown(f"""
+            <div style="
+                background: #f8fafc;
+                padding: 20px;
+                border-radius: 12px;
+                border: 1px solid #e2e8f0;
+            ">
+                {narrative_html}
+            </div>
+        """, unsafe_allow_html=True)
+        
+        # Category breakdown
+        st.markdown("---")
+        st.markdown("### 📦 Category Breakdown")
+        
+        p1_categories = period1_data.get('category_breakdown', {})
+        p2_categories = period2_data.get('category_breakdown', {})
+        all_categories = sorted(set(p1_categories.keys()) | set(p2_categories.keys()))
+        
+        category_data = []
+        for cat in all_categories:
+            p1_val = p1_categories.get(cat, 0)
+            p2_val = p2_categories.get(cat, 0)
+            change = p2_val - p1_val
+            category_data.append({
+                'Category': cat,
+                f'{period1_label}': f"${p1_val:,.0f}",
+                f'{period2_label}': f"${p2_val:,.0f}",
+                'Change': f"{'↑' if change > 0 else '↓' if change < 0 else '→'} ${abs(change):,.0f}"
+            })
+        
+        if category_data:
+            st.dataframe(pd.DataFrame(category_data), use_container_width=True, hide_index=True)
+        
+        # Customer changes
+        st.markdown("---")
+        st.markdown("### 👥 Top Customer Changes")
+        
+        p1_customer_revenue = period1_data.get('customer_revenue', {})
+        p2_customer_revenue = period2_data.get('customer_revenue', {})
+        all_customers = set(p1_customer_revenue.keys()) | set(p2_customer_revenue.keys())
+        
+        customer_changes = []
+        for cust in all_customers:
+            p1_val = p1_customer_revenue.get(cust, 0)
+            p2_val = p2_customer_revenue.get(cust, 0)
+            change = p2_val - p1_val
+            status = 'New' if p1_val == 0 else ('Lost' if p2_val == 0 else 'Active')
+            customer_changes.append({
+                'Customer': cust[:40] + ('...' if len(cust) > 40 else ''),
+                'Status': status,
+                f'{period1_label}': f"${p1_val:,.0f}",
+                f'{period2_label}': f"${p2_val:,.0f}",
+                'Change': f"{'↑' if change > 0 else '↓' if change < 0 else '→'} ${abs(change):,.0f}"
+            })
+        
+        customer_changes = sorted(customer_changes, key=lambda x: abs(float(x['Change'].replace('↑ $', '').replace('↓ $', '').replace('→ $', '').replace(',', ''))), reverse=True)[:15]
+        
+        if customer_changes:
+            st.dataframe(pd.DataFrame(customer_changes), use_container_width=True, hide_index=True)
+
+
+def parse_period_selection(period_type):
+    """Parse period selection string into start date, end date, and label"""
+    today = datetime.now()
+    
+    if period_type == "Q1 2026 YTD":
+        return datetime(2026, 1, 1), today, "Q1 2026 YTD"
+    elif period_type == "Q1 2025":
+        return datetime(2025, 1, 1), datetime(2025, 3, 31), "Q1 2025"
+    elif period_type == "Q2 2025":
+        return datetime(2025, 4, 1), datetime(2025, 6, 30), "Q2 2025"
+    elif period_type == "Q3 2025":
+        return datetime(2025, 7, 1), datetime(2025, 9, 30), "Q3 2025"
+    elif period_type == "Q4 2025":
+        return datetime(2025, 10, 1), datetime(2025, 12, 31), "Q4 2025"
+    elif period_type == "Q1 2024":
+        return datetime(2024, 1, 1), datetime(2024, 3, 31), "Q1 2024"
+    elif period_type == "Q2 2024":
+        return datetime(2024, 4, 1), datetime(2024, 6, 30), "Q2 2024"
+    elif period_type == "Q3 2024":
+        return datetime(2024, 7, 1), datetime(2024, 9, 30), "Q3 2024"
+    elif period_type == "Q4 2024":
+        return datetime(2024, 10, 1), datetime(2024, 12, 31), "Q4 2024"
+    elif period_type == "Full Year 2024":
+        return datetime(2024, 1, 1), datetime(2024, 12, 31), "Full Year 2024"
+    elif period_type == "Full Year 2025":
+        return datetime(2025, 1, 1), datetime(2025, 12, 31), "Full Year 2025"
+    else:
+        # Default to Q1 2025
+        return datetime(2025, 1, 1), datetime(2025, 3, 31), "Q1 2025"
+
+
+def calculate_period_metrics(df, customer_col):
+    """Calculate all metrics for a period from invoice line items"""
+    
+    if df.empty:
+        return {
+            'total_revenue': 0,
+            'order_count': 0,
+            'customer_count': 0,
+            'category_breakdown': {},
+            'customer_revenue': {},
+            'product_revenue': {}
+        }
+    
+    # Total revenue
+    total_revenue = df['Amount'].sum() if 'Amount' in df.columns else 0
+    
+    # Order count (unique document numbers)
+    order_count = df['Document Number'].nunique() if 'Document Number' in df.columns else 0
+    
+    # Customer count
+    customer_count = df[customer_col].nunique() if customer_col in df.columns else 0
+    
+    # Category breakdown (using Parent Category for rollup)
+    category_col = 'Parent Category' if 'Parent Category' in df.columns else 'Product Category'
+    category_breakdown = {}
+    if category_col in df.columns and 'Amount' in df.columns:
+        cat_df = df.groupby(category_col)['Amount'].sum()
+        category_breakdown = cat_df.to_dict()
+    
+    # Customer revenue
+    customer_revenue = {}
+    if customer_col in df.columns and 'Amount' in df.columns:
+        cust_df = df.groupby(customer_col)['Amount'].sum()
+        customer_revenue = cust_df.to_dict()
+    
+    # Product revenue (by SKU)
+    product_revenue = {}
+    if 'Item' in df.columns and 'Amount' in df.columns:
+        prod_df = df.groupby('Item')['Amount'].sum()
+        product_revenue = prod_df.to_dict()
+    
+    return {
+        'total_revenue': total_revenue,
+        'order_count': order_count,
+        'customer_count': customer_count,
+        'category_breakdown': category_breakdown,
+        'customer_revenue': customer_revenue,
+        'product_revenue': product_revenue
+    }
 
 
 def render_product_forecasting_tool():
