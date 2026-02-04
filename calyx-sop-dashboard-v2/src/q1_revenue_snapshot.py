@@ -4,20 +4,26 @@ Reads from Google Sheets and displays gap-to-goal analysis with interactive visu
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
 
 VERSION 11 CHANGES:
-- Replaced 2-column per-category Build Your Own Forecast UI with unified full-width master table
-  - Single data_editor with ALL NetSuite orders and HubSpot deals in one view
-  - Row-level Select checkbox, Status dropdown (IN/MAYBE/OUT), and Notes column
-  - Category multiselect controls which buckets are included in forecast calculation
-  - Source filter (NS/HS) and free-text search across Name, ID, Rep, Category, Type
-  - Select All / Deselect All buttons for visible rows
-  - Selections persist in session state across filter changes
-  - Summary metrics bar (NS Selected, HS Selected, Combined, Row Count)
-  - Category Totals breakdown in collapsible section
-  - Status/Notes edits feed into planning state and export properly
-  - Probability toggle (Raw vs Prob-Adjusted) still controls HubSpot amount display
+- Redesigned Build Your Own Forecast as left-nav + single-category detail view
+  - Left panel: Category bucket navigation with checkboxes, totals, counts
+    - NetSuite and HubSpot sections with styled headers and color coding
+    - Each category is a styled card with include checkbox + eye button to view
+    - Active category highlighted with indigo border glow
+    - Running total panel: Invoiced + NS + HS = Grand Total + Gap display
+    - Probability toggle (Raw $ / Prob $) in left nav
+    - All On / All Off quick-select buttons
+  - Right panel: Shows ONE category at a time (solves scroll-loss on edit)
+    - Category header with source icon, total, included/excluded badge
+    - Prev/Next navigation to step through categories
+    - Each category has its own data_editor (unique key per category)
+    - Editing Select/Status/Notes does NOT lose scroll position in other categories
+    - Status (IN/MAYBE/OUT) and Notes columns at FAR RIGHT
+    - Select All / Deselect All per-category with inline selected amount
+    - Inline summary bar per category
+  - Selections persist in session state across category switches
+  - Export buckets built from all checked categories + row-level selections
 - Fixed rep dashboard breakout sections (Section 1, Section 2, Progress Breakdown) not rendering
-  - Converted CSS class-based HTML (progress-breakdown, progress-item) to inline styles
-  - Inline styles render reliably in Streamlit's markdown regardless of CSS load order
+  - Converted CSS class-based HTML to inline styles for reliable Streamlit rendering
 
 VERSION 10 CHANGES:
 - Added search filter to Build Your Own Forecast sections (search by Customer/SO# or Deal Name)
@@ -2344,57 +2350,54 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         hs_dfs['Q2_BestCase'] = format_hs_view(hs_data[q2 & (hs_data['Status'] == 'Best Case')])
         hs_dfs['Q2_Opp'] = format_hs_view(hs_data[q2 & (hs_data['Status'] == 'Opportunity')])
 
-    # --- 4. RENDER UI — UNIFIED MASTER TABLE ---
+    # --- 4. RENDER UI — LEFT NAV + CATEGORY DETAIL VIEW ---
     
-    # We use this dict to store the ACTUAL dataframes to be exported
     export_buckets = {}
     
-    # Initialize amount mode in session state if not set (preserves across reruns)
+    # --- SESSION STATE INIT ---
     amount_mode_key = f"amount_mode_{rep_name}"
     if amount_mode_key not in st.session_state:
-        st.session_state[amount_mode_key] = "Raw Amount"
+        st.session_state[amount_mode_key] = "Raw $"
     
-    # Initialize row-level selection persistence
     select_state_key = f'master_select_{rep_name}'
     if select_state_key not in st.session_state:
-        st.session_state[select_state_key] = {}  # {id_str: bool}
+        st.session_state[select_state_key] = {}
+    
+    cat_select_key = f'cat_select_{rep_name}'
+    if cat_select_key not in st.session_state:
+        st.session_state[cat_select_key] = {}
+    
+    active_cat_key = f'active_cat_{rep_name}'
+    if active_cat_key not in st.session_state:
+        st.session_state[active_cat_key] = None
     
     st.markdown("#### 🛠️ Forecast Builder")
     
     # --- LOCKED REVENUE BANNER ---
     st.markdown(f"""
     <div style="
-        background: linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, rgba(6, 78, 59, 0.25) 100%);
-        border: 2px solid rgba(16, 185, 129, 0.5);
-        border-radius: 16px;
-        padding: 1rem 1.5rem;
-        margin: 0.5rem 0 1rem 0;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+        background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(6, 78, 59, 0.2) 100%);
+        border: 1px solid rgba(16, 185, 129, 0.4);
+        border-radius: 14px; padding: 0.75rem 1.25rem; margin: 0.5rem 0 1rem 0;
+        display: flex; align-items: center; gap: 0.75rem;
     ">
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <span style="font-size: 1.5rem;">🔒</span>
-            <div>
-                <div style="font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8;">Invoiced & Shipped (Always Included)</div>
-                <div style="color: #4ade80; font-size: 1.5rem; font-weight: 800;">${invoiced_shipped:,.0f}</div>
-            </div>
+        <span style="font-size: 1.3rem;">🔒</span>
+        <div>
+            <div style="font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8;">Invoiced & Shipped (Locked)</div>
+            <div style="color: #4ade80; font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px;">${invoiced_shipped:,.0f}</div>
         </div>
     </div>
     """, unsafe_allow_html=True)
     
-    # --- BUILD UNIFIED MASTER DATAFRAME ---
-    # Reverse map: label → source key
+    # --- BUILD CATEGORY DATA ---
     label_to_key = {}
     for k, d in ns_categories.items():
         label_to_key[d['label']] = k
     for k, d in hs_categories.items():
         label_to_key[d['label']] = k
     
-    master_rows = []
+    cat_order = []  # [(key, source, label, total, count, rows_list)]
     
-    # Process NetSuite categories
     for key, data in ns_categories.items():
         df = ns_dfs.get(key, pd.DataFrame())
         if df.empty:
@@ -2402,7 +2405,10 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         val = df['Amount_Numeric'].sum() if 'Amount_Numeric' in df.columns else 0
         if val <= 0 and key != 'PA_Date':
             continue
+        if key not in st.session_state[cat_select_key]:
+            st.session_state[cat_select_key][key] = True
         
+        rows = []
         for _, row in df.iterrows():
             item_id = str(row.get('SO #', row.get('Display_SO_Num', row.get('Document Number', '')))).strip()
             customer = row.get('Customer', '')
@@ -2410,32 +2416,22 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             amount = pd.to_numeric(row.get('Amount_Numeric', row.get('Amount', 0)), errors='coerce')
             if pd.isna(amount): amount = 0
             link = row.get('Link', '')
-            rep = row.get('Sales Rep', row.get('Rep Master', ''))
+            rep_val = row.get('Sales Rep', row.get('Rep Master', ''))
             order_type = row.get('Type', row.get('Display_Type', ''))
-            
-            # Clean NaN
-            if pd.isna(rep) or rep is None: rep = ''
+            if pd.isna(rep_val) or rep_val is None: rep_val = ''
             if pd.isna(customer) or customer is None: customer = ''
             if pd.isna(date_val) or date_val is None: date_val = ''
             if pd.isna(order_type) or order_type is None: order_type = ''
             if pd.isna(link) or link is None: link = ''
             if isinstance(date_val, pd.Timestamp): date_val = date_val.strftime('%Y-%m-%d')
-            
-            master_rows.append({
-                '_key': key,
-                'Source': '📦 NS',
-                'Category': data['label'],
-                'Link': str(link).strip(),
-                'ID': item_id if item_id and item_id != 'nan' else '',
-                'Name': str(customer).strip(),
-                'Type': str(order_type).strip(),
-                'Date': str(date_val).strip(),
-                'Amount': round(amount, 2),
-                'Prob Amt': round(amount, 2),  # NS doesn't have probability
-                'Rep': str(rep).strip(),
+            rows.append({
+                'Link': str(link).strip(), 'ID': item_id if item_id and item_id != 'nan' else '',
+                'Name': str(customer).strip(), 'Type': str(order_type).strip(),
+                'Date': str(date_val).strip(), 'Amount': round(amount, 2),
+                'Prob Amt': round(amount, 2), 'Rep': str(rep_val).strip(),
             })
+        cat_order.append((key, 'NS', data['label'], val, len(df), rows))
     
-    # Process HubSpot categories
     for key, data in hs_categories.items():
         df = hs_dfs.get(key, pd.DataFrame())
         if df.empty:
@@ -2443,246 +2439,314 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         val = df['Amount_Numeric'].sum() if 'Amount_Numeric' in df.columns else 0
         if val <= 0:
             continue
+        if key not in st.session_state[cat_select_key]:
+            st.session_state[cat_select_key][key] = True
         
+        rows = []
         for _, row in df.iterrows():
             item_id = str(row.get('Deal ID', row.get('Record ID', ''))).strip()
-            name = row.get('Deal Name', row.get('Account Name', ''))
+            name_val = row.get('Deal Name', row.get('Account Name', ''))
             date_val = row.get('Close', row.get('Close Date', ''))
             amount = pd.to_numeric(row.get('Amount_Numeric', 0), errors='coerce')
             if pd.isna(amount): amount = 0
             prob_amount = pd.to_numeric(row.get('Prob_Amount_Numeric', 0), errors='coerce')
             if pd.isna(prob_amount): prob_amount = amount
             link = row.get('Link', '')
-            rep = row.get('Deal Owner', '')
+            rep_val = row.get('Deal Owner', '')
             order_type = row.get('Type', row.get('Display_Type', ''))
-            
-            # Clean NaN
-            if pd.isna(rep) or rep is None: rep = ''
-            if pd.isna(name) or name is None: name = ''
+            if pd.isna(rep_val) or rep_val is None: rep_val = ''
+            if pd.isna(name_val) or name_val is None: name_val = ''
             if pd.isna(date_val) or date_val is None: date_val = ''
             if pd.isna(order_type) or order_type is None: order_type = ''
             if pd.isna(link) or link is None: link = ''
             if isinstance(date_val, pd.Timestamp): date_val = date_val.strftime('%Y-%m-%d')
-            
-            master_rows.append({
-                '_key': key,
-                'Source': '🎯 HS',
-                'Category': data['label'],
-                'Link': str(link).strip(),
-                'ID': item_id if item_id and item_id != 'nan' else '',
-                'Name': str(name).strip(),
-                'Type': str(order_type).strip(),
-                'Date': str(date_val).strip(),
-                'Amount': round(amount, 2),
-                'Prob Amt': round(prob_amount, 2),
-                'Rep': str(rep).strip(),
+            rows.append({
+                'Link': str(link).strip(), 'ID': item_id if item_id and item_id != 'nan' else '',
+                'Name': str(name_val).strip(), 'Type': str(order_type).strip(),
+                'Date': str(date_val).strip(), 'Amount': round(amount, 2),
+                'Prob Amt': round(prob_amount, 2), 'Rep': str(rep_val).strip(),
             })
+        cat_order.append((key, 'HS', data['label'], val, len(df), rows))
     
-    if master_rows:
-        master_df = pd.DataFrame(master_rows)
+    if not cat_order:
+        st.info("No pending orders or pipeline deals found for this view.")
+    else:
+        # Default active category
+        if st.session_state[active_cat_key] is None or st.session_state[active_cat_key] not in [c[0] for c in cat_order]:
+            st.session_state[active_cat_key] = cat_order[0][0]
         
-        # --- TOOLBAR ROW ---
-        tool_col1, tool_col2 = st.columns([1, 1])
+        # ======= LAYOUT: LEFT NAV (1) + RIGHT DETAIL (3) =======
+        nav_col, table_col = st.columns([1, 3])
         
-        with tool_col1:
-            # HubSpot probability toggle
-            amount_mode = st.radio(
-                "HubSpot Amount Mode:",
-                options=["Raw Amount", "Probability-Adjusted"],
-                key=amount_mode_key,
-                horizontal=True
-            )
-            use_probability = (amount_mode == "Probability-Adjusted")
-        
-        with tool_col2:
-            master_search = st.text_input(
-                "🔍 Search all orders & deals:",
-                key=f"master_search_{rep_name}",
-                placeholder="Search by name, ID, customer, rep..."
-            )
-        
-        # --- CATEGORY & SOURCE FILTERS ---
-        filter_col1, filter_col2 = st.columns([3, 1])
-        
-        with filter_col1:
-            available_categories = master_df['Category'].unique().tolist()
-            # Default: include all categories that have data
-            cat_default_key = f"master_cat_default_set_{rep_name}"
-            selected_categories = st.multiselect(
-                "📂 Include Categories:",
-                options=available_categories,
-                default=available_categories,
-                key=f"master_cat_filter_{rep_name}",
-                help="Controls which categories are included in the forecast. Deselecting a category removes ALL its rows from the calculation."
-            )
-        
-        with filter_col2:
-            available_sources = sorted(master_df['Source'].unique().tolist())
-            source_filter = st.multiselect(
-                "Source:",
-                options=available_sources,
-                default=available_sources,
-                key=f"master_source_filter_{rep_name}"
-            )
-        
-        # --- APPLY FILTERS ---
-        filtered = master_df.copy()
-        if selected_categories:
-            filtered = filtered[filtered['Category'].isin(selected_categories)]
-        else:
-            filtered = filtered.iloc[0:0]  # Empty if no categories selected
-        if source_filter:
-            filtered = filtered[filtered['Source'].isin(source_filter)]
-        if master_search:
-            sl = master_search.lower()
-            text_mask = (
-                filtered['Name'].str.lower().str.contains(sl, na=False) |
-                filtered['ID'].str.lower().str.contains(sl, na=False) |
-                filtered['Rep'].str.lower().str.contains(sl, na=False) |
-                filtered['Category'].str.lower().str.contains(sl, na=False) |
-                filtered['Type'].str.lower().str.contains(sl, na=False)
-            )
-            filtered = filtered[text_mask]
-        
-        if filtered.empty:
-            st.info("No data matches your current filters. Adjust the category or source filters above.")
-        else:
-            # --- ADD EDITABLE COLUMNS ---
-            # Restore Select state from session state (persists across filter changes)
-            filtered = filtered.copy()
-            filtered['Select'] = filtered['ID'].apply(
-                lambda x: st.session_state[select_state_key].get(str(x).strip(), True)
-            )
-            filtered['Status'] = filtered['ID'].apply(
-                lambda x: get_planning_status(x) if get_planning_status(x) else '—'
-            )
-            filtered['Notes'] = filtered['ID'].apply(
-                lambda x: get_planning_notes(x) or ''
-            )
+        # =====================================================
+        # LEFT COLUMN: CATEGORY NAV PANEL
+        # =====================================================
+        with nav_col:
+            st.markdown('<div style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8; margin-bottom: 8px;">Forecast Buckets</div>', unsafe_allow_html=True)
             
-            # Sort by Category then Amount descending
-            filtered = filtered.sort_values(['Category', 'Amount'], ascending=[True, False]).reset_index(drop=True)
-            
-            # --- SELECT ALL / DESELECT ALL ---
-            btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 2])
-            with btn_col1:
-                if st.button("☑️ Select All Visible", key=f"sel_all_{rep_name}", type="secondary", use_container_width=True):
-                    for id_val in filtered['ID'].tolist():
-                        st.session_state[select_state_key][str(id_val).strip()] = True
+            qa1, qa2 = st.columns(2)
+            with qa1:
+                if st.button("All On", key=f"cat_all_{rep_name}", type="secondary", use_container_width=True):
+                    for c in cat_order:
+                        st.session_state[cat_select_key][c[0]] = True
                     st.rerun()
-            with btn_col2:
-                if st.button("☐ Deselect All Visible", key=f"desel_all_{rep_name}", type="secondary", use_container_width=True):
-                    for id_val in filtered['ID'].tolist():
-                        st.session_state[select_state_key][str(id_val).strip()] = False
+            with qa2:
+                if st.button("All Off", key=f"cat_none_{rep_name}", type="secondary", use_container_width=True):
+                    for c in cat_order:
+                        st.session_state[cat_select_key][c[0]] = False
                     st.rerun()
-            with btn_col3:
-                # Show quick count
-                sel_count = filtered['Select'].sum()
-                total_count = len(filtered)
-                st.caption(f"✓ {int(sel_count)} of {total_count} rows selected")
             
-            # --- THE MASTER DATA EDITOR ---
-            display_cols = ['Select', 'Status', 'Notes', 'Source', 'Category', 'Link', 'ID', 'Name', 'Type', 'Date', 'Amount', 'Prob Amt', 'Rep']
-            display_cols = [c for c in display_cols if c in filtered.columns]
+            # --- NS HEADER ---
+            st.markdown('<div style="font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #60a5fa; margin: 14px 0 4px 0; padding-bottom: 3px; border-bottom: 1px solid rgba(96, 165, 250, 0.25);">NetSuite Orders</div>', unsafe_allow_html=True)
             
-            # Determine amount column labels based on probability mode
-            amt_label = "Raw $" if use_probability else "Amount ✓"
-            prob_label = "Prob $ ✓" if use_probability else "Prob $"
+            ns_total_checked = 0
+            for key, source, label, total, count, rows in cat_order:
+                if source != 'NS':
+                    continue
+                is_checked = st.session_state[cat_select_key].get(key, True)
+                is_active = (st.session_state[active_cat_key] == key)
+                
+                # --- CATEGORY CARD ---
+                active_border = "rgba(99, 102, 241, 0.8)" if is_active else "rgba(71, 85, 105, 0.25)"
+                active_bg = "rgba(99, 102, 241, 0.06)" if is_active else "transparent"
+                active_glow = "0 0 10px rgba(99, 102, 241, 0.15)" if is_active else "none"
+                active_indicator = "border-left: 3px solid #6366f1;" if is_active else "border-left: 3px solid transparent;"
+                amt_color = "#4ade80" if is_checked else "#475569"
+                
+                st.markdown(f'<div style="background: {active_bg}; border: 1px solid {active_border}; {active_indicator} border-radius: 8px; padding: 4px 8px; margin: 3px 0; box-shadow: {active_glow}; cursor: pointer;">', unsafe_allow_html=True)
+                
+                chk_c, eye_c = st.columns([4, 1])
+                with chk_c:
+                    new_val = st.checkbox(label, value=is_checked, key=f"cat_chk_{key}_{rep_name}")
+                    st.session_state[cat_select_key][key] = new_val
+                with eye_c:
+                    if st.button("👁", key=f"v_{key}_{rep_name}", help=f"View {label}", use_container_width=True):
+                        st.session_state[active_cat_key] = key
+                        st.rerun()
+                
+                st.markdown(f'<div style="font-size: 0.78rem; font-weight: 700; color: {amt_color}; margin: -6px 0 2px 4px; font-family: monospace;">${total:,.0f} <span style="font-size: 0.6rem; font-weight: 400; color: #64748b;">({count})</span></div></div>', unsafe_allow_html=True)
+                
+                if new_val:
+                    ns_total_checked += total
             
-            edited = st.data_editor(
-                filtered[display_cols],
-                column_config={
-                    "Select": st.column_config.CheckboxColumn("✓", width="small"),
-                    "Status": st.column_config.SelectboxColumn(
-                        "Status", width="small",
-                        options=['IN', 'MAYBE', 'OUT', '—'],
-                        required=False
-                    ),
-                    "Notes": st.column_config.TextColumn("Notes", width="medium"),
-                    "Source": st.column_config.TextColumn("Src", width="small"),
-                    "Category": st.column_config.TextColumn("Category", width="medium"),
-                    "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
-                    "ID": st.column_config.TextColumn("ID", width="small"),
-                    "Name": st.column_config.TextColumn("Name", width="medium"),
-                    "Type": st.column_config.TextColumn("Type", width="small"),
-                    "Date": st.column_config.TextColumn("Date", width="small"),
-                    "Amount": st.column_config.NumberColumn(amt_label, format="$%,.0f"),
-                    "Prob Amt": st.column_config.NumberColumn(prob_label, format="$%,.0f"),
-                    "Rep": st.column_config.TextColumn("Rep", width="small"),
-                },
-                disabled=[c for c in display_cols if c not in ['Select', 'Status', 'Notes']],
-                hide_index=True,
-                key=f"master_editor_{rep_name}",
-                num_rows="fixed",
-                use_container_width=True,
-                height=min(700, 45 + len(filtered) * 35)  # Dynamic height, max 700px
-            )
+            # --- HS HEADER ---
+            st.markdown('<div style="font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #a78bfa; margin: 14px 0 4px 0; padding-bottom: 3px; border-bottom: 1px solid rgba(167, 139, 250, 0.25);">HubSpot Pipeline</div>', unsafe_allow_html=True)
             
-            # --- PERSIST EDITS BACK TO SESSION STATE ---
-            if 'ID' in edited.columns:
-                for idx, row in edited.iterrows():
-                    id_str = str(row['ID']).strip()
-                    if not id_str or id_str == 'nan':
-                        continue
-                    
-                    # Persist Select state
-                    st.session_state[select_state_key][id_str] = bool(row.get('Select', True))
-                    
-                    # Persist Status and Notes to planning state
-                    if 'Status' in row:
-                        status_val = str(row['Status']).strip().upper()
-                        notes_val = str(row.get('Notes', '')).strip() if 'Notes' in row else ''
-                        if status_val and status_val != '—' and status_val != 'NAN':
-                            update_planning_data(id_str, status=status_val, notes=notes_val)
+            amount_mode = st.radio("Amt:", options=["Raw $", "Prob $"], key=amount_mode_key, horizontal=True, label_visibility="collapsed")
+            use_probability = (amount_mode == "Prob $")
             
-            # --- SUMMARY METRICS ---
-            selected_rows = edited[edited['Select'] == True] if 'Select' in edited.columns else edited
+            hs_total_checked = 0
+            for key, source, label, total, count, rows in cat_order:
+                if source != 'HS':
+                    continue
+                is_checked = st.session_state[cat_select_key].get(key, True)
+                is_active = (st.session_state[active_cat_key] == key)
+                
+                active_border = "rgba(99, 102, 241, 0.8)" if is_active else "rgba(71, 85, 105, 0.25)"
+                active_bg = "rgba(99, 102, 241, 0.06)" if is_active else "transparent"
+                active_glow = "0 0 10px rgba(99, 102, 241, 0.15)" if is_active else "none"
+                active_indicator = "border-left: 3px solid #6366f1;" if is_active else "border-left: 3px solid transparent;"
+                amt_color = "#4ade80" if is_checked else "#475569"
+                
+                st.markdown(f'<div style="background: {active_bg}; border: 1px solid {active_border}; {active_indicator} border-radius: 8px; padding: 4px 8px; margin: 3px 0; box-shadow: {active_glow};">', unsafe_allow_html=True)
+                
+                chk_c, eye_c = st.columns([4, 1])
+                with chk_c:
+                    new_val = st.checkbox(label, value=is_checked, key=f"cat_chk_{key}_{rep_name}")
+                    st.session_state[cat_select_key][key] = new_val
+                with eye_c:
+                    if st.button("👁", key=f"v_{key}_{rep_name}", help=f"View {label}", use_container_width=True):
+                        st.session_state[active_cat_key] = key
+                        st.rerun()
+                
+                st.markdown(f'<div style="font-size: 0.78rem; font-weight: 700; color: {amt_color}; margin: -6px 0 2px 4px; font-family: monospace;">${total:,.0f} <span style="font-size: 0.6rem; font-weight: 400; color: #64748b;">({count})</span></div></div>', unsafe_allow_html=True)
+                
+                if new_val:
+                    hs_total_checked += total
             
-            ns_selected = selected_rows[selected_rows['Source'] == '📦 NS'] if 'Source' in selected_rows.columns else pd.DataFrame()
-            hs_selected = selected_rows[selected_rows['Source'] == '🎯 HS'] if 'Source' in selected_rows.columns else pd.DataFrame()
+            # --- RUNNING TOTAL CARD ---
+            grand = invoiced_shipped + ns_total_checked + hs_total_checked
+            gap_val = quota - grand
+            gap_color = "#f87171" if gap_val > 0 else "#4ade80"
+            gap_word = "GAP" if gap_val > 0 else "AHEAD"
             
-            ns_total = ns_selected['Amount'].sum() if not ns_selected.empty and 'Amount' in ns_selected.columns else 0
-            if use_probability:
-                hs_total = hs_selected['Prob Amt'].sum() if not hs_selected.empty and 'Prob Amt' in hs_selected.columns else 0
+            st.markdown(f"""
+            <div style="margin-top: 14px; padding: 12px; background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.9)); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 10px;">
+                <div style="font-size: 0.55rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 6px;">Running Forecast</div>
+                <div style="display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.72rem;">
+                    <span style="color: #94a3b8;">🔒 Invoiced</span><span style="color: #4ade80; font-weight: 600;">${invoiced_shipped:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.72rem;">
+                    <span style="color: #94a3b8;">📦 NS</span><span style="color: #60a5fa; font-weight: 600;">${ns_total_checked:,.0f}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.72rem;">
+                    <span style="color: #94a3b8;">🎯 HS</span><span style="color: #a78bfa; font-weight: 600;">${hs_total_checked:,.0f}</span>
+                </div>
+                <div style="border-top: 1px solid rgba(99, 102, 241, 0.3); margin-top: 6px; padding-top: 6px;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                        <span style="font-size: 0.65rem; font-weight: 600; color: #e2e8f0;">TOTAL</span>
+                        <span style="font-size: 1.1rem; font-weight: 800; color: #e2e8f0;">${grand:,.0f}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin-top: 3px;">
+                        <span style="font-size: 0.6rem; font-weight: 600; color: #64748b;">{gap_word}</span>
+                        <span style="font-size: 0.82rem; font-weight: 700; color: {gap_color};">${abs(gap_val):,.0f}</span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # =====================================================
+        # RIGHT COLUMN: ACTIVE CATEGORY DETAIL VIEW
+        # =====================================================
+        with table_col:
+            active_key = st.session_state[active_cat_key]
+            active_data = None
+            for key, source, label, total, count, rows in cat_order:
+                if key == active_key:
+                    active_data = (key, source, label, total, count, rows)
+                    break
+            
+            if active_data is None:
+                st.info("Select a category from the left panel.")
             else:
-                hs_total = hs_selected['Amount'].sum() if not hs_selected.empty and 'Amount' in hs_selected.columns else 0
-            
-            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
-            with stat_col1:
-                st.metric("NS Selected", f"${ns_total:,.0f}")
-            with stat_col2:
-                st.metric("HS Selected", f"${hs_total:,.0f}")
-            with stat_col3:
-                st.metric("Combined", f"${ns_total + hs_total:,.0f}")
-            with stat_col4:
-                st.metric("Selected Rows", f"{len(selected_rows)} / {len(edited)}")
-            
-            # --- CATEGORY BREAKDOWN ---
-            with st.expander("📊 Category Totals Breakdown"):
-                if not selected_rows.empty:
-                    cat_summary = selected_rows.groupby(['Source', 'Category']).agg(
-                        Items=('Amount', 'count'),
-                        Total=('Amount', 'sum'),
-                        Prob_Total=('Prob Amt', 'sum')
-                    ).sort_values(['Source', 'Total'], ascending=[True, False])
-                    cat_summary['Total'] = cat_summary['Total'].apply(lambda x: f"${x:,.0f}")
-                    cat_summary['Prob_Total'] = cat_summary['Prob_Total'].apply(lambda x: f"${x:,.0f}")
-                    st.dataframe(cat_summary, use_container_width=True)
+                a_key, a_source, a_label, a_total, a_count, a_rows = active_data
+                is_included = st.session_state[cat_select_key].get(a_key, True)
+                is_hs = (a_source == 'HS')
+                src_icon = "🎯" if is_hs else "📦"
+                src_color = "#a78bfa" if is_hs else "#60a5fa"
+                inc_badge_bg = "rgba(74, 222, 128, 0.15)" if is_included else "rgba(248, 113, 113, 0.15)"
+                inc_badge_color = "#4ade80" if is_included else "#f87171"
+                inc_badge_text = "INCLUDED" if is_included else "EXCLUDED"
+                inc_badge_icon = "✓" if is_included else "✗"
+                
+                # --- Category Header ---
+                st.markdown(f"""
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; margin-bottom: 10px;
+                    background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.8));
+                    border: 1px solid {src_color}40; border-left: 4px solid {src_color}; border-radius: 10px;">
+                    <div>
+                        <div style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b;">{src_icon} {a_source}</div>
+                        <div style="font-size: 1.05rem; font-weight: 700; color: #f1f5f9;">{a_label}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 1.15rem; font-weight: 800; color: {src_color};">${a_total:,.0f}</div>
+                        <span style="background: {inc_badge_bg}; color: {inc_badge_color}; font-size: 0.55rem; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px;">{inc_badge_icon} {inc_badge_text}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # --- Prev / Next navigation ---
+                cat_keys = [c[0] for c in cat_order]
+                cur_idx = cat_keys.index(a_key) if a_key in cat_keys else 0
+                
+                pn1, pn2, pn3 = st.columns([1, 2, 1])
+                with pn1:
+                    if cur_idx > 0:
+                        if st.button("← Prev", key=f"prev_{rep_name}", type="secondary", use_container_width=True):
+                            st.session_state[active_cat_key] = cat_keys[cur_idx - 1]
+                            st.rerun()
+                with pn2:
+                    st.markdown(f'<div style="text-align: center; font-size: 0.75rem; color: #64748b; padding-top: 6px;">{cur_idx + 1} of {len(cat_keys)}</div>', unsafe_allow_html=True)
+                with pn3:
+                    if cur_idx < len(cat_keys) - 1:
+                        if st.button("Next →", key=f"next_{rep_name}", type="secondary", use_container_width=True):
+                            st.session_state[active_cat_key] = cat_keys[cur_idx + 1]
+                            st.rerun()
+                
+                # --- DATA EDITOR ---
+                if not a_rows:
+                    st.info("No line items in this category.")
                 else:
-                    st.info("No rows selected.")
+                    cat_df = pd.DataFrame(a_rows)
+                    cat_df = cat_df.sort_values('Amount', ascending=False).reset_index(drop=True)
+                    
+                    cat_df['Select'] = cat_df['ID'].apply(lambda x: st.session_state[select_state_key].get(str(x).strip(), True))
+                    cat_df['P.Status'] = cat_df['ID'].apply(lambda x: get_planning_status(x) if get_planning_status(x) else '—')
+                    cat_df['Notes'] = cat_df['ID'].apply(lambda x: get_planning_notes(x) or '')
+                    
+                    # Row action buttons
+                    ac1, ac2, ac3 = st.columns([1, 1, 2])
+                    with ac1:
+                        if st.button("☑ All", key=f"sa_{a_key}_{rep_name}", type="secondary", use_container_width=True):
+                            for i in cat_df['ID'].tolist():
+                                st.session_state[select_state_key][str(i).strip()] = True
+                            st.rerun()
+                    with ac2:
+                        if st.button("☐ None", key=f"da_{a_key}_{rep_name}", type="secondary", use_container_width=True):
+                            for i in cat_df['ID'].tolist():
+                                st.session_state[select_state_key][str(i).strip()] = False
+                            st.rerun()
+                    with ac3:
+                        sc = int(cat_df['Select'].sum())
+                        sa = cat_df[cat_df['Select'] == True]['Amount'].sum()
+                        st.markdown(f'<div style="font-size: 0.78rem; color: #94a3b8; padding-top: 8px;">✓ <b>{sc}</b>/{len(cat_df)} selected &bull; <b style="color: #4ade80;">${sa:,.0f}</b></div>', unsafe_allow_html=True)
+                    
+                    # Columns: data first, Status + Notes far right
+                    amt_label = "Raw $" if (is_hs and use_probability) else "Amount"
+                    prob_label = "Prob $ ✓" if (is_hs and use_probability) else "Prob $"
+                    
+                    display_cols = ['Select', 'Link', 'ID', 'Name', 'Type', 'Date', 'Amount', 'Rep', 'P.Status', 'Notes']
+                    if is_hs:
+                        display_cols = ['Select', 'Link', 'ID', 'Name', 'Type', 'Date', 'Amount', 'Prob Amt', 'Rep', 'P.Status', 'Notes']
+                    display_cols = [c for c in display_cols if c in cat_df.columns]
+                    
+                    edited = st.data_editor(
+                        cat_df[display_cols],
+                        column_config={
+                            "Select": st.column_config.CheckboxColumn("✓", width="small", default=True),
+                            "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
+                            "ID": st.column_config.TextColumn("ID", width="small"),
+                            "Name": st.column_config.TextColumn("Name", width="large"),
+                            "Type": st.column_config.TextColumn("Type", width="small"),
+                            "Date": st.column_config.TextColumn("Date", width="small"),
+                            "Amount": st.column_config.NumberColumn(amt_label, format="$%,.0f"),
+                            "Prob Amt": st.column_config.NumberColumn(prob_label, format="$%,.0f"),
+                            "Rep": st.column_config.TextColumn("Rep", width="small"),
+                            "P.Status": st.column_config.SelectboxColumn("Status", width="small", options=['IN', 'MAYBE', 'OUT', '—'], required=False),
+                            "Notes": st.column_config.TextColumn("Notes", width="large"),
+                        },
+                        disabled=[c for c in display_cols if c not in ['Select', 'P.Status', 'Notes']],
+                        hide_index=True,
+                        key=f"editor_{a_key}_{rep_name}",
+                        num_rows="fixed",
+                        use_container_width=True,
+                        height=min(650, max(180, 42 + len(cat_df) * 35))
+                    )
+                    
+                    # Persist edits to session state
+                    if 'ID' in edited.columns:
+                        for idx, erow in edited.iterrows():
+                            id_str = str(erow['ID']).strip()
+                            if not id_str or id_str == 'nan':
+                                continue
+                            st.session_state[select_state_key][id_str] = bool(erow.get('Select', True))
+                            if 'P.Status' in erow:
+                                sv = str(erow['P.Status']).strip().upper()
+                                nv = str(erow.get('Notes', '')).strip() if 'Notes' in erow else ''
+                                if sv and sv != '—' and sv != 'NAN':
+                                    update_planning_data(id_str, status=sv, notes=nv)
+                    
+                    # Category summary bar
+                    sel_rows = edited[edited['Select'] == True] if 'Select' in edited.columns else edited
+                    sel_amt = sel_rows['Amount'].sum() if not sel_rows.empty and 'Amount' in sel_rows.columns else 0
+                    sel_prob = sel_rows['Prob Amt'].sum() if (is_hs and use_probability and not sel_rows.empty and 'Prob Amt' in sel_rows.columns) else sel_amt
+                    prob_block = f'<div style="width: 1px; height: 26px; background: rgba(71, 85, 105, 0.4);"></div><div><span style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b;">Prob $</span><div style="font-size: 0.95rem; font-weight: 700; color: #a78bfa;">${sel_prob:,.0f}</div></div>' if (is_hs and use_probability) else ''
+                    
+                    st.markdown(f"""
+                    <div style="display: flex; gap: 18px; align-items: center; padding: 8px 14px; margin-top: 6px;
+                        background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(71, 85, 105, 0.3); border-radius: 8px;">
+                        <div><span style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b;">Selected</span>
+                            <div style="font-size: 0.95rem; font-weight: 700; color: {src_color};">${sel_amt:,.0f}</div></div>
+                        {prob_block}
+                        <div style="width: 1px; height: 26px; background: rgba(71, 85, 105, 0.4);"></div>
+                        <div><span style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b;">Rows</span>
+                            <div style="font-size: 0.95rem; font-weight: 700; color: #94a3b8;">{len(sel_rows)}/{len(edited)}</div></div>
+                    </div>
+                    """, unsafe_allow_html=True)
         
-        # --- BUILD EXPORT BUCKETS FROM SELECTIONS ---
-        # Map selected IDs back to original category dataframes for downstream calculations
-        # This preserves full column data needed for export while respecting row selections
+        # --- BUILD EXPORT BUCKETS FROM ALL CHECKED CATEGORIES ---
+        included_keys = set(k for k, v in st.session_state[cat_select_key].items() if v)
         
-        # Get the set of included category keys from the multiselect
-        included_keys = set()
-        for label in (selected_categories if selected_categories else []):
-            k = label_to_key.get(label)
-            if k:
-                included_keys.add(k)
-        
-        # Build export_buckets for NetSuite categories
         for key in ns_categories:
             if key not in included_keys:
                 continue
@@ -2693,19 +2757,14 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             if id_col not in df.columns:
                 export_buckets[key] = df
                 continue
-            # Filter to only selected rows
-            selected_mask = df[id_col].apply(
-                lambda x: st.session_state[select_state_key].get(str(x).strip(), True) if pd.notna(x) else True
-            )
+            selected_mask = df[id_col].apply(lambda x: st.session_state[select_state_key].get(str(x).strip(), True) if pd.notna(x) else True)
             export_df = df[selected_mask].copy()
             if not export_df.empty:
-                # Attach planning status and notes for export
                 if 'SO #' in export_df.columns:
                     export_df['Status'] = export_df['SO #'].apply(lambda x: get_planning_status(x) or '')
                     export_df['Notes'] = export_df['SO #'].apply(lambda x: get_planning_notes(x) or '')
                 export_buckets[key] = export_df
         
-        # Build export_buckets for HubSpot categories
         for key in hs_categories:
             if key not in included_keys:
                 continue
@@ -2716,26 +2775,18 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             if id_col not in df.columns:
                 export_buckets[key] = df
                 continue
-            # Filter to only selected rows
-            selected_mask = df[id_col].apply(
-                lambda x: st.session_state[select_state_key].get(str(x).strip(), True) if pd.notna(x) else True
-            )
+            selected_mask = df[id_col].apply(lambda x: st.session_state[select_state_key].get(str(x).strip(), True) if pd.notna(x) else True)
             export_df = df[selected_mask].copy()
             if not export_df.empty:
-                # Attach planning status and notes for export
                 if 'Deal ID' in export_df.columns:
                     export_df['Status'] = export_df['Deal ID'].apply(lambda x: get_planning_status(x) or '')
                     export_df['Notes'] = export_df['Deal ID'].apply(lambda x: get_planning_notes(x) or '')
                 export_buckets[key] = export_df
-    
-    else:
-        st.info("📭 No pending orders or pipeline deals found for this view.")
-
     # --- 5. CALCULATE RESULTS ---
     
     # Get probability mode from session state
     amount_mode_key = f"amount_mode_{rep_name}"
-    use_probability_for_calc = st.session_state.get(amount_mode_key, "Raw Amount") == "Probability-Adjusted"
+    use_probability_for_calc = st.session_state.get(amount_mode_key, "Raw $") == "Prob $"
     
     # Calculate totals from export buckets (which reflect custom selections)
     def safe_sum(df, is_hubspot=False):
