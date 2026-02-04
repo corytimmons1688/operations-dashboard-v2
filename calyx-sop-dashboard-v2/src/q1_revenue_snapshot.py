@@ -3,6 +3,16 @@ Sales Forecasting Dashboard - Q1 2026 Version
 Reads from Google Sheets and displays gap-to-goal analysis with interactive visualizations
 Includes lead time logic for Q1/Q2 fulfillment determination and detailed order drill-downs
 
+VERSION 11 CHANGES:
+- Added "View All Selected Data" consolidated master table to Build Your Own Forecast section
+  - Full-width table combining all checked categories with Source, Category, ID, Name, Amount columns
+  - Multiselect filters for Category and Source, plus free-text search across all fields
+  - Summary metrics (total amount, prob-adjusted, category count, line items)
+  - Category totals breakdown table
+- Fixed rep dashboard breakout sections (Section 1, Section 2, Progress Breakdown) not rendering properly
+  - Converted CSS class-based HTML (progress-breakdown, progress-item) to inline styles
+  - Inline styles render reliably in Streamlit's markdown regardless of CSS load order
+
 VERSION 10 CHANGES:
 - Added search filter to Build Your Own Forecast sections (search by Customer/SO# or Deal Name)
 - Fixed buggy checkbox behavior in Customize mode - removed conflicting state management
@@ -2782,6 +2792,177 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                         )
                                     export_buckets[key] = df
 
+    # --- 4b. CONSOLIDATED MASTER TABLE VIEW ---
+    st.markdown("---")
+    
+    # Count how many categories are selected
+    selected_cat_count = len(export_buckets)
+    
+    if selected_cat_count > 0:
+        with st.expander(f"📊 View All Selected Data — Full Width ({selected_cat_count} categories, click to expand)", expanded=False):
+            # Build unified master dataframe from all export_buckets
+            master_rows = []
+            for key, df in export_buckets.items():
+                if df.empty:
+                    continue
+                
+                is_ns = key in ns_categories
+                label = ns_categories.get(key, hs_categories.get(key, {})).get('label', key)
+                source = "NetSuite" if is_ns else "HubSpot"
+                
+                for _, row in df.iterrows():
+                    if is_ns:
+                        item_id = row.get('SO #', row.get('Display_SO_Num', row.get('Document Number', '')))
+                        name = row.get('Customer', '')
+                        date_val = row.get('Ship Date', '')
+                        amount = pd.to_numeric(row.get('Amount_Numeric', row.get('Amount', 0)), errors='coerce')
+                        if pd.isna(amount): amount = 0
+                        prob_amount = amount
+                        link = row.get('Link', '')
+                        rep = row.get('Sales Rep', row.get('Rep Master', ''))
+                        order_type = row.get('Type', row.get('Display_Type', ''))
+                        status = get_planning_status(item_id) or ''
+                    else:
+                        item_id = row.get('Deal ID', row.get('Record ID', ''))
+                        name = row.get('Deal Name', row.get('Account Name', ''))
+                        date_val = row.get('Close', row.get('Close Date', ''))
+                        amount = pd.to_numeric(row.get('Amount_Numeric', 0), errors='coerce')
+                        if pd.isna(amount): amount = 0
+                        prob_amount = pd.to_numeric(row.get('Prob_Amount_Numeric', 0), errors='coerce')
+                        if pd.isna(prob_amount): prob_amount = amount
+                        link = row.get('Link', '')
+                        rep = row.get('Deal Owner', '')
+                        order_type = row.get('Type', row.get('Display_Type', ''))
+                        status = get_planning_status(item_id) or ''
+                    
+                    # Clean up NaN values
+                    if pd.isna(rep) or rep is None: rep = ''
+                    if pd.isna(name) or name is None: name = ''
+                    if pd.isna(date_val) or date_val is None: date_val = ''
+                    if pd.isna(order_type) or order_type is None: order_type = ''
+                    if pd.isna(link) or link is None: link = ''
+                    if isinstance(date_val, pd.Timestamp):
+                        date_val = date_val.strftime('%Y-%m-%d')
+                    
+                    master_rows.append({
+                        'Source': source,
+                        'Category': label,
+                        'ID': str(item_id).strip() if item_id else '',
+                        'Name': str(name).strip(),
+                        'Type': str(order_type).strip(),
+                        'Date': str(date_val).strip(),
+                        'Amount': amount,
+                        'Prob Amount': prob_amount,
+                        'Status': status,
+                        'Rep': str(rep).strip(),
+                        'Link': str(link).strip()
+                    })
+            
+            if master_rows:
+                master_df = pd.DataFrame(master_rows)
+                
+                # --- Filters row ---
+                filter_col1, filter_col2, filter_col3 = st.columns([2, 2, 1])
+                
+                with filter_col1:
+                    available_categories = sorted(master_df['Category'].unique().tolist())
+                    selected_categories = st.multiselect(
+                        "Filter by Category:",
+                        options=available_categories,
+                        default=available_categories,
+                        key=f"master_cat_filter_{rep_name}"
+                    )
+                
+                with filter_col2:
+                    master_search = st.text_input(
+                        "🔍 Search across all data:",
+                        key=f"master_search_{rep_name}",
+                        placeholder="Search by name, ID, customer, rep..."
+                    )
+                
+                with filter_col3:
+                    source_filter = st.multiselect(
+                        "Source:",
+                        options=sorted(master_df['Source'].unique().tolist()),
+                        default=sorted(master_df['Source'].unique().tolist()),
+                        key=f"master_source_filter_{rep_name}"
+                    )
+                
+                # Apply filters
+                filtered_master = master_df.copy()
+                if selected_categories:
+                    filtered_master = filtered_master[filtered_master['Category'].isin(selected_categories)]
+                if source_filter:
+                    filtered_master = filtered_master[filtered_master['Source'].isin(source_filter)]
+                if master_search:
+                    search_lower = master_search.lower()
+                    text_mask = (
+                        filtered_master['Name'].str.lower().str.contains(search_lower, na=False) |
+                        filtered_master['ID'].str.lower().str.contains(search_lower, na=False) |
+                        filtered_master['Rep'].str.lower().str.contains(search_lower, na=False) |
+                        filtered_master['Category'].str.lower().str.contains(search_lower, na=False) |
+                        filtered_master['Type'].str.lower().str.contains(search_lower, na=False)
+                    )
+                    filtered_master = filtered_master[text_mask]
+                
+                if filtered_master.empty:
+                    st.info("No data matches your filters.")
+                else:
+                    # Summary stats bar
+                    total_amt = filtered_master['Amount'].sum()
+                    total_prob = filtered_master['Prob Amount'].sum()
+                    unique_cats = filtered_master['Category'].nunique()
+                    row_count = len(filtered_master)
+                    
+                    stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
+                    with stat_col1:
+                        st.metric("Total Amount", f"${total_amt:,.0f}")
+                    with stat_col2:
+                        st.metric("Prob-Adjusted", f"${total_prob:,.0f}")
+                    with stat_col3:
+                        st.metric("Categories", f"{unique_cats}")
+                    with stat_col4:
+                        st.metric("Line Items", f"{row_count}")
+                    
+                    # Sort by Amount descending
+                    filtered_master = filtered_master.sort_values('Amount', ascending=False)
+                    
+                    # Display the master table
+                    st.dataframe(
+                        filtered_master,
+                        column_config={
+                            "Link": st.column_config.LinkColumn("🔗", display_text="Open", width="small"),
+                            "Source": st.column_config.TextColumn("Source", width="small"),
+                            "Category": st.column_config.TextColumn("Category", width="medium"),
+                            "ID": st.column_config.TextColumn("ID", width="small"),
+                            "Name": st.column_config.TextColumn("Name", width="medium"),
+                            "Type": st.column_config.TextColumn("Type", width="small"),
+                            "Date": st.column_config.TextColumn("Date", width="small"),
+                            "Amount": st.column_config.NumberColumn("Amount", format="$%,.0f"),
+                            "Prob Amount": st.column_config.NumberColumn("Prob $", format="$%,.0f"),
+                            "Status": st.column_config.TextColumn("Status", width="small"),
+                            "Rep": st.column_config.TextColumn("Rep", width="small"),
+                        },
+                        hide_index=True,
+                        use_container_width=True,
+                        height=600
+                    )
+                    
+                    # Category breakdown summary
+                    st.markdown("##### Category Totals")
+                    cat_summary = filtered_master.groupby('Category').agg(
+                        Items=('Amount', 'count'),
+                        Total=('Amount', 'sum'),
+                        Prob_Total=('Prob Amount', 'sum')
+                    ).sort_values('Total', ascending=False)
+                    cat_summary['Total'] = cat_summary['Total'].apply(lambda x: f"${x:,.0f}")
+                    cat_summary['Prob_Total'] = cat_summary['Prob_Total'].apply(lambda x: f"${x:,.0f}")
+                    st.dataframe(cat_summary, use_container_width=True)
+            else:
+                st.info("Check some categories above to see data here.")
+    else:
+        st.caption("☝️ Select categories above, then expand this section to see all data in one view.")
+
     # --- 5. CALCULATE RESULTS ---
     
     # Get probability mode from session state
@@ -4359,27 +4540,39 @@ def display_progress_breakdown(metrics):
     """Display a beautiful progress breakdown card"""
     
     st.markdown(f"""
-    <div class="progress-breakdown">
-        <h3>💰 The Safe Bet <span style="font-size: 0.8em; opacity: 0.6; font-weight: 400; margin-left: auto;">High Confidence Revenue</span></h3>
-        <div class="progress-item">
-            <span class="progress-label">✅ Invoiced & Shipped</span>
-            <span class="progress-value" style="color: #3b82f6;">${metrics['orders']:,.0f}</span>
+    <div style="
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        border-radius: 20px;
+        padding: 2rem;
+        margin: 1.5rem 0;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 0 30px rgba(99, 102, 241, 0.1), 0 10px 40px rgba(0, 0, 0, 0.3);
+    ">
+        <div style="position: absolute; top: 0; left: 0; width: 5px; height: 100%; background: linear-gradient(180deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);"></div>
+        <h3 style="color: #f1f5f9 !important; font-size: 1.25rem; font-weight: 700; margin-bottom: 1.5rem; padding-left: 0.5rem;">
+            💰 The Safe Bet <span style="font-size: 0.8em; opacity: 0.6; font-weight: 400; margin-left: auto;">High Confidence Revenue</span>
+        </h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">✅ Invoiced & Shipped</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #3b82f6;">${metrics['orders']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment</span>
-            <span class="progress-value" style="color: #f59e0b;">${metrics['pending_fulfillment']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">📦 Pending Fulfillment</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #f59e0b;">${metrics['pending_fulfillment']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval</span>
-            <span class="progress-value" style="color: #f97316;">${metrics['pending_approval']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">⏳ Pending Approval</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #f97316;">${metrics['pending_approval']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">🎯 HubSpot Expect/Commit</span>
-            <span class="progress-value" style="color: #10b981;">${metrics['expect_commit']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">🎯 HubSpot Expect/Commit</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #10b981;">${metrics['expect_commit']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label" style="color: white; font-weight: 600;">TOTAL CONFIRMED</span>
-            <span class="progress-value" style="font-size: 1.4rem; background: linear-gradient(to right, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">${metrics['total_progress']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 0.5rem; margin-top: 1rem; border-top: 2px solid rgba(99, 102, 241, 0.3);">
+            <span style="color: white; font-size: 0.95rem; font-weight: 600;">TOTAL CONFIRMED</span>
+            <span style="font-size: 1.4rem; font-weight: 700; background: linear-gradient(to right, #fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">${metrics['total_progress']:,.0f}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -4920,27 +5113,39 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
     
     # SECTION 1: What's in NetSuite with Dates and HubSpot Expect/Commit
     st.markdown(f"""
-    <div class="progress-breakdown">
-        <h3>💰 Section 1: What's in NetSuite with Dates and HubSpot Expect/Commit</h3>
-        <div class="progress-item">
-            <span class="progress-label">✅ Invoiced & Shipped</span>
-            <span class="progress-value">${metrics['orders']:,.0f}</span>
+    <div style="
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        border-radius: 20px;
+        padding: 2rem;
+        margin: 1.5rem 0;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 0 30px rgba(99, 102, 241, 0.1), 0 10px 40px rgba(0, 0, 0, 0.3);
+    ">
+        <div style="position: absolute; top: 0; left: 0; width: 5px; height: 100%; background: linear-gradient(180deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);"></div>
+        <h3 style="color: #f1f5f9 !important; font-size: 1.25rem; font-weight: 700; margin-bottom: 1.5rem; padding-left: 0.5rem;">
+            💰 Section 1: What's in NetSuite with Dates and HubSpot Expect/Commit
+        </h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">✅ Invoiced & Shipped</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['orders']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment (with date)</span>
-            <span class="progress-value">${metrics['pending_fulfillment']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">📦 Pending Fulfillment (with date)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_fulfillment']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval (with date)</span>
-            <span class="progress-value">${metrics['pending_approval']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">⏳ Pending Approval (with date)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_approval']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">🎯 HubSpot Expect/Commit</span>
-            <span class="progress-value">${metrics['expect_commit']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">🎯 HubSpot Expect/Commit</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['expect_commit']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">💪 THE SAFE BET TOTAL</span>
-            <span class="progress-value">${high_confidence:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 0.5rem; margin-top: 1rem; border-top: 2px solid rgba(99, 102, 241, 0.3);">
+            <span style="color: white; font-size: 0.95rem; font-weight: 600;">💪 THE SAFE BET TOTAL</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${high_confidence:,.0f}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -4984,39 +5189,51 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
     
     # SECTION 2: Full Forecast
     st.markdown(f"""
-    <div class="progress-breakdown">
-        <h3>📊 Section 2: Full Forecast</h3>
-        <div class="progress-item">
-            <span class="progress-label">✅ Invoiced & Shipped</span>
-            <span class="progress-value">${metrics['orders']:,.0f}</span>
+    <div style="
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        border-radius: 20px;
+        padding: 2rem;
+        margin: 1.5rem 0;
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 0 30px rgba(99, 102, 241, 0.1), 0 10px 40px rgba(0, 0, 0, 0.3);
+    ">
+        <div style="position: absolute; top: 0; left: 0; width: 5px; height: 100%; background: linear-gradient(180deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);"></div>
+        <h3 style="color: #f1f5f9 !important; font-size: 1.25rem; font-weight: 700; margin-bottom: 1.5rem; padding-left: 0.5rem;">
+            📊 Section 2: Full Forecast
+        </h3>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">✅ Invoiced & Shipped</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['orders']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment (with date)</span>
-            <span class="progress-value">${metrics['pending_fulfillment']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">📦 Pending Fulfillment (with date)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_fulfillment']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval (with date)</span>
-            <span class="progress-value">${metrics['pending_approval']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">⏳ Pending Approval (with date)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_approval']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">🎯 HubSpot Expect/Commit</span>
-            <span class="progress-value">${metrics['expect_commit']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">🎯 HubSpot Expect/Commit</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['expect_commit']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment (without date)</span>
-            <span class="progress-value">${metrics['pending_fulfillment_no_date']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">📦 Pending Fulfillment (without date)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_fulfillment_no_date']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval (without date)</span>
-            <span class="progress-value">${metrics['pending_approval_no_date']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">⏳ Pending Approval (without date)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_approval_no_date']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">⏱️ Pending Approval (>2 weeks old)</span>
-            <span class="progress-value">${metrics['pending_approval_old']:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem 0.5rem; border-bottom: 1px solid rgba(71, 85, 105, 0.3);">
+            <span style="color: #94a3b8; font-size: 0.95rem; font-weight: 500;">⏱️ Pending Approval (>2 weeks old)</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${metrics['pending_approval_old']:,.0f}</span>
         </div>
-        <div class="progress-item">
-            <span class="progress-label">📊 FULL FORECAST TOTAL</span>
-            <span class="progress-value">${full_forecast:,.0f}</span>
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.25rem 0.5rem; margin-top: 1rem; border-top: 2px solid rgba(99, 102, 241, 0.3);">
+            <span style="color: white; font-size: 0.95rem; font-weight: 600;">📊 FULL FORECAST TOTAL</span>
+            <span style="font-size: 1.1rem; font-weight: 700; color: #e2e8f0;">${full_forecast:,.0f}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
