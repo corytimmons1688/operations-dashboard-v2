@@ -2383,7 +2383,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     ">
         <span style="font-size: 1.3rem;">🔒</span>
         <div>
-            <div style="font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8;">Invoiced & Shipped (Locked)</div>
+            <div style="font-size: 0.6rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8;">Invoiced &amp; Shipped (Locked)</div>
             <div style="color: #4ade80; font-size: 1.3rem; font-weight: 800; letter-spacing: -0.5px;">${invoiced_shipped:,.0f}</div>
         </div>
     </div>
@@ -2406,7 +2406,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         if val <= 0 and key != 'PA_Date':
             continue
         if key not in st.session_state[cat_select_key]:
-            st.session_state[cat_select_key][key] = True
+            st.session_state[cat_select_key][key] = False
         
         rows = []
         for _, row in df.iterrows():
@@ -2440,7 +2440,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         if val <= 0:
             continue
         if key not in st.session_state[cat_select_key]:
-            st.session_state[cat_select_key][key] = True
+            st.session_state[cat_select_key][key] = False
         
         rows = []
         for _, row in df.iterrows():
@@ -2482,56 +2482,55 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         # LEFT COLUMN: CATEGORY NAV PANEL
         # =====================================================
         with nav_col:
-            st.markdown('<div style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #94a3b8; margin-bottom: 8px;">Forecast Buckets</div>', unsafe_allow_html=True)
+            st.caption("FORECAST BUCKETS")
             
             qa1, qa2 = st.columns(2)
             with qa1:
-                if st.button("All On", key=f"cat_all_{rep_name}", type="secondary", use_container_width=True):
+                if st.button("✓ All On", key=f"cat_all_{rep_name}", use_container_width=True):
                     for c in cat_order:
                         st.session_state[cat_select_key][c[0]] = True
+                        st.session_state[f"cat_chk_{c[0]}_{rep_name}"] = True
                     st.rerun()
             with qa2:
-                if st.button("All Off", key=f"cat_none_{rep_name}", type="secondary", use_container_width=True):
+                if st.button("✗ All Off", key=f"cat_none_{rep_name}", use_container_width=True):
                     for c in cat_order:
                         st.session_state[cat_select_key][c[0]] = False
+                        st.session_state[f"cat_chk_{c[0]}_{rep_name}"] = False
                     st.rerun()
             
-            # --- NS HEADER ---
-            st.markdown('<div style="font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #60a5fa; margin: 14px 0 4px 0; padding-bottom: 3px; border-bottom: 1px solid rgba(96, 165, 250, 0.25);">NetSuite Orders</div>', unsafe_allow_html=True)
+            st.divider()
+            
+            # --- NETSUITE SECTION ---
+            st.caption("📦 NETSUITE ORDERS")
             
             ns_total_checked = 0
             for key, source, label, total, count, rows in cat_order:
                 if source != 'NS':
                     continue
-                is_checked = st.session_state[cat_select_key].get(key, True)
+                is_checked = st.session_state[cat_select_key].get(key, False)
                 is_active = (st.session_state[active_cat_key] == key)
                 
-                # --- CATEGORY CARD ---
-                active_border = "rgba(99, 102, 241, 0.8)" if is_active else "rgba(71, 85, 105, 0.25)"
-                active_bg = "rgba(99, 102, 241, 0.06)" if is_active else "transparent"
-                active_glow = "0 0 10px rgba(99, 102, 241, 0.15)" if is_active else "none"
-                active_indicator = "border-left: 3px solid #6366f1;" if is_active else "border-left: 3px solid transparent;"
-                amt_color = "#4ade80" if is_checked else "#475569"
-                
-                st.markdown(f'<div style="background: {active_bg}; border: 1px solid {active_border}; {active_indicator} border-radius: 8px; padding: 4px 8px; margin: 3px 0; box-shadow: {active_glow}; cursor: pointer;">', unsafe_allow_html=True)
-                
-                chk_c, eye_c = st.columns([4, 1])
+                chk_c, eye_c = st.columns([5, 1])
                 with chk_c:
-                    new_val = st.checkbox(label, value=is_checked, key=f"cat_chk_{key}_{rep_name}")
+                    new_val = st.checkbox(
+                        f"{label}  —  **${total:,.0f}** ({count})",
+                        value=is_checked,
+                        key=f"cat_chk_{key}_{rep_name}"
+                    )
                     st.session_state[cat_select_key][key] = new_val
                 with eye_c:
-                    if st.button("👁", key=f"v_{key}_{rep_name}", help=f"View {label}", use_container_width=True):
+                    btn_type = "primary" if is_active else "secondary"
+                    if st.button("👁", key=f"v_{key}_{rep_name}", type=btn_type, use_container_width=True):
                         st.session_state[active_cat_key] = key
                         st.rerun()
-                
-                st.markdown(f'<div style="font-size: 0.78rem; font-weight: 700; color: {amt_color}; margin: -6px 0 2px 4px; font-family: monospace;">${total:,.0f} <span style="font-size: 0.6rem; font-weight: 400; color: #64748b;">({count})</span></div></div>', unsafe_allow_html=True)
                 
                 if new_val:
                     ns_total_checked += total
             
-            # --- HS HEADER ---
-            st.markdown('<div style="font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #a78bfa; margin: 14px 0 4px 0; padding-bottom: 3px; border-bottom: 1px solid rgba(167, 139, 250, 0.25);">HubSpot Pipeline</div>', unsafe_allow_html=True)
+            st.divider()
             
+            # --- HUBSPOT SECTION ---
+            st.caption("🎯 HUBSPOT PIPELINE")
             amount_mode = st.radio("Amt:", options=["Raw $", "Prob $"], key=amount_mode_key, horizontal=True, label_visibility="collapsed")
             use_probability = (amount_mode == "Prob $")
             
@@ -2539,61 +2538,41 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             for key, source, label, total, count, rows in cat_order:
                 if source != 'HS':
                     continue
-                is_checked = st.session_state[cat_select_key].get(key, True)
+                is_checked = st.session_state[cat_select_key].get(key, False)
                 is_active = (st.session_state[active_cat_key] == key)
                 
-                active_border = "rgba(99, 102, 241, 0.8)" if is_active else "rgba(71, 85, 105, 0.25)"
-                active_bg = "rgba(99, 102, 241, 0.06)" if is_active else "transparent"
-                active_glow = "0 0 10px rgba(99, 102, 241, 0.15)" if is_active else "none"
-                active_indicator = "border-left: 3px solid #6366f1;" if is_active else "border-left: 3px solid transparent;"
-                amt_color = "#4ade80" if is_checked else "#475569"
-                
-                st.markdown(f'<div style="background: {active_bg}; border: 1px solid {active_border}; {active_indicator} border-radius: 8px; padding: 4px 8px; margin: 3px 0; box-shadow: {active_glow};">', unsafe_allow_html=True)
-                
-                chk_c, eye_c = st.columns([4, 1])
+                chk_c, eye_c = st.columns([5, 1])
                 with chk_c:
-                    new_val = st.checkbox(label, value=is_checked, key=f"cat_chk_{key}_{rep_name}")
+                    new_val = st.checkbox(
+                        f"{label}  —  **${total:,.0f}** ({count})",
+                        value=is_checked,
+                        key=f"cat_chk_{key}_{rep_name}"
+                    )
                     st.session_state[cat_select_key][key] = new_val
                 with eye_c:
-                    if st.button("👁", key=f"v_{key}_{rep_name}", help=f"View {label}", use_container_width=True):
+                    btn_type = "primary" if is_active else "secondary"
+                    if st.button("👁", key=f"v_{key}_{rep_name}", type=btn_type, use_container_width=True):
                         st.session_state[active_cat_key] = key
                         st.rerun()
-                
-                st.markdown(f'<div style="font-size: 0.78rem; font-weight: 700; color: {amt_color}; margin: -6px 0 2px 4px; font-family: monospace;">${total:,.0f} <span style="font-size: 0.6rem; font-weight: 400; color: #64748b;">({count})</span></div></div>', unsafe_allow_html=True)
                 
                 if new_val:
                     hs_total_checked += total
             
-            # --- RUNNING TOTAL CARD ---
+            st.divider()
+            
+            # --- RUNNING TOTAL ---
             grand = invoiced_shipped + ns_total_checked + hs_total_checked
             gap_val = quota - grand
-            gap_color = "#f87171" if gap_val > 0 else "#4ade80"
-            gap_word = "GAP" if gap_val > 0 else "AHEAD"
+            gap_pct = (grand / quota * 100) if quota > 0 else 0
             
-            st.markdown(f"""
-            <div style="margin-top: 14px; padding: 12px; background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.9)); border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 10px;">
-                <div style="font-size: 0.55rem; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b; margin-bottom: 6px;">Running Forecast</div>
-                <div style="display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.72rem;">
-                    <span style="color: #94a3b8;">🔒 Invoiced</span><span style="color: #4ade80; font-weight: 600;">${invoiced_shipped:,.0f}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.72rem;">
-                    <span style="color: #94a3b8;">📦 NS</span><span style="color: #60a5fa; font-weight: 600;">${ns_total_checked:,.0f}</span>
-                </div>
-                <div style="display: flex; justify-content: space-between; padding: 2px 0; font-size: 0.72rem;">
-                    <span style="color: #94a3b8;">🎯 HS</span><span style="color: #a78bfa; font-weight: 600;">${hs_total_checked:,.0f}</span>
-                </div>
-                <div style="border-top: 1px solid rgba(99, 102, 241, 0.3); margin-top: 6px; padding-top: 6px;">
-                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
-                        <span style="font-size: 0.65rem; font-weight: 600; color: #e2e8f0;">TOTAL</span>
-                        <span style="font-size: 1.1rem; font-weight: 800; color: #e2e8f0;">${grand:,.0f}</span>
-                    </div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 3px;">
-                        <span style="font-size: 0.6rem; font-weight: 600; color: #64748b;">{gap_word}</span>
-                        <span style="font-size: 0.82rem; font-weight: 700; color: {gap_color};">${abs(gap_val):,.0f}</span>
-                    </div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            st.metric("🔒 Locked Revenue", f"${invoiced_shipped:,.0f}")
+            fc1, fc2 = st.columns(2)
+            with fc1:
+                st.metric("📦 NS", f"${ns_total_checked:,.0f}")
+            with fc2:
+                st.metric("🎯 HS", f"${hs_total_checked:,.0f}")
+            st.metric("FORECAST TOTAL", f"${grand:,.0f}", delta=f"{'Gap' if gap_val > 0 else 'Ahead'}: ${abs(gap_val):,.0f}")
+            st.progress(min(gap_pct / 100, 1.0))
         
         # =====================================================
         # RIGHT COLUMN: ACTIVE CATEGORY DETAIL VIEW
@@ -2607,49 +2586,36 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     break
             
             if active_data is None:
-                st.info("Select a category from the left panel.")
+                st.info("Select a category from the left panel to view details.")
             else:
                 a_key, a_source, a_label, a_total, a_count, a_rows = active_data
-                is_included = st.session_state[cat_select_key].get(a_key, True)
+                is_included = st.session_state[cat_select_key].get(a_key, False)
                 is_hs = (a_source == 'HS')
                 src_icon = "🎯" if is_hs else "📦"
                 src_color = "#a78bfa" if is_hs else "#60a5fa"
-                inc_badge_bg = "rgba(74, 222, 128, 0.15)" if is_included else "rgba(248, 113, 113, 0.15)"
-                inc_badge_color = "#4ade80" if is_included else "#f87171"
-                inc_badge_text = "INCLUDED" if is_included else "EXCLUDED"
-                inc_badge_icon = "✓" if is_included else "✗"
                 
                 # --- Category Header ---
-                st.markdown(f"""
-                <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; margin-bottom: 10px;
-                    background: linear-gradient(135deg, rgba(30, 41, 59, 0.8), rgba(15, 23, 42, 0.8));
-                    border: 1px solid {src_color}40; border-left: 4px solid {src_color}; border-radius: 10px;">
-                    <div>
-                        <div style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #64748b;">{src_icon} {a_source}</div>
-                        <div style="font-size: 1.05rem; font-weight: 700; color: #f1f5f9;">{a_label}</div>
-                    </div>
-                    <div style="text-align: right;">
-                        <div style="font-size: 1.15rem; font-weight: 800; color: {src_color};">${a_total:,.0f}</div>
-                        <span style="background: {inc_badge_bg}; color: {inc_badge_color}; font-size: 0.55rem; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px;">{inc_badge_icon} {inc_badge_text}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
+                inc_text = "✓ INCLUDED IN FORECAST" if is_included else "✗ NOT INCLUDED"
+                inc_color = "#4ade80" if is_included else "#f87171"
+                inc_bg = "rgba(74,222,128,0.15)" if is_included else "rgba(248,113,113,0.15)"
                 
-                # --- Prev / Next navigation ---
+                st.markdown(f"""<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;margin-bottom:8px;background:linear-gradient(135deg,rgba(30,41,59,0.8),rgba(15,23,42,0.8));border:1px solid {src_color}40;border-left:4px solid {src_color};border-radius:10px;"><div><div style="font-size:0.55rem;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;color:#64748b;">{src_icon} {a_source}</div><div style="font-size:1.05rem;font-weight:700;color:#f1f5f9;">{a_label}</div></div><div style="text-align:right;"><div style="font-size:1.15rem;font-weight:800;color:{src_color};">${a_total:,.0f}</div><span style="background:{inc_bg};color:{inc_color};font-size:0.55rem;font-weight:700;padding:2px 8px;border-radius:4px;">{inc_text}</span></div></div>""", unsafe_allow_html=True)
+                
+                # Prev / Next
                 cat_keys = [c[0] for c in cat_order]
                 cur_idx = cat_keys.index(a_key) if a_key in cat_keys else 0
                 
                 pn1, pn2, pn3 = st.columns([1, 2, 1])
                 with pn1:
                     if cur_idx > 0:
-                        if st.button("← Prev", key=f"prev_{rep_name}", type="secondary", use_container_width=True):
+                        if st.button("← Prev", key=f"prev_{rep_name}", use_container_width=True):
                             st.session_state[active_cat_key] = cat_keys[cur_idx - 1]
                             st.rerun()
                 with pn2:
-                    st.markdown(f'<div style="text-align: center; font-size: 0.75rem; color: #64748b; padding-top: 6px;">{cur_idx + 1} of {len(cat_keys)}</div>', unsafe_allow_html=True)
+                    st.caption(f"Category {cur_idx + 1} of {len(cat_keys)}")
                 with pn3:
                     if cur_idx < len(cat_keys) - 1:
-                        if st.button("Next →", key=f"next_{rep_name}", type="secondary", use_container_width=True):
+                        if st.button("Next →", key=f"next_{rep_name}", use_container_width=True):
                             st.session_state[active_cat_key] = cat_keys[cur_idx + 1]
                             st.rerun()
                 
@@ -2664,24 +2630,24 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                     cat_df['P.Status'] = cat_df['ID'].apply(lambda x: get_planning_status(x) if get_planning_status(x) else '—')
                     cat_df['Notes'] = cat_df['ID'].apply(lambda x: get_planning_notes(x) or '')
                     
-                    # Row action buttons
+                    # Row actions + count
                     ac1, ac2, ac3 = st.columns([1, 1, 2])
                     with ac1:
-                        if st.button("☑ All", key=f"sa_{a_key}_{rep_name}", type="secondary", use_container_width=True):
+                        if st.button("☑ Select All", key=f"sa_{a_key}_{rep_name}", use_container_width=True):
                             for i in cat_df['ID'].tolist():
                                 st.session_state[select_state_key][str(i).strip()] = True
                             st.rerun()
                     with ac2:
-                        if st.button("☐ None", key=f"da_{a_key}_{rep_name}", type="secondary", use_container_width=True):
+                        if st.button("☐ Deselect All", key=f"da_{a_key}_{rep_name}", use_container_width=True):
                             for i in cat_df['ID'].tolist():
                                 st.session_state[select_state_key][str(i).strip()] = False
                             st.rerun()
                     with ac3:
-                        sc = int(cat_df['Select'].sum())
-                        sa = cat_df[cat_df['Select'] == True]['Amount'].sum()
-                        st.markdown(f'<div style="font-size: 0.78rem; color: #94a3b8; padding-top: 8px;">✓ <b>{sc}</b>/{len(cat_df)} selected &bull; <b style="color: #4ade80;">${sa:,.0f}</b></div>', unsafe_allow_html=True)
+                        sel_count = int(cat_df['Select'].sum())
+                        sel_amount = cat_df[cat_df['Select'] == True]['Amount'].sum()
+                        st.caption(f"✓ {sel_count}/{len(cat_df)} selected • ${sel_amount:,.0f}")
                     
-                    # Columns: data first, Status + Notes far right
+                    # Column order: data first, Status + Notes far right
                     amt_label = "Raw $" if (is_hs and use_probability) else "Amount"
                     prob_label = "Prob $ ✓" if (is_hs and use_probability) else "Prob $"
                     
@@ -2713,7 +2679,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                         height=min(650, max(180, 42 + len(cat_df) * 35))
                     )
                     
-                    # Persist edits to session state
+                    # Persist edits
                     if 'ID' in edited.columns:
                         for idx, erow in edited.iterrows():
                             id_str = str(erow['ID']).strip()
@@ -2726,23 +2692,25 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                                 if sv and sv != '—' and sv != 'NAN':
                                     update_planning_data(id_str, status=sv, notes=nv)
                     
-                    # Category summary bar
+                    # Summary using native metrics
                     sel_rows = edited[edited['Select'] == True] if 'Select' in edited.columns else edited
                     sel_amt = sel_rows['Amount'].sum() if not sel_rows.empty and 'Amount' in sel_rows.columns else 0
-                    sel_prob = sel_rows['Prob Amt'].sum() if (is_hs and use_probability and not sel_rows.empty and 'Prob Amt' in sel_rows.columns) else sel_amt
-                    prob_block = f'<div style="width: 1px; height: 26px; background: rgba(71, 85, 105, 0.4);"></div><div><span style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b;">Prob $</span><div style="font-size: 0.95rem; font-weight: 700; color: #a78bfa;">${sel_prob:,.0f}</div></div>' if (is_hs and use_probability) else ''
                     
-                    st.markdown(f"""
-                    <div style="display: flex; gap: 18px; align-items: center; padding: 8px 14px; margin-top: 6px;
-                        background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(71, 85, 105, 0.3); border-radius: 8px;">
-                        <div><span style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b;">Selected</span>
-                            <div style="font-size: 0.95rem; font-weight: 700; color: {src_color};">${sel_amt:,.0f}</div></div>
-                        {prob_block}
-                        <div style="width: 1px; height: 26px; background: rgba(71, 85, 105, 0.4);"></div>
-                        <div><span style="font-size: 0.55rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: #64748b;">Rows</span>
-                            <div style="font-size: 0.95rem; font-weight: 700; color: #94a3b8;">{len(sel_rows)}/{len(edited)}</div></div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    sm1, sm2, sm3 = st.columns(3)
+                    with sm1:
+                        st.metric("Selected Total", f"${sel_amt:,.0f}")
+                    with sm2:
+                        if is_hs and use_probability and 'Prob Amt' in sel_rows.columns:
+                            sel_prob = sel_rows['Prob Amt'].sum() if not sel_rows.empty else 0
+                            st.metric("Prob-Adjusted", f"${sel_prob:,.0f}")
+                        else:
+                            st.metric("Rows Selected", f"{len(sel_rows)} / {len(edited)}")
+                    with sm3:
+                        if is_hs and use_probability:
+                            st.metric("Rows Selected", f"{len(sel_rows)} / {len(edited)}")
+                        else:
+                            pct = (sel_amt / a_total * 100) if a_total > 0 else 0
+                            st.metric("% of Category", f"{pct:.0f}%")
         
         # --- BUILD EXPORT BUCKETS FROM ALL CHECKED CATEGORIES ---
         included_keys = set(k for k, v in st.session_state[cat_select_key].items() if v)
