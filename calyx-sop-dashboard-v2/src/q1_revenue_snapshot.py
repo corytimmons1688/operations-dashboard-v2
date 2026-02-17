@@ -3742,6 +3742,7 @@ def create_team_sunburst(dashboard_df, deals_df):
         'Dave Borkowski': '#10b981',    # Green
         'Lance Mitton': '#f59e0b',      # Amber
         'Alex Gonzalez': '#8b5cf6',     # Purple
+        'Owen Labombard': '#06b6d4',    # Cyan
         'Shopify ECommerce': '#ec4899'  # Pink
     }
     
@@ -5127,7 +5128,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     """
     Display CRO Weekly Scorecard - matches the Google Apps Script email report.
     Shows comprehensive forecast metrics for all reps with Face Value and Probability views.
-    Includes forecast plug support for Alex, House, and Shopify ECommerce.
+    Includes forecast plug support for Alex, Owen, House, and Shopify ECommerce.
     """
     
     # Configuration (matches Google Apps Script)
@@ -5137,6 +5138,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         'Alex Gonzalez',
         'Brad Sherman',
         'Lance Mitton',
+        'Owen Labombard',
         'House',
         'Shopify ECommerce'
     ]
@@ -5165,7 +5167,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     st.markdown("### ⚡ HubSpot Expect Plugs")
     st.caption("Add forecast adjustments for deals not yet in HubSpot. These amounts will be added to HS E/C.")
     
-    plug_col1, plug_col2, plug_col3 = st.columns(3)
+    plug_col1, plug_col2, plug_col3, plug_col4 = st.columns(4)
     
     with plug_col1:
         plug_alex = st.number_input(
@@ -5180,6 +5182,18 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         st.session_state.plug_alex = plug_alex
     
     with plug_col2:
+        plug_owen = st.number_input(
+            "Owen Labombard",
+            min_value=0,
+            value=int(st.session_state.get('plug_owen', 0)),
+            step=10000,
+            format="%d",
+            key="plug_owen_input",
+            help="Plug amount for Owen Labombard"
+        )
+        st.session_state.plug_owen = plug_owen
+    
+    with plug_col3:
         plug_house = st.number_input(
             "House",
             min_value=0,
@@ -5191,7 +5205,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         )
         st.session_state.plug_house = plug_house
     
-    with plug_col3:
+    with plug_col4:
         plug_ecom = st.number_input(
             "Shopify ECommerce",
             min_value=0,
@@ -5206,6 +5220,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     # Store plugs in a dict
     plugs = {
         'Alex Gonzalez': plug_alex,
+        'Owen Labombard': plug_owen,
         'House': plug_house,
         'Shopify ECommerce': plug_ecom
     }
@@ -5215,6 +5230,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         plug_parts = []
         if plug_alex > 0:
             plug_parts.append(f"Alex: ${plug_alex:,}")
+        if plug_owen > 0:
+            plug_parts.append(f"Owen: ${plug_owen:,}")
         if plug_house > 0:
             plug_parts.append(f"House: ${plug_house:,}")
         if plug_ecom > 0:
