@@ -3398,12 +3398,53 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     # PA Old (>2 Weeks) -> pa_old
     pa_old = orders[orders['Updated_Status_Clean'] == 'PA Old (>2 Weeks)'].copy()
     
-    # Spillover categories - check for Q4/Q2 spillover values if they exist
-    # These may be added later; for now, return empty DataFrames
+    # === SPILLOVER DETECTION ===
+    # Match Apps Script V5 logic: PF/PA orders with dates AFTER Q1 end are spillover
+    q1_end = pd.Timestamp('2026-03-31')
+    
+    # PF Spillover: PF with Date orders where ship date > Q1 end
+    # Ship date = min(Customer Promise Date, Projected Date) — same as Apps Script
+    pf_q2_spillover = pd.DataFrame()
+    if not pf_date_ext.empty or not pf_date_int.empty:
+        pf_with_date_all = pd.concat([pf_date_ext, pf_date_int], ignore_index=True)
+        if not pf_with_date_all.empty:
+            pf_with_date_all['_promise'] = pd.to_datetime(pf_with_date_all['Display_Promise_Date'], errors='coerce')
+            pf_with_date_all['_projected'] = pd.to_datetime(pf_with_date_all['Display_Projected_Date'], errors='coerce')
+            # Take the earlier of the two dates (matching Apps Script: if both exist, use min)
+            pf_with_date_all['_ship_date'] = pf_with_date_all[['_promise', '_projected']].min(axis=1)
+            
+            spill_mask = pf_with_date_all['_ship_date'].notna() & (pf_with_date_all['_ship_date'] > q1_end)
+            pf_q2_spillover = pf_with_date_all[spill_mask].copy()
+            
+            # Remove spillover orders from their original buckets
+            if not pf_q2_spillover.empty:
+                spill_indices = pf_q2_spillover.index if not pf_q2_spillover.empty else pd.Index([])
+                # Need to re-filter from the originals since we concatenated
+                pf_ext_promise = pd.to_datetime(pf_date_ext['Display_Promise_Date'], errors='coerce') if not pf_date_ext.empty else pd.Series(dtype='datetime64[ns]')
+                pf_ext_projected = pd.to_datetime(pf_date_ext['Display_Projected_Date'], errors='coerce') if not pf_date_ext.empty else pd.Series(dtype='datetime64[ns]')
+                if not pf_date_ext.empty:
+                    pf_date_ext['_ship_date'] = pd.concat([pf_ext_promise, pf_ext_projected], axis=1).min(axis=1)
+                    ext_spill = pf_date_ext['_ship_date'].notna() & (pf_date_ext['_ship_date'] > q1_end)
+                    pf_date_ext = pf_date_ext[~ext_spill].copy()
+                
+                pf_int_promise = pd.to_datetime(pf_date_int['Display_Promise_Date'], errors='coerce') if not pf_date_int.empty else pd.Series(dtype='datetime64[ns]')
+                pf_int_projected = pd.to_datetime(pf_date_int['Display_Projected_Date'], errors='coerce') if not pf_date_int.empty else pd.Series(dtype='datetime64[ns]')
+                if not pf_date_int.empty:
+                    pf_date_int['_ship_date'] = pd.concat([pf_int_promise, pf_int_projected], axis=1).min(axis=1)
+                    int_spill = pf_date_int['_ship_date'].notna() & (pf_date_int['_ship_date'] > q1_end)
+                    pf_date_int = pf_date_int[~int_spill].copy()
+    
+    # PA Spillover: PA with Date orders where Pending Approval Date > Q1 end
+    pa_q2_spillover = pd.DataFrame()
+    if not pa_date.empty:
+        pa_date['_pa_dt'] = pd.to_datetime(pa_date['Display_PA_Date'], errors='coerce')
+        pa_spill_mask = pa_date['_pa_dt'].notna() & (pa_date['_pa_dt'] > q1_end)
+        pa_q2_spillover = pa_date[pa_spill_mask].copy()
+        pa_date = pa_date[~pa_spill_mask].copy()
+    
+    # Q4 spillover — not currently tracked via dates, keep empty
     pf_q4_spillover = pd.DataFrame()
     pa_q4_spillover = pd.DataFrame()
-    pf_q2_spillover = pd.DataFrame()
-    pa_q2_spillover = pd.DataFrame()
     
     # Calculate amounts - respects shipping toggle
     # Determine which amount column to use based on shipping toggle
@@ -5281,7 +5322,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     
     # --- CALCULATE SALES ORDER METRICS BY REP ---
     def get_so_metrics(rep_name):
-        metrics = {'pf_with_date': 0, 'pf_no_date': 0, 'pa_with_date': 0, 'pa_no_date': 0, 'pa_old': 0}
+        metrics = {'pf_with_date': 0, 'pf_no_date': 0, 'pa_with_date': 0, 'pa_no_date': 0, 'pa_old': 0, 'pf_spillover': 0, 'pa_spillover': 0}
         
         if sales_orders_df.empty:
             return metrics
@@ -5311,16 +5352,46 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         if not status_col:
             return metrics
         
+        # Parse date columns for spillover detection (matching Apps Script V5)
+        q1_end = pd.Timestamp('2026-03-31')
+        
+        # Customer Promise Date (Col L) and Projected Date (Col M)
+        promise_col = 'Customer Promise Date' if 'Customer Promise Date' in rep_orders.columns else None
+        projected_col = 'Projected Date' if 'Projected Date' in rep_orders.columns else None
+        pa_date_col = 'Pending Approval Date' if 'Pending Approval Date' in rep_orders.columns else None
+        
+        if promise_col:
+            rep_orders['_promise'] = pd.to_datetime(rep_orders[promise_col], errors='coerce')
+        if projected_col:
+            rep_orders['_projected'] = pd.to_datetime(rep_orders[projected_col], errors='coerce')
+        if pa_date_col:
+            rep_orders['_pa_date'] = pd.to_datetime(rep_orders[pa_date_col], errors='coerce')
+        
         for _, row in rep_orders.iterrows():
             status = str(row.get(status_col, '')).strip()
             amount = row['Amount_Calc']
             
             if 'PF with Date' in status or 'PF w/ Date' in status:
-                metrics['pf_with_date'] += amount
+                # Check for PF spillover: min(promise, projected) > Q1 end
+                promise_dt = row.get('_promise', pd.NaT) if promise_col else pd.NaT
+                projected_dt = row.get('_projected', pd.NaT) if projected_col else pd.NaT
+                dates = [d for d in [promise_dt, projected_dt] if pd.notna(d)]
+                ship_date = min(dates) if dates else None
+                
+                if ship_date and ship_date > q1_end:
+                    metrics['pf_spillover'] += amount
+                else:
+                    metrics['pf_with_date'] += amount
             elif 'PF No Date' in status or 'PF no Date' in status:
                 metrics['pf_no_date'] += amount
             elif 'PA with Date' in status or 'PA w/ Date' in status:
-                metrics['pa_with_date'] += amount
+                # Check for PA spillover: pending approval date > Q1 end
+                pa_dt = row.get('_pa_date', pd.NaT) if pa_date_col else pd.NaT
+                
+                if pd.notna(pa_dt) and pa_dt > q1_end:
+                    metrics['pa_spillover'] += amount
+                else:
+                    metrics['pa_with_date'] += amount
             elif 'PA No Date' in status or 'PA no Date' in status:
                 metrics['pa_no_date'] += amount
             elif 'PA Old' in status or '>2 Week' in status:
@@ -5418,6 +5489,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             'pa_with_date': so_metrics['pa_with_date'],
             'pa_no_date': so_metrics['pa_no_date'],
             'pa_old': so_metrics['pa_old'],
+            'pf_spillover': so_metrics['pf_spillover'],
+            'pa_spillover': so_metrics['pa_spillover'],
             'hs_expect_commit': hs_expect_commit,
             'hs_expect_commit_prob': hs_expect_commit_prob,
             'hs_best_case': hs_metrics['best_case'],
@@ -5442,6 +5515,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     # --- CALCULATE TEAM TOTALS ---
     team_totals = {key: sum(m.get(key, 0) for m in all_metrics.values()) for key in [
         'invoiced', 'pf_with_date', 'pf_no_date', 'pa_with_date', 'pa_no_date', 'pa_old',
+        'pf_spillover', 'pa_spillover',
         'hs_expect_commit', 'hs_expect_commit_prob', 'hs_best_case', 'hs_best_case_prob',
         'hs_opportunity', 'hs_opportunity_prob', 'hs_q2_spillover', 'hs_q2_spillover_prob',
         'total_core', 'total_core_prob', 'all_q1', 'all_q1_prob',
@@ -5511,11 +5585,13 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     c4.metric("⚠️ PA >2wk", f"${team_totals['pa_old']:,.0f}")
     
     # Row 2
-    c5, c6, c7, c8 = st.columns(4)
+    total_so_spillover = team_totals['pf_spillover'] + team_totals['pa_spillover']
+    c5, c6, c7, c8, c9 = st.columns(5)
     c5.metric("🎯 HS E/C", f"${team_totals['hs_expect_commit']:,.0f}")
     c6.metric("📈 Forecast", f"${team_totals['total_forecast']:,.0f}")
-    c7.metric("📅 Q2 Spill", f"${team_totals['hs_q2_spillover']:,.0f}")
-    c8.metric("🏁 Quota", f"${team_quota:,.0f}")
+    c7.metric("🚢 SO Spill", f"${total_so_spillover:,.0f}")
+    c8.metric("📅 Q2 Spill", f"${team_totals['hs_q2_spillover']:,.0f}")
+    c9.metric("🏁 Quota", f"${team_quota:,.0f}")
     
     # --- FACE VALUE TABLE ---
     st.markdown("---")
@@ -5547,6 +5623,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             'Best': m.get('hs_best_case', 0),
             'Opp': m.get('hs_opportunity', 0),
             'Forecast': forecast,
+            'PF Spill': m.get('pf_spillover', 0),
+            'PA Spill': m.get('pa_spillover', 0),
             'Q2 Spill': m.get('hs_q2_spillover', 0),
             'Full Pipe': m.get('full_pipeline', 0),
             'Quota': quota,
@@ -5569,6 +5647,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         'Best': team_totals['hs_best_case'],
         'Opp': team_totals['hs_opportunity'],
         'Forecast': team_totals['total_forecast'],
+        'PF Spill': team_totals['pf_spillover'],
+        'PA Spill': team_totals['pa_spillover'],
         'Q2 Spill': team_totals['hs_q2_spillover'],
         'Full Pipe': team_totals['full_pipeline'],
         'Quota': team_quota,
@@ -5589,7 +5669,9 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         # Highlight Forecast column
         styles['Forecast'] = 'background-color: rgba(139, 92, 246, 0.3); color: #a78bfa; font-weight: bold'
         
-        # Highlight Q2 and Full Pipe
+        # Highlight Q2, PF Spill, PA Spill and Full Pipe
+        styles['PF Spill'] = 'color: #f472b6'
+        styles['PA Spill'] = 'color: #f472b6'
         styles['Q2 Spill'] = 'color: #f472b6'
         styles['Full Pipe'] = 'background-color: rgba(244, 114, 182, 0.2); color: #f472b6'
         
@@ -5606,7 +5688,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         
         return styles
     
-    currency_cols = ['Inv', 'PF', 'PA', 'HS E/C', 'Total', 'PF ND', 'PA ND', 'PA Old', 'All Q1', 'Best', 'Opp', 'Forecast', 'Q2 Spill', 'Full Pipe', 'Quota']
+    currency_cols = ['Inv', 'PF', 'PA', 'HS E/C', 'Total', 'PF ND', 'PA ND', 'PA Old', 'All Q1', 'Best', 'Opp', 'Forecast', 'PF Spill', 'PA Spill', 'Q2 Spill', 'Full Pipe', 'Quota']
     
     st.dataframe(
         face_df.style.apply(style_face_value, axis=None).format({
@@ -5646,6 +5728,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
             'Best': m.get('hs_best_case_prob', 0),
             'Opp': m.get('hs_opportunity_prob', 0),
             'Forecast': forecast,
+            'PF Spill': m.get('pf_spillover', 0),
+            'PA Spill': m.get('pa_spillover', 0),
             'Q2 Spill': m.get('hs_q2_spillover_prob', 0),
             'Full Pipe': m.get('full_pipeline_prob', 0),
             'Quota': quota,
@@ -5667,6 +5751,8 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         'Best': team_totals['hs_best_case_prob'],
         'Opp': team_totals['hs_opportunity_prob'],
         'Forecast': team_totals['total_forecast_prob'],
+        'PF Spill': team_totals['pf_spillover'],
+        'PA Spill': team_totals['pa_spillover'],
         'Q2 Spill': team_totals['hs_q2_spillover_prob'],
         'Full Pipe': team_totals['full_pipeline_prob'],
         'Quota': team_quota,
