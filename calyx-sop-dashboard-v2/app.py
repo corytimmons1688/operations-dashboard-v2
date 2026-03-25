@@ -65,6 +65,14 @@ except ImportError as e:
     Q1_MODULE_LOADED = False
     Q1_IMPORT_ERROR = str(e)
 
+Q2_IMPORT_ERROR = None
+try:
+    from src.q2_revenue_snapshot import render_q2_revenue_snapshot
+    Q2_MODULE_LOADED = True
+except ImportError as e:
+    Q2_MODULE_LOADED = False
+    Q2_IMPORT_ERROR = str(e)
+
 YEARLY_IMPORT_ERROR = None
 try:
     from src.yearly_planning_2026 import render_yearly_planning_2026
@@ -507,9 +515,10 @@ def render_sidebar():
             "Navigation",
             options=[
                 "🎯 Q1 Revenue Snapshot",
-                "📈 S&OP Planning", 
+                "📈 Q2 Revenue Snapshot",
+                "📊 S&OP Planning",
                 "🛡️ Quality Management",
-                "📊 Q4 Revenue Snapshot",
+                "📉 Q4 Revenue Snapshot",
                 "📅 2026 Yearly Planning",
                 "🎮 Revenue Operations Playground"
             ],
@@ -600,14 +609,17 @@ def render_sidebar():
             
             **🎯 Q1 Revenue Snapshot**
             Live Q1 2026 forecasting with interactive planning tools
-            
-            **📈 S&OP Planning**
+
+            **📈 Q2 Revenue Snapshot**
+            Live Q2 2026 forecasting with interactive planning tools
+
+            **📊 S&OP Planning**
             Sales & Operations planning with demand forecasting
-            
+
             **🛡️ Quality Management**
             NC tracking, aging analysis, and quality metrics
-            
-            **📊 Q4 Revenue Snapshot**
+
+            **📉 Q4 Revenue Snapshot**
             Q4 2025 historical performance data
             
             **📅 2026 Yearly Planning**
@@ -867,6 +879,27 @@ def render_q1_revenue_section():
         st.markdown(f"Import Error: `{Q1_IMPORT_ERROR}`")
 
 
+def render_q2_revenue_section():
+    """Render Q2 Revenue Snapshot & Planning section."""
+    if Q2_MODULE_LOADED:
+        try:
+            render_q2_revenue_snapshot()
+        except Exception as e:
+            st.error(f"Error loading Q2 Revenue Snapshot: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+    else:
+        st.markdown("""
+        <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+                     color: white; border-radius: 16px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(59, 130, 246, 0.3);'>
+            <h2 style='margin: 0; color: white !important;'>📈 Q2 Revenue Snapshot</h2>
+            <p style='font-size: 0.9rem; margin: 8px 0 0 0; opacity: 0.9; color: white !important;'>Q2 2026 Planning & Forecasting</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.info("📌 **Q2 Revenue Snapshot module not yet loaded.**")
+        st.markdown(f"Import Error: `{Q2_IMPORT_ERROR}`")
+
+
 def render_2026_yearly_planning_section():
     """Render 2026 Yearly Planning section."""
     if YEARLY_MODULE_LOADED:
@@ -929,11 +962,13 @@ def main():
     # Map the navigation options
     if section == "🎯 Q1 Revenue Snapshot":
         render_q1_revenue_section()
-    elif section == "📈 S&OP Planning":
+    elif section == "📈 Q2 Revenue Snapshot":
+        render_q2_revenue_section()
+    elif section == "📊 S&OP Planning":
         render_sop_section()
     elif section == "🛡️ Quality Management":
         render_quality_section_wrapper()
-    elif section == "📊 Q4 Revenue Snapshot":
+    elif section == "📉 Q4 Revenue Snapshot":
         render_q4_revenue_section()
     elif section == "📅 2026 Yearly Planning":
         render_2026_yearly_planning_section()
