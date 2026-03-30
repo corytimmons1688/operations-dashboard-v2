@@ -2516,15 +2516,39 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     t_col1, t_col2 = st.columns([1, 1])
     with t_col1:
         if st.button("☑️ Select All Rows", key=f"select_all_{rep_name}", type="secondary", use_container_width=True):
-            for sk in [ns_state_key, hs_state_key]:
-                for _id, s in st.session_state[sk].items():
-                    s['select'] = True
+            # Set select=True for ALL SOs in combined data
+            ns_st = st.session_state[ns_state_key]
+            if not combined_ns.empty and 'SO #' in combined_ns.columns:
+                for so in combined_ns['SO #'].astype(str).str.strip().unique():
+                    if so in ns_st:
+                        ns_st[so]['select'] = True
+                    else:
+                        ns_st[so] = {'select': True, 'status': '—', 'notes': '', 'amount': None}
+            hs_st = st.session_state[hs_state_key]
+            if not combined_hs.empty and 'Deal ID' in combined_hs.columns:
+                for did in combined_hs['Deal ID'].astype(str).str.strip().unique():
+                    if did in hs_st:
+                        hs_st[did]['select'] = True
+                    else:
+                        hs_st[did] = {'select': True, 'status': '—', 'notes': '', 'amount': None, 'prob_amount': None}
             st.rerun()
     with t_col2:
         if st.button("☐ Deselect All Rows", key=f"unselect_all_{rep_name}", type="secondary", use_container_width=True):
-            for sk in [ns_state_key, hs_state_key]:
-                for _id, s in st.session_state[sk].items():
-                    s['select'] = False
+            # Set select=False for ALL SOs in combined data
+            ns_st = st.session_state[ns_state_key]
+            if not combined_ns.empty and 'SO #' in combined_ns.columns:
+                for so in combined_ns['SO #'].astype(str).str.strip().unique():
+                    if so in ns_st:
+                        ns_st[so]['select'] = False
+                    else:
+                        ns_st[so] = {'select': False, 'status': '—', 'notes': '', 'amount': None}
+            hs_st = st.session_state[hs_state_key]
+            if not combined_hs.empty and 'Deal ID' in combined_hs.columns:
+                for did in combined_hs['Deal ID'].astype(str).str.strip().unique():
+                    if did in hs_st:
+                        hs_st[did]['select'] = False
+                    else:
+                        hs_st[did] = {'select': False, 'status': '—', 'notes': '', 'amount': None, 'prob_amount': None}
             st.rerun()
 
     # === TABS ===
@@ -2579,7 +2603,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                         if amt is not None:
                             working_ns.at[idx, 'Amount_Numeric'] = amt
                     else:
-                        select_vals.append(False)
+                        select_vals.append(True)
                         status_vals.append(get_planning_status(so) or '—')
                         notes_vals.append(get_planning_notes(so))
                 working_ns['Select'] = select_vals
@@ -2667,7 +2691,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                             selected_rows = []
                             for cidx in cat_df.index:
                                 so = str(cat_df.at[cidx, 'SO #']).strip()
-                                so_state = saved_st.get(so, {'select': False})
+                                so_state = saved_st.get(so, {'select': True})
                                 if so_state.get('select', True):
                                     row = cat_df.loc[[cidx]].copy()
                                     amt_override = so_state.get('amount')
@@ -2751,7 +2775,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                         if prob_amt is not None and 'Prob_Amount_Numeric' in working_hs.columns:
                             working_hs.at[idx, 'Prob_Amount_Numeric'] = prob_amt
                     else:
-                        select_vals.append(False)
+                        select_vals.append(True)
                         status_vals.append(get_planning_status(did) or '—')
                         notes_vals.append(get_planning_notes(did))
                 working_hs['Select'] = select_vals
@@ -2830,7 +2854,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
                             selected_rows = []
                             for cidx in cat_df.index:
                                 did = str(cat_df.at[cidx, 'Deal ID']).strip()
-                                did_state = saved_hst.get(did, {'select': False})
+                                did_state = saved_hst.get(did, {'select': True})
                                 if did_state.get('select', True):
                                     row = cat_df.loc[[cidx]].copy()
                                     amt = did_state.get('amount')
@@ -2862,7 +2886,45 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
 
     # --- 5. CALCULATE RESULTS ---
 
-    export_buckets = st.session_state.get(export_key, {})
+    # Build export_buckets directly from source data + saved state
+    # This always reflects current selections regardless of form submission
+    export_buckets = {}
+    saved_ns_st = st.session_state.get(ns_state_key, {})
+    for cat_key in ns_categories:
+        cat_df = ns_dfs.get(cat_key, pd.DataFrame())
+        if not cat_df.empty and 'SO #' in cat_df.columns:
+            selected_rows = []
+            for cidx in cat_df.index:
+                so = str(cat_df.at[cidx, 'SO #']).strip()
+                so_state = saved_ns_st.get(so, {'select': True})
+                if so_state.get('select', True):
+                    row = cat_df.loc[[cidx]].copy()
+                    amt_override = so_state.get('amount')
+                    if amt_override is not None and 'Amount_Numeric' in row.columns:
+                        row.at[cidx, 'Amount_Numeric'] = amt_override
+                    selected_rows.append(row)
+            if selected_rows:
+                export_buckets[cat_key] = pd.concat(selected_rows)
+
+    saved_hs_st = st.session_state.get(hs_state_key, {})
+    for cat_key in hs_categories:
+        cat_df = hs_dfs.get(cat_key, pd.DataFrame())
+        if not cat_df.empty and 'Deal ID' in cat_df.columns:
+            selected_rows = []
+            for cidx in cat_df.index:
+                did = str(cat_df.at[cidx, 'Deal ID']).strip()
+                did_state = saved_hs_st.get(did, {'select': True})
+                if did_state.get('select', True):
+                    row = cat_df.loc[[cidx]].copy()
+                    amt = did_state.get('amount')
+                    if amt is not None and 'Amount_Numeric' in row.columns:
+                        row.at[cidx, 'Amount_Numeric'] = amt
+                    prob_amt = did_state.get('prob_amount')
+                    if prob_amt is not None and 'Prob_Amount_Numeric' in row.columns:
+                        row.at[cidx, 'Prob_Amount_Numeric'] = prob_amt
+                    selected_rows.append(row)
+            if selected_rows:
+                export_buckets[cat_key] = pd.concat(selected_rows)
 
     use_probability_for_calc = st.session_state.get(amount_mode_key, "Raw Amount") == "Probability-Adjusted"
 
