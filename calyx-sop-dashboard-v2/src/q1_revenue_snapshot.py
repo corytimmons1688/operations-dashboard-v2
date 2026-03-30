@@ -2516,15 +2516,39 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     t_col1, t_col2 = st.columns([1, 1])
     with t_col1:
         if st.button("☑️ Select All Rows", key=f"select_all_{rep_name}", type="secondary", use_container_width=True):
-            for sk in [ns_state_key, hs_state_key]:
-                for _id, s in st.session_state[sk].items():
-                    s['select'] = True
+            # Set select=True for ALL SOs in combined data
+            ns_st = st.session_state[ns_state_key]
+            if not combined_ns.empty and 'SO #' in combined_ns.columns:
+                for so in combined_ns['SO #'].astype(str).str.strip().unique():
+                    if so in ns_st:
+                        ns_st[so]['select'] = True
+                    else:
+                        ns_st[so] = {'select': True, 'status': '—', 'notes': '', 'amount': None}
+            hs_st = st.session_state[hs_state_key]
+            if not combined_hs.empty and 'Deal ID' in combined_hs.columns:
+                for did in combined_hs['Deal ID'].astype(str).str.strip().unique():
+                    if did in hs_st:
+                        hs_st[did]['select'] = True
+                    else:
+                        hs_st[did] = {'select': True, 'status': '—', 'notes': '', 'amount': None, 'prob_amount': None}
             st.rerun()
     with t_col2:
         if st.button("☐ Deselect All Rows", key=f"unselect_all_{rep_name}", type="secondary", use_container_width=True):
-            for sk in [ns_state_key, hs_state_key]:
-                for _id, s in st.session_state[sk].items():
-                    s['select'] = False
+            # Set select=False for ALL SOs in combined data
+            ns_st = st.session_state[ns_state_key]
+            if not combined_ns.empty and 'SO #' in combined_ns.columns:
+                for so in combined_ns['SO #'].astype(str).str.strip().unique():
+                    if so in ns_st:
+                        ns_st[so]['select'] = False
+                    else:
+                        ns_st[so] = {'select': False, 'status': '—', 'notes': '', 'amount': None}
+            hs_st = st.session_state[hs_state_key]
+            if not combined_hs.empty and 'Deal ID' in combined_hs.columns:
+                for did in combined_hs['Deal ID'].astype(str).str.strip().unique():
+                    if did in hs_st:
+                        hs_st[did]['select'] = False
+                    else:
+                        hs_st[did] = {'select': False, 'status': '—', 'notes': '', 'amount': None, 'prob_amount': None}
             st.rerun()
 
     # === TABS ===
