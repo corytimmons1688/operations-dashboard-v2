@@ -36,6 +36,15 @@ SPREADSHEET_ID = get_spreadsheet_id()
 Q1_START = datetime(2026, 1, 1)
 Q1_END = datetime(2026, 3, 31, 23, 59, 59)
 
+# Q1 2026 fixed quota (historical - won't change)
+Q1_TEAM_QUOTA = 4_700_000
+
+# Q1 2026 per-rep quotas (historical)
+Q1_REP_QUOTAS = {
+    # Populate with actual rep quotas if needed for individual rep views
+    # e.g. 'John Smith': 800000,
+}
+
 # ============================================================================
 # DATA LOADING
 # ============================================================================
@@ -254,14 +263,15 @@ def display_dashboard(invoices_df, dashboard_df, rep_name=None):
         if 'Sales Rep' in invoices_df.columns:
             invoices_df = invoices_df[invoices_df['Sales Rep'] == rep_name].copy()
         title = f"👤 {rep_name}'s Q1 2026 Review"
-        quota = 0
-        if not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
+        # Use hardcoded rep quota if available, otherwise try dashboard info
+        quota = Q1_REP_QUOTAS.get(rep_name, 0)
+        if quota == 0 and not dashboard_df.empty and 'Rep Name' in dashboard_df.columns:
             rep_quota = dashboard_df[dashboard_df['Rep Name'] == rep_name]
             if not rep_quota.empty and 'Quota' in rep_quota.columns:
                 quota = rep_quota['Quota'].iloc[0]
     else:
         title = "🎯 Q1 2026 Team Revenue Review"
-        quota = dashboard_df['Quota'].sum() if not dashboard_df.empty and 'Quota' in dashboard_df.columns else 0
+        quota = Q1_TEAM_QUOTA
 
     st.title(title)
     st.caption("January - March 2026 | Invoice Data | Final: $3.92M")
