@@ -514,8 +514,8 @@ def render_sidebar():
         section = st.radio(
             "Navigation",
             options=[
-                "🎯 Q1 Revenue Snapshot",
                 "📈 Q2 Revenue Snapshot",
+                "🎯 Q1 2026 Review",
                 "📊 S&OP Planning",
                 "🛡️ Quality Management",
                 "📉 Q4 Revenue Snapshot",
@@ -607,11 +607,11 @@ def render_sidebar():
             st.markdown("""
             <div style="font-size: 0.85rem; line-height: 1.6;">
             
-            **🎯 Q1 Revenue Snapshot**
-            Live Q1 2026 forecasting with interactive planning tools
-
             **📈 Q2 Revenue Snapshot**
             Live Q2 2026 forecasting with interactive planning tools
+
+            **🎯 Q1 2026 Review**
+            Q1 2026 historical performance review ($3.92M)
 
             **📊 S&OP Planning**
             Sales & Operations planning with demand forecasting
@@ -858,24 +858,23 @@ def render_q4_revenue_section():
 
 
 def render_q1_revenue_section():
-    """Render Q1 Revenue Snapshot & Planning section."""
-    # The Q1 module handles its own header and layout - don't add extra headers
+    """Render Q1 2026 Review (historical snapshot)."""
     if Q1_MODULE_LOADED:
         try:
             render_q1_revenue_snapshot()
         except Exception as e:
-            st.error(f"Error loading Q1 Revenue Snapshot: {str(e)}")
+            st.error(f"Error loading Q1 2026 Review: {str(e)}")
             import traceback
             st.code(traceback.format_exc())
     else:
         st.markdown("""
-        <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); 
+        <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
                      color: white; border-radius: 16px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(139, 92, 246, 0.3);'>
-            <h2 style='margin: 0; color: white !important;'>🎯 Q1 Revenue Snapshot</h2>
-            <p style='font-size: 0.9rem; margin: 8px 0 0 0; opacity: 0.9; color: white !important;'>Q1 2026 Planning & Forecasting</p>
+            <h2 style='margin: 0; color: white !important;'>🎯 Q1 2026 Review</h2>
+            <p style='font-size: 0.9rem; margin: 8px 0 0 0; opacity: 0.9; color: white !important;'>Q1 2026 Historical Performance • $3.92M</p>
         </div>
         """, unsafe_allow_html=True)
-        st.info("📌 **Q1 Revenue Snapshot module not yet loaded.**")
+        st.info("📌 **Q1 2026 Review module not yet loaded.**")
         st.markdown(f"Import Error: `{Q1_IMPORT_ERROR}`")
 
 
@@ -960,10 +959,10 @@ def main():
     section = render_sidebar()
     
     # Map the navigation options
-    if section == "🎯 Q1 Revenue Snapshot":
-        render_q1_revenue_section()
-    elif section == "📈 Q2 Revenue Snapshot":
+    if section == "📈 Q2 Revenue Snapshot":
         render_q2_revenue_section()
+    elif section == "🎯 Q1 2026 Review":
+        render_q1_revenue_section()
     elif section == "📊 S&OP Planning":
         render_sop_section()
     elif section == "🛡️ Quality Management":
