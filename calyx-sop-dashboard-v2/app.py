@@ -400,6 +400,33 @@ def render_sidebar():
             format_func=lambda x: "📈  Q2 2026 Forecast"
         )
 
+        # Q2 sub-navigation — indented via CSS targeting the specific radio key
+        if section == "Q2 2026 Forecast":
+            st.markdown("""
+            <style>
+            /* Indent the Q2 sub-nav radio group */
+            [data-testid="stSidebar"] [data-testid="element-container"]:has([data-testid="stRadio"] [key="q2_app_view_selector"]),
+            [data-testid="stSidebar"] div:has(> [data-testid="stRadio"] div[data-baseweb="radio"] + div[data-baseweb="radio"] + div[data-baseweb="radio"]) {
+                margin-left: 18px !important;
+                padding-left: 12px !important;
+                border-left: 2px solid rgba(129,140,248,0.2) !important;
+                margin-top: -8px !important;
+                margin-bottom: 4px !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            q2_view = st.radio(
+                "Q2 View",
+                options=["Team Overview", "Individual Rep", "CRO Scorecard"],
+                label_visibility="collapsed",
+                key="q2_app_view_selector",
+                format_func=lambda x: {
+                    "Team Overview": "👥 Team Overview",
+                    "Individual Rep": "👤 Individual Rep",
+                    "CRO Scorecard": "📊 CRO Scorecard",
+                }.get(x, x)
+            )
+
         # Past quarters section
         st.markdown("""
         <p style="
@@ -423,30 +450,6 @@ def render_sidebar():
                 "Q4 2025 Review": "📉  Q4 2025",
             }.get(x, x)
         )
-
-        # Q2 sub-navigation — nested directly under Q2, no separate label
-        if section == "Q2 2026 Forecast":
-            st.markdown("""
-            <style>
-            /* Tighten and indent the Q2 sub-nav */
-            [data-testid="stSidebar"] div[data-testid="stRadio"]:has(> div > label > div > p:first-child) + div[data-testid="stRadio"] {
-                margin-top: -8px;
-            }
-            </style>
-            <div style="margin-left: 20px; border-left: 2px solid rgba(129,140,248,0.2); padding-left: 0; margin-top: -4px; margin-bottom: 4px;">
-            """, unsafe_allow_html=True)
-            q2_view = st.radio(
-                "Q2 View",
-                options=["Team Overview", "Individual Rep", "CRO Scorecard"],
-                label_visibility="collapsed",
-                key="q2_app_view_selector",
-                format_func=lambda x: {
-                    "Team Overview": "👥 Team Overview",
-                    "Individual Rep": "👤 Individual Rep",
-                    "CRO Scorecard": "📊 CRO Scorecard",
-                }.get(x, x)
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
 
         # Planning section
         st.markdown("""
