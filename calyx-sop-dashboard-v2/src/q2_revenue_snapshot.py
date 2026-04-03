@@ -1075,8 +1075,6 @@ def load_all_data():
     if not deals_df.empty and len(deals_df.columns) >= 6:
         col_names = deals_df.columns.tolist()
         
-        st.sidebar.info(f"📋 Raw columns: {col_names}")
-        st.sidebar.caption(f"📊 Raw row count: {len(deals_df)}")
         
         # Simple column rename mapping for All Reps All Pipelines sheet
         # Columns: Record ID, Deal Name, Deal Stage, Close Date, Deal Owner First Name, Deal Owner Last Name,
@@ -1104,7 +1102,6 @@ def load_all_data():
             # Drop the separate columns
             deals_df = deals_df.drop(columns=['Deal Owner First Name', 'Deal Owner Last Name'])
         
-        st.sidebar.caption(f"Columns after rename: {deals_df.columns.tolist()}")
         
         # Clean Deal Owner
         if 'Deal Owner' in deals_df.columns:
@@ -1133,31 +1130,8 @@ def load_all_data():
         # Convert Close Date to datetime
         if 'Close Date' in deals_df.columns:
             deals_df['Close Date'] = pd.to_datetime(deals_df['Close Date'], errors='coerce')
-        
-        # Debug output
-        total_deals = len(deals_df)
-        total_amount = deals_df['Amount'].sum() if 'Amount' in deals_df.columns else 0
-        
-        st.sidebar.markdown("### 📊 HubSpot Data (from All Reps All Pipelines)")
-        st.sidebar.caption(f"Total deals: {total_deals}")
-        st.sidebar.caption(f"Total amount: ${total_amount:,.0f}")
-        
-        if 'Status' in deals_df.columns:
-            unique_status = deals_df['Status'].unique().tolist()
-            st.sidebar.caption(f"Status values: {unique_status}")
-            
-            # Show breakdown by Status
-            for status in ['Expect', 'Commit', 'Best Case', 'Opportunity']:
-                status_df = deals_df[deals_df['Status'] == status]
-                if not status_df.empty:
-                    st.sidebar.caption(f"  {status}: {len(status_df)} deals, ${status_df['Amount'].sum():,.0f}")
-        
-        if 'Q3 2026 Spillover' in deals_df.columns:
-            unique_quarter = deals_df['Q3 2026 Spillover'].unique().tolist()
-            st.sidebar.caption(f"Quarter values: {unique_quarter}")
     else:
-        pass  # Debug info removed
-        #st.sidebar.error(f"❌ HubSpot data has insufficient columns: {len(deals_df.columns) if not deals_df.empty else 0}")
+        pass
     
     if not dashboard_df.empty:
         # Ensure we have the right column names
@@ -1238,8 +1212,8 @@ def load_all_data():
                 # Drop the Rep Master column since we've copied it to Sales Rep
                 invoices_df = invoices_df.drop(columns=['Rep Master'])
             else:
-                st.sidebar.warning("⚠️ Rep Master column not found in invoices!")
-            
+                pass
+
             if 'Corrected Customer Name' in invoices_df.columns:
                 # Corrected Customer Name takes priority - replace Customer with corrected values
                 invoices_df['Corrected Customer Name'] = invoices_df['Corrected Customer Name'].astype(str).str.strip()
@@ -6116,25 +6090,11 @@ def main():
     if 'q2_data_load_time' not in st.session_state:
         st.session_state.data_load_time = get_mst_time()
     
-    # Sidebar — compact controls only (app.py handles main navigation)
+    # Read view mode from app.py sidebar (set by q2_app_view_selector radio)
+    view_mode = st.session_state.get("q2_app_view_selector", "Team Overview")
+
+    # Sidebar — only shipping toggle (view selector is in app.py sidebar)
     with st.sidebar:
-        st.markdown("""
-        <p style="color: #475569; font-size: 0.6rem; font-weight: 600; letter-spacing: 1.5px;
-                   text-transform: uppercase; margin: 16px 0 6px 4px;">Q2 2026 CONTROLS</p>
-        """, unsafe_allow_html=True)
-
-        # View selector
-        view_mode = st.radio(
-            "View",
-            ["Team Overview", "Individual Rep", "CRO Scorecard"],
-            label_visibility="collapsed",
-            key="q2_nav_selector",
-            format_func=lambda x: {"Team Overview": "👥  Team Overview", "Individual Rep": "👤  Individual Rep", "CRO Scorecard": "📊  CRO Scorecard"}.get(x, x)
-        )
-
-        st.markdown("---")
-
-        # Shipping toggle
         include_shipping = st.toggle(
             "Include Shipping & Tax",
             value=True,
@@ -6142,23 +6102,6 @@ def main():
             help="ON = total transaction amount. OFF = product revenue only."
         )
         st.session_state.q2_include_shipping = include_shipping
-
-        # Quick stats
-        biz_days = calculate_business_days_remaining()
-        st.markdown(f"""
-        <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 0.75rem;">
-            <span style="color: #64748b;">Q2 Days Left</span>
-            <span style="color: #e2e8f0; font-weight: 600;">{biz_days}</span>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Refresh
-        if st.button("↻  Refresh Data", use_container_width=True, key="q2_refresh_btn"):
-            if 'q2_current_snapshot' in st.session_state:
-                st.session_state.q2_previous_snapshot = st.session_state.q2_current_snapshot
-            st.cache_data.clear()
-            st.session_state.q2_data_load_time = get_mst_time()
-            st.rerun()
 
     # Load data
     with st.spinner("Loading data from Google Sheets..."):
@@ -6171,34 +6114,6 @@ def main():
         dashboard_df['NetSuite Orders'] = 0
     
     # DEBUG: Show shipping toggle column detection (for Xander)
-    with st.sidebar.expander("🔧 Shipping Toggle Debug", expanded=False):
-        include_shipping = st.session_state.get('q2_include_shipping', True)
-        st.write(f"**Toggle State:** {'Include Shipping' if include_shipping else 'Exclude Shipping'}")
-        
-        st.markdown("**Invoices Columns:**")
-        if not invoices_df.empty:
-            has_shipping = 'Amount_Shipping' in invoices_df.columns
-            has_tax = 'Amount_Tax' in invoices_df.columns
-            has_net = 'Net_Amount' in invoices_df.columns
-            st.write(f"- Amount_Shipping: {'✅' if has_shipping else '❌'}")
-            st.write(f"- Amount_Tax: {'✅' if has_tax else '❌'}")
-            st.write(f"- Net_Amount: {'✅' if has_net else '❌'}")
-            if has_net:
-                st.write(f"- Sample Net_Amount: ${invoices_df['Net_Amount'].head(3).tolist()}")
-        
-        st.markdown("**Sales Orders Columns:**")
-        if not sales_orders_df.empty:
-            has_shipping = 'Amount_Shipping' in sales_orders_df.columns
-            has_tax = 'Amount_Tax' in sales_orders_df.columns
-            has_net = 'Net_Amount' in sales_orders_df.columns
-            st.write(f"- Amount_Shipping: {'✅' if has_shipping else '❌'}")
-            st.write(f"- Amount_Tax: {'✅' if has_tax else '❌'}")
-            st.write(f"- Net_Amount: {'✅' if has_net else '❌'}")
-            if has_net:
-                st.write(f"- Sample Net_Amount: ${sales_orders_df['Net_Amount'].head(3).tolist()}")
-            # Show all column names for debugging
-            st.write(f"**All SO Columns:** {sales_orders_df.columns.tolist()}")
-    
     # Store snapshot for change tracking
     store_snapshot(deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df)
     

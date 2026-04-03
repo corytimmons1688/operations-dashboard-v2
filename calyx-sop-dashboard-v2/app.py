@@ -271,6 +271,30 @@ def inject_custom_css():
         color: #e0e7ff !important;
     }
 
+    /* === DROPDOWN MENU — dark background with readable text === */
+    [data-baseweb="popover"],
+    [data-baseweb="menu"],
+    [data-baseweb="select"] ul,
+    [role="listbox"] {
+        background: #1a2240 !important;
+        border: 1px solid rgba(129, 140, 248, 0.2) !important;
+    }
+    [data-baseweb="menu"] li,
+    [role="option"],
+    [data-baseweb="select"] ul li {
+        background: #1a2240 !important;
+        color: #e0e7ff !important;
+    }
+    [data-baseweb="menu"] li:hover,
+    [role="option"]:hover {
+        background: rgba(129, 140, 248, 0.15) !important;
+        color: #ffffff !important;
+    }
+    [aria-selected="true"][role="option"] {
+        background: rgba(129, 140, 248, 0.25) !important;
+        color: #ffffff !important;
+    }
+
     /* === DIVIDER === */
     hr {
         border: none !important;
@@ -383,6 +407,31 @@ def render_sidebar():
                 "Q4 2025 Review":  "📉  Q4 2025 Review",
             }.get(x, x)
         )
+
+        # Q2 sub-navigation (only shown when Q2 Forecast is selected)
+        if section == "Q2 2026 Forecast":
+            st.markdown("""
+            <p style="
+                color: #7b85a0;
+                font-size: 0.55rem;
+                font-weight: 600;
+                letter-spacing: 1px;
+                text-transform: uppercase;
+                margin: 12px 0 4px 28px;
+                padding: 0;
+            ">View</p>
+            """, unsafe_allow_html=True)
+            q2_view = st.radio(
+                "Q2 View",
+                options=["Team Overview", "Individual Rep", "CRO Scorecard"],
+                label_visibility="collapsed",
+                key="q2_app_view_selector",
+                format_func=lambda x: {
+                    "Team Overview": "   👥  Team Overview",
+                    "Individual Rep": "   👤  Individual Rep",
+                    "CRO Scorecard": "   📊  CRO Scorecard",
+                }.get(x, x)
+            )
 
         # Planning section
         st.markdown("""
