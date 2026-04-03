@@ -701,6 +701,12 @@ QUARTER_LABEL = "Q2 2026"
 QUARTER_START = "2026-04-01"
 QUARTER_END = "2026-06-30"
 
+# Per-rep quotas for this quarter.
+# Edit this dict to add/remove reps or change targets.
+REP_QUOTAS = {
+    # "Rep Name": quota_amount,
+}
+
 # Deals tab: raw HubSpot data. The code filters by date range + excluded stages.
 DEALS_SHEET_NAME = "Deals"
 DEALS_RANGE = "A:X"  # Columns A through X in the raw Deals tab
@@ -6310,85 +6316,22 @@ def main():
             else:
                 st.error("❌ GCP credentials missing")
 
-        # --- QUOTA SETTINGS ---
-        st.markdown("---")
-        with st.expander(f"⚙️ {QUARTER_LABEL} Quota Settings", expanded=False):
-            st.caption("Set per-rep quotas for the current quarter. Click Apply when done.")
-
-            # Initialize quota state from session state
-            quota_state_key = f"q2_rep_quotas"
-            if quota_state_key not in st.session_state:
-                # Default reps — will be populated from data on first load
-                st.session_state[quota_state_key] = {}
-
-            saved_quotas = st.session_state[quota_state_key]
-
-            # Allow adding a new rep
-            with st.form(key="quota_settings_form"):
-                st.markdown("**Rep Quotas:**")
-
-                # Show existing reps with editable quotas
-                updated_quotas = {}
-                for rep_name_q, current_quota in sorted(saved_quotas.items()):
-                    updated_quotas[rep_name_q] = st.number_input(
-                        rep_name_q,
-                        value=int(current_quota),
-                        min_value=0,
-                        step=10000,
-                        format="%d",
-                        key=f"quota_input_{rep_name_q}",
-                    )
-
-                st.markdown("---")
-                st.markdown("**Add New Rep:**")
-                new_rep_col1, new_rep_col2 = st.columns([2, 1])
-                with new_rep_col1:
-                    new_rep_name = st.text_input("Rep Name", key="new_rep_name_input", placeholder="e.g. John Smith")
-                with new_rep_col2:
-                    new_rep_quota = st.number_input("Quota", value=0, min_value=0, step=10000, format="%d", key="new_rep_quota_input")
-
-                quota_submitted = st.form_submit_button("✅ Apply Quotas", use_container_width=True, type="primary")
-
-                if quota_submitted:
-                    # Save updated quotas
-                    final_quotas = dict(updated_quotas)
-                    if new_rep_name and new_rep_name.strip():
-                        final_quotas[new_rep_name.strip()] = new_rep_quota
-                    st.session_state[quota_state_key] = final_quotas
-                    st.success(f"✅ Quotas saved for {len(final_quotas)} reps")
-                    st.rerun()
+        # --- QUOTA DISPLAY ---
+        if REP_QUOTAS:
+            st.markdown("---")
+            with st.expander(f"🎯 {QUARTER_LABEL} Quotas", expanded=False):
+                for rep_name_q, quota_val in sorted(REP_QUOTAS.items()):
+                    st.markdown(f"**{rep_name_q}:** ${quota_val:,.0f}")
+                st.markdown(f"---\n**Team Total:** ${sum(REP_QUOTAS.values()):,.0f}")
+                st.caption("Edit REP_QUOTAS in q2_revenue_snapshot.py to change.")
 
     # Load data
     with st.spinner("Loading data from Google Sheets..."):
         deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df, production_schedule_df, amie_update_df = load_all_data()
 
-    # --- BUILD DASHBOARD_DF FROM QUOTA SETTINGS ---
-    # If user has configured quotas, use those instead of the sheet
-    quota_state_key = f"q2_rep_quotas"
-    saved_quotas = st.session_state.get(quota_state_key, {})
-
-    # Auto-populate rep list from deals data if quotas haven't been set yet
-    if not saved_quotas and not deals_df.empty and 'Deal Owner' in deals_df.columns:
-        unique_reps = deals_df['Deal Owner'].dropna().unique().tolist()
-        for rep in unique_reps:
-            rep = str(rep).strip()
-            if rep and rep.lower() not in ('nan', ''):
-                saved_quotas[rep] = 0
-        st.session_state[quota_state_key] = saved_quotas
-
-    # Also add reps from invoices if present
-    if not saved_quotas and not invoices_df.empty and 'Sales Rep' in invoices_df.columns:
-        unique_reps = invoices_df['Sales Rep'].dropna().unique().tolist()
-        for rep in unique_reps:
-            rep = str(rep).strip()
-            if rep and rep.lower() not in ('nan', '', 'house'):
-                if rep not in saved_quotas:
-                    saved_quotas[rep] = 0
-        st.session_state[quota_state_key] = saved_quotas
-
-    # Build dashboard_df from quota settings (overrides sheet data)
-    if saved_quotas:
-        quota_rows = [{'Rep Name': rep, 'Quota': quota} for rep, quota in saved_quotas.items()]
+    # --- BUILD DASHBOARD_DF FROM HARDCODED QUOTAS ---
+    if REP_QUOTAS:
+        quota_rows = [{'Rep Name': rep, 'Quota': quota} for rep, quota in REP_QUOTAS.items()]
         dashboard_df = pd.DataFrame(quota_rows)
         dashboard_df['NetSuite Orders'] = 0
     
