@@ -5198,718 +5198,376 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
 
 def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     """
-    Display CRO Weekly Scorecard - matches the Google Apps Script email report.
-    Shows comprehensive forecast metrics for all reps with Face Value and Probability views.
-    Includes forecast plug support for Alex, Owen, House, and Shopify ECommerce.
+    CRO Weekly Scorecard — V12 Dashboard Edition
+    Matches the Google Apps Script CRO email report structure.
+    Features: quarter-phase detection, probability tiers, three forecast views.
     """
-    
-    # Configuration (matches Google Apps Script)
-    REP_ORDER = [
-        'Jake Lynch',
-        'Dave Borkowski', 
-        'Alex Gonzalez',
-        'Brad Sherman',
-        'Lance Mitton',
-        'Owen Labombard',
-        'House',
-        'Shopify ECommerce'
-    ]
-    
-    # Get shipping toggle state
-    include_shipping = st.session_state.get('q2_include_shipping', True)
-    exclude_shipping_tax = not include_shipping
-    
-    # --- HEADER ---
-    report_date = get_mst_time().strftime('%b %d, %Y')
-    
-    st.markdown(f"""
-    <div style="
-        background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
-        padding: 20px;
-        border-radius: 12px;
-        text-align: center;
-        margin-bottom: 20px;
-    ">
-        <div style="font-size: 32px; font-weight: 800; color: #0f172a;">📊 CRO Weekly Scorecard</div>
-        <div style="font-size: 16px; color: #1e293b;">{report_date} • Q2 2026</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # --- FORECAST PLUGS SECTION ---
-    st.markdown("### ⚡ HubSpot Expect Plugs")
-    st.caption("Add forecast adjustments for deals not yet in HubSpot. These amounts will be added to HS E/C.")
-    
-    plug_col1, plug_col2, plug_col3, plug_col4 = st.columns(4)
-    
-    with plug_col1:
-        plug_alex = st.number_input(
-            "Alex Gonzalez",
-            min_value=0,
-            value=int(st.session_state.get('plug_alex', 0)),
-            step=10000,
-            format="%d",
-            key="plug_alex_input",
-            help="Plug amount for Alex Gonzalez"
-        )
-        st.session_state.plug_alex = plug_alex
-    
-    with plug_col2:
-        plug_owen = st.number_input(
-            "Owen Labombard",
-            min_value=0,
-            value=int(st.session_state.get('plug_owen', 0)),
-            step=10000,
-            format="%d",
-            key="plug_owen_input",
-            help="Plug amount for Owen Labombard"
-        )
-        st.session_state.plug_owen = plug_owen
-    
-    with plug_col3:
-        plug_house = st.number_input(
-            "House",
-            min_value=0,
-            value=int(st.session_state.get('plug_house', 0)),
-            step=10000,
-            format="%d",
-            key="plug_house_input",
-            help="Plug amount for House"
-        )
-        st.session_state.plug_house = plug_house
-    
-    with plug_col4:
-        plug_ecom = st.number_input(
-            "Shopify ECommerce",
-            min_value=0,
-            value=int(st.session_state.get('plug_ecom', 0)),
-            step=10000,
-            format="%d",
-            key="plug_ecom_input",
-            help="Plug amount for Shopify ECommerce"
-        )
-        st.session_state.plug_ecom = plug_ecom
-    
-    # Store plugs in a dict
-    plugs = {
-        'Alex Gonzalez': plug_alex,
-        'Owen Labombard': plug_owen,
-        'House': plug_house,
-        'Shopify ECommerce': plug_ecom
-    }
-    total_plugs = sum(plugs.values())
-    
-    if total_plugs > 0:
-        plug_parts = []
-        if plug_alex > 0:
-            plug_parts.append(f"Alex: ${plug_alex:,}")
-        if plug_owen > 0:
-            plug_parts.append(f"Owen: ${plug_owen:,}")
-        if plug_house > 0:
-            plug_parts.append(f"House: ${plug_house:,}")
-        if plug_ecom > 0:
-            plug_parts.append(f"Ecom: ${plug_ecom:,}")
-        
-        st.success(f"⚡ **Total Plugs: ${total_plugs:,}** ({', '.join(plug_parts)})")
-    
-    st.markdown("---")
-    
-    # --- SHIPPING/TAX INDICATOR ---
-    if exclude_shipping_tax:
-        st.caption("📦 NetSuite amounts shown **excluding** shipping & tax")
-    else:
-        st.caption("📦 NetSuite amounts shown **including** shipping & tax (gross totals)")
-    
-    # --- LOAD QUOTAS ---
-    quotas = {}
-    if not dashboard_df.empty:
-        for _, row in dashboard_df.iterrows():
-            rep_name = str(row.get('Rep Name', '')).strip()
-            if rep_name:
-                quota = 0
-                for col in dashboard_df.columns:
-                    if 'q1' in col.lower() and '2026' in col.lower() and 'quota' in col.lower():
-                        quota = pd.to_numeric(row.get(col, 0), errors='coerce') or 0
-                        break
-                if quota == 0:
-                    quota = pd.to_numeric(row.get('Q2 2026 Quota', row.get('Quota', 0)), errors='coerce') or 0
-                quotas[rep_name] = quota
-    
-    # --- CALCULATE INVOICED BY REP ---
-    rep_invoiced = {}
-    if not invoices_df.empty:
-        amount_col = 'Amount' if include_shipping else 'Net_Amount'
-        if amount_col not in invoices_df.columns:
-            amount_col = 'Amount'
-        
-        for rep in REP_ORDER:
-            if rep.lower() == 'house':
-                continue  # Skip House for invoices
-            
-            rep_inv = invoices_df[invoices_df['Sales Rep'] == rep] if 'Sales Rep' in invoices_df.columns else pd.DataFrame()
-            if not rep_inv.empty and amount_col in rep_inv.columns:
-                rep_invoiced[rep] = pd.to_numeric(rep_inv[amount_col], errors='coerce').fillna(0).sum()
-            else:
-                rep_invoiced[rep] = 0
-    
-    # --- CALCULATE SALES ORDER METRICS BY REP ---
-    def get_so_metrics(rep_name):
-        metrics = {'pf_with_date': 0, 'pf_no_date': 0, 'pa_with_date': 0, 'pa_no_date': 0, 'pa_old': 0, 'pf_spillover': 0, 'pa_spillover': 0}
-        
-        if sales_orders_df.empty:
-            return metrics
-        
-        if 'Sales Rep' not in sales_orders_df.columns:
-            return metrics
-        
-        rep_orders = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name].copy()
-        if rep_orders.empty:
-            return metrics
-        
-        amount_col = 'Amount' if include_shipping else 'Net_Amount'
-        if amount_col not in rep_orders.columns:
-            amount_col = 'Amount'
-        if amount_col not in rep_orders.columns:
-            return metrics
-        
-        rep_orders['Amount_Calc'] = pd.to_numeric(rep_orders[amount_col], errors='coerce').fillna(0)
-        
-        # Find Updated Status column
-        status_col = None
-        for col in ['Updated Status', 'Updated_Status', 'UpdatedStatus']:
-            if col in rep_orders.columns:
-                status_col = col
-                break
-        
-        if not status_col:
-            return metrics
-        
-        # Parse date columns for spillover detection (matching Apps Script V5)
-        q2_end = pd.Timestamp('2026-06-30')
-        
-        # Customer Promise Date (Col L) and Projected Date (Col M)
-        promise_col = 'Customer Promise Date' if 'Customer Promise Date' in rep_orders.columns else None
-        projected_col = 'Projected Date' if 'Projected Date' in rep_orders.columns else None
-        pa_date_col = 'Pending Approval Date' if 'Pending Approval Date' in rep_orders.columns else None
-        
-        if promise_col:
-            rep_orders['_promise'] = pd.to_datetime(rep_orders[promise_col], errors='coerce')
-        if projected_col:
-            rep_orders['_projected'] = pd.to_datetime(rep_orders[projected_col], errors='coerce')
-        if pa_date_col:
-            rep_orders['_pa_date'] = pd.to_datetime(rep_orders[pa_date_col], errors='coerce')
-        
-        for _, row in rep_orders.iterrows():
-            status = str(row.get(status_col, '')).strip()
-            amount = row['Amount_Calc']
-            
-            if 'PF with Date' in status or 'PF w/ Date' in status:
-                # Check for PF spillover: min(promise, projected) > Q2 end
-                promise_dt = row.get('_promise', pd.NaT) if promise_col else pd.NaT
-                projected_dt = row.get('_projected', pd.NaT) if projected_col else pd.NaT
-                dates = [d for d in [promise_dt, projected_dt] if pd.notna(d)]
-                ship_date = min(dates) if dates else None
-                
-                if ship_date and ship_date > q2_end:
-                    metrics['pf_spillover'] += amount
-                else:
-                    metrics['pf_with_date'] += amount
-            elif 'PF No Date' in status or 'PF no Date' in status:
-                metrics['pf_no_date'] += amount
-            elif 'PA with Date' in status or 'PA w/ Date' in status:
-                # Check for PA spillover: pending approval date > Q2 end
-                pa_dt = row.get('_pa_date', pd.NaT) if pa_date_col else pd.NaT
-                
-                if pd.notna(pa_dt) and pa_dt > q2_end:
-                    metrics['pa_spillover'] += amount
-                else:
-                    metrics['pa_with_date'] += amount
-            elif 'PA No Date' in status or 'PA no Date' in status:
-                metrics['pa_no_date'] += amount
-            elif 'PA Old' in status or '>2 Week' in status:
-                metrics['pa_old'] += amount
-        
-        return metrics
-    
-    # --- CALCULATE HUBSPOT METRICS BY REP ---
-    def get_hs_metrics(rep_name):
-        metrics = {
-            'expect': 0, 'expect_prob': 0,
-            'commit': 0, 'commit_prob': 0,
-            'best_case': 0, 'best_case_prob': 0,
-            'opportunity': 0, 'opportunity_prob': 0,
-            'q2_spillover': 0, 'q2_spillover_prob': 0
-        }
-        
-        if deals_df.empty or 'Deal Owner' not in deals_df.columns:
-            return metrics
-        
-        rep_deals = deals_df[deals_df['Deal Owner'] == rep_name].copy()
-        if rep_deals.empty:
-            return metrics
-        
-        # Find spillover column
-        spillover_col = None
-        for col in rep_deals.columns:
-            col_lower = str(col).lower()
-            if 'spillover' in col_lower or ('q2' in col_lower and '2026' in col_lower):
-                spillover_col = col
-                break
-        
-        for _, row in rep_deals.iterrows():
-            status = str(row.get('Status', '')).strip()
-            amount = pd.to_numeric(row.get('Amount', 0), errors='coerce') or 0
-            prob_amount = pd.to_numeric(row.get('Probability Rev', amount), errors='coerce') or amount
-            
-            # Check if Q2 spillover
-            is_q2 = False
-            if spillover_col and spillover_col in row.index:
-                spillover_val = str(row.get(spillover_col, '')).upper()
-                if 'Q2' in spillover_val:
-                    is_q2 = True
-                elif 'Q4' in spillover_val:
-                    continue
-            
-            if is_q2:
-                metrics['q2_spillover'] += amount
-                metrics['q2_spillover_prob'] += prob_amount
-            elif status == 'Expect':
-                metrics['expect'] += amount
-                metrics['expect_prob'] += prob_amount
-            elif status == 'Commit':
-                metrics['commit'] += amount
-                metrics['commit_prob'] += prob_amount
-            elif status == 'Best Case':
-                metrics['best_case'] += amount
-                metrics['best_case_prob'] += prob_amount
-            elif status == 'Opportunity':
-                metrics['opportunity'] += amount
-                metrics['opportunity_prob'] += prob_amount
-        
-        return metrics
-    
-    # --- CALCULATE ALL REP METRICS ---
-    all_metrics = {}
-    for rep in REP_ORDER:
-        so_metrics = get_so_metrics(rep)
-        hs_metrics = get_hs_metrics(rep)
-        
-        invoiced = rep_invoiced.get(rep, 0)
-        rep_plug = plugs.get(rep, 0)
-        
-        # Face Value calculations - PLUG ADDS TO HS E/C
-        hs_expect_commit = hs_metrics['expect'] + hs_metrics['commit'] + rep_plug
-        total_core = invoiced + so_metrics['pf_with_date'] + so_metrics['pa_with_date'] + hs_expect_commit
-        all_q2 = total_core + so_metrics['pf_no_date'] + so_metrics['pa_no_date'] + so_metrics['pa_old']
-        total_forecast = all_q2 + hs_metrics['best_case'] + hs_metrics['opportunity']
-        full_pipeline = total_forecast + hs_metrics['q2_spillover']
-        
-        # Probability calculations - PLUG ADDS TO HS E/C PROB
-        hs_expect_commit_prob = hs_metrics['expect_prob'] + hs_metrics['commit_prob'] + rep_plug
-        total_core_prob = invoiced + so_metrics['pf_with_date'] + so_metrics['pa_with_date'] + hs_expect_commit_prob
-        all_q2_prob = total_core_prob + so_metrics['pf_no_date'] + so_metrics['pa_no_date'] + so_metrics['pa_old']
-        total_forecast_prob = all_q2_prob + hs_metrics['best_case_prob'] + hs_metrics['opportunity_prob']
-        full_pipeline_prob = total_forecast_prob + hs_metrics['q2_spillover_prob']
-        
-        # Realistic total
-        realistic_total = invoiced + so_metrics['pf_with_date'] + so_metrics['pf_no_date'] + so_metrics['pa_with_date'] + hs_metrics['expect'] + rep_plug
-        
-        all_metrics[rep] = {
-            'invoiced': invoiced,
-            'pf_with_date': so_metrics['pf_with_date'],
-            'pf_no_date': so_metrics['pf_no_date'],
-            'pa_with_date': so_metrics['pa_with_date'],
-            'pa_no_date': so_metrics['pa_no_date'],
-            'pa_old': so_metrics['pa_old'],
-            'pf_spillover': so_metrics['pf_spillover'],
-            'pa_spillover': so_metrics['pa_spillover'],
-            'hs_expect_commit': hs_expect_commit,
-            'hs_expect_commit_prob': hs_expect_commit_prob,
-            'hs_best_case': hs_metrics['best_case'],
-            'hs_best_case_prob': hs_metrics['best_case_prob'],
-            'hs_opportunity': hs_metrics['opportunity'],
-            'hs_opportunity_prob': hs_metrics['opportunity_prob'],
-            'hs_q2_spillover': hs_metrics['q2_spillover'],
-            'hs_q2_spillover_prob': hs_metrics['q2_spillover_prob'],
-            'total_core': total_core,
-            'total_core_prob': total_core_prob,
-            'all_q2': all_q2,
-            'all_q2_prob': all_q2_prob,
-            'total_forecast': total_forecast,
-            'total_forecast_prob': total_forecast_prob,
-            'full_pipeline': full_pipeline,
-            'full_pipeline_prob': full_pipeline_prob,
-            'realistic_total': realistic_total,
-            'quota': quotas.get(rep, 0),
-            'plug': rep_plug
-        }
-    
-    # --- CALCULATE TEAM TOTALS ---
-    team_totals = {key: sum(m.get(key, 0) for m in all_metrics.values()) for key in [
-        'invoiced', 'pf_with_date', 'pf_no_date', 'pa_with_date', 'pa_no_date', 'pa_old',
-        'pf_spillover', 'pa_spillover',
-        'hs_expect_commit', 'hs_expect_commit_prob', 'hs_best_case', 'hs_best_case_prob',
-        'hs_opportunity', 'hs_opportunity_prob', 'hs_q2_spillover', 'hs_q2_spillover_prob',
-        'total_core', 'total_core_prob', 'all_q2', 'all_q2_prob',
-        'total_forecast', 'total_forecast_prob', 'full_pipeline', 'full_pipeline_prob',
-        'realistic_total', 'quota', 'plug'
-    ]}
-    
-    team_quota = team_totals['quota']
-    realistic_total = team_totals['realistic_total']
-    realistic_pct = (realistic_total / team_quota * 100) if team_quota > 0 else 0
-    realistic_gap = team_quota - realistic_total
-    
-    # Determine status
-    if realistic_pct >= 100:
-        status_emoji, status_text, status_color = '🟢', 'On Track', '#4ade80'
-    elif realistic_pct >= 85:
-        status_emoji, status_text, status_color = '🟡', 'Close - Push Needed', '#fbbf24'
-    elif realistic_pct >= 70:
-        status_emoji, status_text, status_color = '🟠', 'Work to Do', '#f97316'
-    else:
-        status_emoji, status_text, status_color = '🔴', 'Significant Gap', '#f87171'
-    
-    # --- EXECUTIVE SUMMARY ---
-    st.markdown("### 📈 Where We Stand")
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.markdown(f"""
-        <div style="
-            padding: 20px;
-            background: rgba({','.join(str(int(status_color[i:i+2], 16)) for i in (1, 3, 5))}, 0.15);
-            border-radius: 12px;
-            border-left: 4px solid {status_color};
-        ">
-            <div style="font-size: 12px; color: #64748b; text-transform: uppercase;">Realistic vs Quota</div>
-            <div style="font-size: 42px; font-weight: 700; color: {status_color};">{status_emoji} {realistic_pct:.0f}%</div>
-            <div style="font-size: 16px; color: #f1f5f9; font-weight: 600;">{status_text}</div>
-            <div style="font-size: 14px; color: #94a3b8; margin-top: 5px;">
-                {'${:,.0f} gap'.format(realistic_gap) if realistic_gap > 0 else '${:,.0f} over'.format(abs(realistic_gap))}
-            </div>
-            <div style="font-size: 13px; color: #64748b; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(100,116,139,0.3);">
-                🏁 Quota: <span style="color: #f1f5f9; font-weight: 600;">${team_quota:,.0f}</span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        r1, r2 = st.columns(2)
-        with r1:
-            st.metric("🟢 Invoiced", f"${team_totals['invoiced']:,.0f}")
-            st.metric("🟡 PA w/ Date", f"${team_totals['pa_with_date']:,.0f}")
-        with r2:
-            st.metric("🟡 PF (all)", f"${team_totals['pf_with_date'] + team_totals['pf_no_date']:,.0f}")
-            st.metric("🔵 HS Expect + Plugs", f"${team_totals['hs_expect_commit']:,.0f}")
-        
-        st.markdown(f"**Realistic Total: ${realistic_total:,.0f}** vs **Quota: ${team_quota:,.0f}**")
-    
-    # --- SUMMARY CARDS ---
-    st.markdown("---")
-    
-    # Row 1
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("💰 Invoiced", f"${team_totals['invoiced']:,.0f}")
-    c2.metric("📦 Pend Fulfill", f"${team_totals['pf_with_date'] + team_totals['pf_no_date']:,.0f}")
-    c3.metric("📋 Pend Apprv", f"${team_totals['pa_with_date'] + team_totals['pa_no_date']:,.0f}")
-    c4.metric("⚠️ PA >2wk", f"${team_totals['pa_old']:,.0f}")
-    
-    # Row 2
-    total_so_spillover = team_totals['pf_spillover'] + team_totals['pa_spillover']
-    c5, c6, c7, c8, c9 = st.columns(5)
-    c5.metric("🎯 HS E/C", f"${team_totals['hs_expect_commit']:,.0f}")
-    c6.metric("📈 Forecast", f"${team_totals['total_forecast']:,.0f}")
-    c7.metric("🚢 SO Spill", f"${total_so_spillover:,.0f}")
-    c8.metric("📅 Q2 Spill", f"${team_totals['hs_q2_spillover']:,.0f}")
-    c9.metric("🏁 Quota", f"${team_quota:,.0f}")
-    
-    # --- FACE VALUE TABLE ---
-    st.markdown("---")
-    st.markdown("### 💵 Face Value Forecast")
-    st.caption("Full deal amounts, no probability adjustment")
-    
-    # Build dataframe
-    face_data = []
-    for rep in REP_ORDER:
-        m = all_metrics.get(rep, {})
-        quota = m.get('quota', 0)
-        forecast = m.get('total_forecast', 0)
-        pct = ((forecast - quota) / quota * 100) if quota > 0 else (100 if forecast > 0 else -100)
-        
-        # Add indicator for reps with plugs
-        rep_display = f"{rep} ⚡" if m.get('plug', 0) > 0 else rep
-        
-        face_data.append({
-            'Rep': rep_display,
-            'Inv': m.get('invoiced', 0),
-            'PF': m.get('pf_with_date', 0),
-            'PA': m.get('pa_with_date', 0),
-            'HS E/C': m.get('hs_expect_commit', 0),
-            'Total': m.get('total_core', 0),
-            'PF ND': m.get('pf_no_date', 0),
-            'PA ND': m.get('pa_no_date', 0),
-            'PA Old': m.get('pa_old', 0),
-            'All Q2': m.get('all_q2', 0),
-            'Best': m.get('hs_best_case', 0),
-            'Opp': m.get('hs_opportunity', 0),
-            'Forecast': forecast,
-            'PF Spill': m.get('pf_spillover', 0),
-            'PA Spill': m.get('pa_spillover', 0),
-            'Q3 Spill': m.get('hs_q2_spillover', 0),
-            'Full Pipe': m.get('full_pipeline', 0),
-            'Quota': quota,
-            '%': pct
-        })
-    
-    # Add totals row
-    pct_total = ((team_totals['total_forecast'] - team_quota) / team_quota * 100) if team_quota > 0 else 0
-    face_data.append({
-        'Rep': '**TOTAL**',
-        'Inv': team_totals['invoiced'],
-        'PF': team_totals['pf_with_date'],
-        'PA': team_totals['pa_with_date'],
-        'HS E/C': team_totals['hs_expect_commit'],
-        'Total': team_totals['total_core'],
-        'PF ND': team_totals['pf_no_date'],
-        'PA ND': team_totals['pa_no_date'],
-        'PA Old': team_totals['pa_old'],
-        'All Q2': team_totals['all_q2'],
-        'Best': team_totals['hs_best_case'],
-        'Opp': team_totals['hs_opportunity'],
-        'Forecast': team_totals['total_forecast'],
-        'PF Spill': team_totals['pf_spillover'],
-        'PA Spill': team_totals['pa_spillover'],
-        'Q3 Spill': team_totals['hs_q2_spillover'],
-        'Full Pipe': team_totals['full_pipeline'],
-        'Quota': team_quota,
-        '%': pct_total
-    })
-    
-    face_df = pd.DataFrame(face_data)
-    
-    # Style the dataframe
-    def style_face_value(df):
-        # Create a style dataframe
-        styles = pd.DataFrame('', index=df.index, columns=df.columns)
-        
-        # Highlight Total and All Q2 columns
-        styles['Total'] = 'background-color: rgba(59, 130, 246, 0.2)'
-        styles['All Q2'] = 'background-color: rgba(59, 130, 246, 0.2)'
-        
-        # Highlight Forecast column
-        styles['Forecast'] = 'background-color: rgba(139, 92, 246, 0.3); color: #a78bfa; font-weight: bold'
-        
-        # Highlight Q2, PF Spill, PA Spill and Full Pipe
-        styles['PF Spill'] = 'color: #f472b6'
-        styles['PA Spill'] = 'color: #f472b6'
-        styles['Q3 Spill'] = 'color: #f472b6'
-        styles['Full Pipe'] = 'background-color: rgba(244, 114, 182, 0.2); color: #f472b6'
-        
-        # Color % column based on value
-        for i, row in df.iterrows():
-            if row['%'] >= 0:
-                styles.loc[i, '%'] = 'color: #4ade80; font-weight: bold'
-            else:
-                styles.loc[i, '%'] = 'color: #f87171; font-weight: bold'
-        
-        # Bold the totals row
-        if len(df) > 0:
-            styles.iloc[-1] = styles.iloc[-1].apply(lambda x: x + '; font-weight: bold; background-color: rgba(59, 130, 246, 0.3)')
-        
-        return styles
-    
-    currency_cols = ['Inv', 'PF', 'PA', 'HS E/C', 'Total', 'PF ND', 'PA ND', 'PA Old', 'All Q2', 'Best', 'Opp', 'Forecast', 'PF Spill', 'PA Spill', 'Q3 Spill', 'Full Pipe', 'Quota']
-    
-    st.dataframe(
-        face_df.style.apply(style_face_value, axis=None).format({
-            **{col: '${:,.0f}' for col in currency_cols},
-            '%': '{:+.0f}%'
-        }),
-        hide_index=True,
-        use_container_width=True,
-        height=320
-    )
-    
-    # --- PROBABILITY TABLE ---
-    st.markdown("---")
-    st.markdown("### 📊 Probability Forecast")
-    st.caption("Weighted by close likelihood")
-    
-    prob_data = []
-    for rep in REP_ORDER:
-        m = all_metrics.get(rep, {})
-        quota = m.get('quota', 0)
-        forecast = m.get('total_forecast_prob', 0)
-        pct = ((forecast - quota) / quota * 100) if quota > 0 else (100 if forecast > 0 else -100)
-        
-        rep_display = f"{rep} ⚡" if m.get('plug', 0) > 0 else rep
-        
-        prob_data.append({
-            'Rep': rep_display,
-            'Inv': m.get('invoiced', 0),
-            'PF': m.get('pf_with_date', 0),
-            'PA': m.get('pa_with_date', 0),
-            'HS E/C': m.get('hs_expect_commit_prob', 0),
-            'Total': m.get('total_core_prob', 0),
-            'PF ND': m.get('pf_no_date', 0),
-            'PA ND': m.get('pa_no_date', 0),
-            'PA Old': m.get('pa_old', 0),
-            'All Q2': m.get('all_q2_prob', 0),
-            'Best': m.get('hs_best_case_prob', 0),
-            'Opp': m.get('hs_opportunity_prob', 0),
-            'Forecast': forecast,
-            'PF Spill': m.get('pf_spillover', 0),
-            'PA Spill': m.get('pa_spillover', 0),
-            'Q3 Spill': m.get('hs_q2_spillover_prob', 0),
-            'Full Pipe': m.get('full_pipeline_prob', 0),
-            'Quota': quota,
-            '%': pct
-        })
-    
-    pct_total_prob = ((team_totals['total_forecast_prob'] - team_quota) / team_quota * 100) if team_quota > 0 else 0
-    prob_data.append({
-        'Rep': '**TOTAL**',
-        'Inv': team_totals['invoiced'],
-        'PF': team_totals['pf_with_date'],
-        'PA': team_totals['pa_with_date'],
-        'HS E/C': team_totals['hs_expect_commit_prob'],
-        'Total': team_totals['total_core_prob'],
-        'PF ND': team_totals['pf_no_date'],
-        'PA ND': team_totals['pa_no_date'],
-        'PA Old': team_totals['pa_old'],
-        'All Q2': team_totals['all_q2_prob'],
-        'Best': team_totals['hs_best_case_prob'],
-        'Opp': team_totals['hs_opportunity_prob'],
-        'Forecast': team_totals['total_forecast_prob'],
-        'PF Spill': team_totals['pf_spillover'],
-        'PA Spill': team_totals['pa_spillover'],
-        'Q3 Spill': team_totals['hs_q2_spillover_prob'],
-        'Full Pipe': team_totals['full_pipeline_prob'],
-        'Quota': team_quota,
-        '%': pct_total_prob
-    })
-    
-    prob_df = pd.DataFrame(prob_data)
-    
-    st.dataframe(
-        prob_df.style.apply(style_face_value, axis=None).format({
-            **{col: '${:,.0f}' for col in currency_cols},
-            '%': '{:+.0f}%'
-        }),
-        hide_index=True,
-        use_container_width=True,
-        height=320
-    )
-    
-    # --- DEAL LISTS ---
-    st.markdown("---")
-    
-    # Find spillover column
-    spillover_col = None
-    if not deals_df.empty:
-        for col in deals_df.columns:
-            col_lower = str(col).lower()
-            if 'spillover' in col_lower or ('q2' in col_lower and '2026' in col_lower):
-                spillover_col = col
-                break
-    
-    # Best Case Deals
-    if not deals_df.empty and 'Status' in deals_df.columns:
-        best_case_deals = deals_df[deals_df['Status'] == 'Best Case'].copy()
-        
-        if spillover_col and not best_case_deals.empty:
-            best_case_deals = best_case_deals[~best_case_deals[spillover_col].astype(str).str.upper().str.contains('Q2', na=False)]
-        
-        if not best_case_deals.empty:
-            st.markdown("### 🎯 Best Case Deals")
-            
-            best_case_deals['Amount_Num'] = pd.to_numeric(best_case_deals['Amount'], errors='coerce').fillna(0)
-            best_case_deals = best_case_deals.sort_values('Amount_Num', ascending=False)
-            
-            display_cols = ['Deal Name', 'Deal Owner', 'Amount']
-            if 'Probability Rev' in best_case_deals.columns:
-                display_cols.append('Probability Rev')
-            
-            available_cols = [c for c in display_cols if c in best_case_deals.columns]
-            
-            st.dataframe(
-                best_case_deals[available_cols],
-                column_config={
-                    'Amount': st.column_config.NumberColumn('Amount', format='$%d'),
-                    'Probability Rev': st.column_config.NumberColumn('Prob Rev', format='$%d')
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            st.markdown(f"**Total ({len(best_case_deals)} deals): ${best_case_deals['Amount_Num'].sum():,.0f}**")
-    
-    # Opportunity Deals
-    if not deals_df.empty and 'Status' in deals_df.columns:
-        opp_deals = deals_df[deals_df['Status'] == 'Opportunity'].copy()
-        
-        if spillover_col and not opp_deals.empty:
-            opp_deals = opp_deals[~opp_deals[spillover_col].astype(str).str.upper().str.contains('Q2', na=False)]
-        
-        if not opp_deals.empty:
-            st.markdown("---")
-            st.markdown("### 🔮 Opportunity Deals")
-            
-            opp_deals['Amount_Num'] = pd.to_numeric(opp_deals['Amount'], errors='coerce').fillna(0)
-            opp_deals = opp_deals.sort_values('Amount_Num', ascending=False)
-            
-            display_cols = ['Deal Name', 'Deal Owner', 'Amount']
-            if 'Probability Rev' in opp_deals.columns:
-                display_cols.append('Probability Rev')
-            
-            available_cols = [c for c in display_cols if c in opp_deals.columns]
-            
-            st.dataframe(
-                opp_deals[available_cols],
-                column_config={
-                    'Amount': st.column_config.NumberColumn('Amount', format='$%d'),
-                    'Probability Rev': st.column_config.NumberColumn('Prob Rev', format='$%d')
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            st.markdown(f"**Total ({len(opp_deals)} deals): ${opp_deals['Amount_Num'].sum():,.0f}**")
-    
-    # Q2 Spillover Deals
-    if not deals_df.empty and spillover_col:
-        q2_deals = deals_df[deals_df[spillover_col].astype(str).str.upper().str.contains('Q2', na=False)].copy()
-        
-        if not q2_deals.empty:
-            st.markdown("---")
-            st.markdown("### 📅 Q2 Spillover Pipeline")
-            
-            q2_deals['Amount_Num'] = pd.to_numeric(q2_deals['Amount'], errors='coerce').fillna(0)
-            q2_deals = q2_deals.sort_values('Amount_Num', ascending=False)
-            
-            q2_display_cols = ['Deal Name', 'Deal Owner', 'Status', 'Amount']
-            if 'Probability Rev' in q2_deals.columns:
-                q2_display_cols.append('Probability Rev')
-            
-            available_cols = [c for c in q2_display_cols if c in q2_deals.columns]
-            
-            st.dataframe(
-                q2_deals[available_cols],
-                column_config={
-                    'Amount': st.column_config.NumberColumn('Amount', format='$%d'),
-                    'Probability Rev': st.column_config.NumberColumn('Prob Rev', format='$%d')
-                },
-                hide_index=True,
-                use_container_width=True
-            )
-            
-            st.markdown(f"**Total ({len(q2_deals)} deals): ${q2_deals['Amount_Num'].sum():,.0f}**")
-    
-    # --- FOOTER ---
-    st.markdown("---")
-    st.caption(f"Calyx Containers • Revenue Operations • Generated {get_mst_time().strftime('%I:%M %p %Z')}")
+    from datetime import date
 
+    # === QUARTER CONFIG ===
+    q_start = date(2026, 4, 1)
+    q_end = date(2026, 6, 30)
+    q_label = QUARTER_LABEL
+    rep_order = list(REP_QUOTAS.keys())
+    quotas = dict(REP_QUOTAS)
+    team_quota = sum(quotas.values())
+
+    # === PHASE DETECTION ===
+    today = date.today()
+    day_in_q = max(1, (today - q_start).days + 1)
+    total_days = (q_end - q_start).days + 1
+    days_remaining = max(0, (q_end - today).days)
+    week_in_q = (day_in_q - 1) // 7 + 1
+    pct_complete = round((day_in_q / total_days) * 100)
+
+    if day_in_q <= 30:
+        phase = 'early'
+        phase_label = 'Early Quarter'
+    elif day_in_q <= 60:
+        phase = 'mid'
+        phase_label = 'Mid-Quarter'
+    else:
+        phase = 'final'
+        phase_label = 'Final Month'
+
+    # === PROBABILITY TIERS (phase-aware) ===
+    tiers = {
+        'early': {'invoiced': 1.0, 'pf_date': 1.0, 'pf_nodate': 1.0, 'pa_date': 1.0, 'pa_nodate': 0.9, 'pa_old': 0.5, 'hs_expect': 1.0, 'hs_best': 0.75, 'hs_opp': 0.25},
+        'mid':   {'invoiced': 1.0, 'pf_date': 1.0, 'pf_nodate': 1.0, 'pa_date': 0.9, 'pa_nodate': 0.5, 'pa_old': 0.0, 'hs_expect': 1.0, 'hs_best': 0.5, 'hs_opp': 0.0},
+        'final': {'invoiced': 1.0, 'pf_date': 1.0, 'pf_nodate': 0.9, 'pa_date': 0.8, 'pa_nodate': 0.0, 'pa_old': 0.0, 'hs_expect': 0.9, 'hs_best': 0.0, 'hs_opp': 0.0},
+    }
+    tier = tiers[phase]
+
+    # === CALCULATE PER-REP METRICS ===
+    include_shipping = st.session_state.get('q2_include_shipping', True)
+
+    def calc_rep(rep_name):
+        """Calculate all metrics for a single rep."""
+        # Invoices
+        inv = 0
+        if not invoices_df.empty and 'Sales Rep' in invoices_df.columns:
+            rep_inv = invoices_df[invoices_df['Sales Rep'] == rep_name]
+            inv = rep_inv['Amount'].sum() if not rep_inv.empty and 'Amount' in rep_inv.columns else 0
+
+        # Sales Orders
+        pf_date = pf_nodate = pa_date = pa_nodate = pa_old = pf_spill = pa_spill = 0
+        if not sales_orders_df.empty and 'Sales Rep' in sales_orders_df.columns:
+            rep_so = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name]
+            if 'Updated_Status_Clean' in rep_so.columns:
+                amt_col = 'Amount' if include_shipping or 'Net_Amount' not in rep_so.columns else 'Net_Amount'
+                def so_sum(status_val):
+                    matched = rep_so[rep_so['Updated_Status_Clean'] == status_val]
+                    return pd.to_numeric(matched[amt_col], errors='coerce').fillna(0).sum() if not matched.empty else 0
+                pf_date = so_sum('PF with Date (Ext)') + so_sum('PF with Date (Int)')
+                pf_nodate = so_sum('PF No Date (Ext)') + so_sum('PF No Date (Int)')
+                pa_date = so_sum('PA with Date')
+                pa_nodate = so_sum('PA No Date')
+                pa_old = so_sum('PA Old (>2 Weeks)')
+
+        # HubSpot
+        hs_expect = hs_best = hs_opp = hs_spill = 0
+        if not deals_df.empty and 'Deal Owner' in deals_df.columns and 'Status' in deals_df.columns:
+            rep_deals = deals_df[deals_df['Deal Owner'] == rep_name]
+            if 'Amount' in rep_deals.columns:
+                amt = pd.to_numeric(rep_deals['Amount'], errors='coerce').fillna(0)
+                hs_expect = amt[rep_deals['Status'].isin(['Expect', 'Commit'])].sum()
+                hs_best = amt[rep_deals['Status'] == 'Best Case'].sum()
+                hs_opp = amt[rep_deals['Status'] == 'Opportunity'].sum()
+
+        # Aggregations
+        total_core = inv + pf_date + pa_date + hs_expect
+        all_q = total_core + pf_nodate + pa_nodate + pa_old
+        face_value = all_q + hs_best + hs_opp
+        full_pipeline = face_value + hs_spill
+
+        # Realistic (phase-aware)
+        if phase == 'early':
+            realistic = inv + pf_date + pf_nodate + pa_date + pa_nodate + pa_old + hs_expect + hs_best * 0.75
+        elif phase == 'mid':
+            realistic = inv + pf_date + pf_nodate + pa_date + hs_expect
+        else:
+            realistic = inv + pf_date + pa_date + hs_expect * 0.9
+
+        # Probability-weighted
+        prob_weighted = (inv * tier['invoiced'] + pf_date * tier['pf_date'] + pf_nodate * tier['pf_nodate'] +
+                        pa_date * tier['pa_date'] + pa_nodate * tier['pa_nodate'] + pa_old * tier['pa_old'] +
+                        hs_expect * tier['hs_expect'] + hs_best * tier['hs_best'] + hs_opp * tier['hs_opp'])
+
+        return {
+            'invoiced': inv, 'pf_date': pf_date, 'pf_nodate': pf_nodate,
+            'pa_date': pa_date, 'pa_nodate': pa_nodate, 'pa_old': pa_old,
+            'hs_expect': hs_expect, 'hs_best': hs_best, 'hs_opp': hs_opp,
+            'hs_spill': hs_spill, 'pf_spill': pf_spill, 'pa_spill': pa_spill,
+            'total_core': total_core, 'all_q': all_q, 'face_value': face_value,
+            'full_pipeline': full_pipeline, 'realistic': realistic, 'prob_weighted': prob_weighted,
+        }
+
+    rep_metrics = {rep: calc_rep(rep) for rep in rep_order}
+
+    # Team totals
+    fields = ['invoiced', 'pf_date', 'pf_nodate', 'pa_date', 'pa_nodate', 'pa_old',
+              'hs_expect', 'hs_best', 'hs_opp', 'hs_spill', 'pf_spill', 'pa_spill',
+              'total_core', 'all_q', 'face_value', 'full_pipeline', 'realistic', 'prob_weighted']
+    team = {f: sum(rep_metrics[r].get(f, 0) for r in rep_order) for f in fields}
+
+    # Status
+    realistic_pct = (team['realistic'] / team_quota * 100) if team_quota > 0 else 0
+    gap = team_quota - team['realistic']
+
+    if realistic_pct >= 100:
+        status_color, status_text = '#10b981', 'On Track'
+    elif realistic_pct >= 85:
+        status_color, status_text = '#f59e0b', 'Close — Push Needed'
+    elif realistic_pct >= 70:
+        status_color, status_text = '#f97316', 'Work to Do'
+    else:
+        status_color, status_text = '#ef4444', 'Significant Gap'
+
+    phase_color = {'early': '#10b981', 'mid': '#f59e0b', 'final': '#ef4444'}[phase]
+
+    # =====================================================================
+    # RENDER
+    # =====================================================================
+
+    st.markdown(f"## CRO Revenue Scorecard — {q_label}")
+    st.caption(f"{phase_label} · Day {day_in_q} of {total_days} · {days_remaining} days remaining · Week {week_in_q}")
+
+    # --- Phase + Status badges ---
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f'<span style="background:{phase_color};color:#fff;padding:4px 12px;border-radius:4px;font-size:0.75rem;font-weight:600;">{phase_label}</span>', unsafe_allow_html=True)
+    with c2:
+        st.markdown(f'<span style="background:{status_color};color:#fff;padding:4px 12px;border-radius:4px;font-size:0.75rem;font-weight:600;">{status_text}</span>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # --- THREE FORECAST CARDS ---
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        st.metric("Realistic Forecast", f"${team['realistic']:,.0f}",
+                  delta=f"{realistic_pct:.0f}% of quota")
+    with fc2:
+        prob_pct = (team['prob_weighted'] / team_quota * 100) if team_quota > 0 else 0
+        st.metric("Probability Weighted", f"${team['prob_weighted']:,.0f}",
+                  delta=f"{prob_pct:.0f}% of quota")
+    with fc3:
+        face_pct = (team['face_value'] / team_quota * 100) if team_quota > 0 else 0
+        st.metric("Face Value", f"${team['face_value']:,.0f}",
+                  delta=f"{face_pct:.0f}% of quota")
+
+    st.markdown("---")
+
+    # --- FORECAST BREAKDOWN ---
+    st.markdown("### Forecast Breakdown")
+
+    locked = team['invoiced'] + team['pf_date'] + team['pf_nodate']
+    committed = team['pa_date'] + team['hs_expect']
+    locked_plus = locked + committed
+    remaining_gap = team_quota - locked_plus
+    upside = team['pa_nodate'] + team['pa_old'] + team['hs_best'] + team['hs_opp']
+
+    breakdown_data = [
+        {"Source": "Invoiced", "Amount": team['invoiced'], "Tier": "Locked"},
+        {"Source": "PF with Date", "Amount": team['pf_date'], "Tier": "Locked"},
+        {"Source": "PF No Date", "Amount": team['pf_nodate'], "Tier": "Locked"},
+        {"Source": "PA with Date", "Amount": team['pa_date'], "Tier": "High Confidence"},
+        {"Source": "HubSpot Expect/Commit", "Amount": team['hs_expect'], "Tier": "High Confidence"},
+        {"Source": "PA No Date", "Amount": team['pa_nodate'], "Tier": "Upside"},
+        {"Source": "PA Old (>2 wks)", "Amount": team['pa_old'], "Tier": "At Risk"},
+        {"Source": "Best Case", "Amount": team['hs_best'], "Tier": "Upside"},
+        {"Source": "Opportunity", "Amount": team['hs_opp'], "Tier": "Upside"},
+    ]
+    bd = pd.DataFrame(breakdown_data)
+    bd = bd[bd['Amount'] > 0]
+
+    if not bd.empty:
+        st.dataframe(
+            bd.style.format({"Amount": "${:,.0f}"}),
+            use_container_width=True, hide_index=True, height=35 * len(bd) + 38,
+        )
+
+    # Summary math
+    st.markdown(f"""
+    **Locked + High Confidence = ${locked_plus:,.0f}** ({(locked_plus / team_quota * 100):.0f}% of quota)
+
+    {'**Gap: $' + f'{remaining_gap:,.0f}' + '** needs to come from pipeline conversion.' if remaining_gap > 0 else '**High-confidence pipeline covers quota.**'}
+    """)
+
+    if remaining_gap > 0 and upside > 0:
+        coverage = upside / remaining_gap
+        if coverage >= 1:
+            st.success(f"Upside pipeline (${upside:,.0f}) covers the gap {coverage:.1f}x over.")
+        else:
+            shortfall = remaining_gap - upside
+            st.error(f"Even if all upside converts, still ${shortfall:,.0f} short. New pipeline needed.")
+
+    # Warnings
+    if team['pa_old'] > 0:
+        st.warning(f"**Stale PAs:** ${team['pa_old']:,.0f} in PA >2 weeks — needs attention")
+
+    st.markdown("---")
+
+    # --- FACE VALUE TABLE ---
+    st.markdown("### Face Value Forecast")
+
+    table_rows = []
+    for rep in rep_order:
+        m = rep_metrics[rep]
+        q = quotas.get(rep, 0)
+        fv = m['face_value']
+        pct = ((fv / q * 100) if q > 0 else 0)
+        table_rows.append({
+            'Rep': rep, 'Inv': m['invoiced'], 'PF': m['pf_date'], 'PA': m['pa_date'],
+            'E/C': m['hs_expect'], 'Core': m['total_core'], 'PF ND': m['pf_nodate'],
+            'PA ND': m['pa_nodate'], 'PA Old': m['pa_old'], 'All Q': m['all_q'],
+            'Best': m['hs_best'], 'Opp': m['hs_opp'], 'Face Value': fv,
+            'Quota': q, '%': pct,
+        })
+
+    # Team total row
+    table_rows.append({
+        'Rep': 'TOTAL', 'Inv': team['invoiced'], 'PF': team['pf_date'], 'PA': team['pa_date'],
+        'E/C': team['hs_expect'], 'Core': team['total_core'], 'PF ND': team['pf_nodate'],
+        'PA ND': team['pa_nodate'], 'PA Old': team['pa_old'], 'All Q': team['all_q'],
+        'Best': team['hs_best'], 'Opp': team['hs_opp'], 'Face Value': team['face_value'],
+        'Quota': team_quota, '%': (team['face_value'] / team_quota * 100) if team_quota > 0 else 0,
+    })
+
+    fv_df = pd.DataFrame(table_rows)
+    money_cols = [c for c in fv_df.columns if c not in ('Rep', '%')]
+    st.dataframe(
+        fv_df.style.format({c: '${:,.0f}' for c in money_cols}).format({'%': '{:.0f}%'}),
+        use_container_width=True, hide_index=True, height=35 * len(fv_df) + 38,
+    )
+
+    st.markdown("---")
+
+    # --- PROBABILITY TABLE ---
+    st.markdown(f"### Probability-Weighted Forecast ({phase_label} Tiers)")
+    st.caption(f"PF={tier['pf_date']:.0%} · PA={tier['pa_date']:.0%} · PA ND={tier['pa_nodate']:.0%} · PA Old={tier['pa_old']:.0%} · Expect={tier['hs_expect']:.0%} · Best={tier['hs_best']:.0%} · Opp={tier['hs_opp']:.0%}")
+
+    prob_rows = []
+    for rep in rep_order:
+        m = rep_metrics[rep]
+        q = quotas.get(rep, 0)
+        pw = m['prob_weighted']
+        prob_rows.append({
+            'Rep': rep, 'Inv': m['invoiced'] * tier['invoiced'],
+            'PF': m['pf_date'] * tier['pf_date'], 'PA': m['pa_date'] * tier['pa_date'],
+            'E/C': m['hs_expect'] * tier['hs_expect'], 'PF ND': m['pf_nodate'] * tier['pf_nodate'],
+            'PA ND': m['pa_nodate'] * tier['pa_nodate'], 'PA Old': m['pa_old'] * tier['pa_old'],
+            'Best': m['hs_best'] * tier['hs_best'], 'Opp': m['hs_opp'] * tier['hs_opp'],
+            'Prob Total': pw, 'Quota': q,
+            '%': (pw / q * 100) if q > 0 else 0,
+        })
+    prob_rows.append({
+        'Rep': 'TOTAL', 'Inv': team['invoiced'] * tier['invoiced'],
+        'PF': team['pf_date'] * tier['pf_date'], 'PA': team['pa_date'] * tier['pa_date'],
+        'E/C': team['hs_expect'] * tier['hs_expect'], 'PF ND': team['pf_nodate'] * tier['pf_nodate'],
+        'PA ND': team['pa_nodate'] * tier['pa_nodate'], 'PA Old': team['pa_old'] * tier['pa_old'],
+        'Best': team['hs_best'] * tier['hs_best'], 'Opp': team['hs_opp'] * tier['hs_opp'],
+        'Prob Total': team['prob_weighted'], 'Quota': team_quota,
+        '%': (team['prob_weighted'] / team_quota * 100) if team_quota > 0 else 0,
+    })
+
+    prob_df = pd.DataFrame(prob_rows)
+    pmoney = [c for c in prob_df.columns if c not in ('Rep', '%')]
+    st.dataframe(
+        prob_df.style.format({c: '${:,.0f}' for c in pmoney}).format({'%': '{:.0f}%'}),
+        use_container_width=True, hide_index=True, height=35 * len(prob_df) + 38,
+    )
+
+    st.markdown("---")
+
+    # --- REP STANDINGS ---
+    st.markdown("### Rep Standings")
+    rep_standings = []
+    for rep in rep_order:
+        m = rep_metrics[rep]
+        q = quotas.get(rep, 0)
+        if q <= 0:
+            continue
+        rep_standings.append({
+            'rep': rep, 'realistic': m['realistic'], 'quota': q,
+            'pct': m['realistic'] / q * 100, 'gap': q - m['realistic'],
+            'inv': m['invoiced'], 'pf': m['pf_date'] + m['pf_nodate'],
+            'pa': m['pa_date'], 'hs': m['hs_expect'], 'upside': m['hs_best'] + m['pa_nodate'],
+        })
+    rep_standings.sort(key=lambda x: x['pct'], reverse=True)
+
+    leading = [r for r in rep_standings if r['pct'] >= 90]
+    behind = [r for r in rep_standings if r['pct'] < 70]
+
+    if leading:
+        st.markdown("**Leading:**")
+        for r in leading:
+            parts = []
+            if r['inv'] > 0: parts.append(f"${r['inv']:,.0f} invoiced")
+            if r['pf'] > 0: parts.append(f"${r['pf']:,.0f} in fulfillment")
+            if r['pa'] > 0: parts.append(f"${r['pa']:,.0f} in PA")
+            if r['hs'] > 0: parts.append(f"${r['hs']:,.0f} in Expect")
+            detail = ': ' + ', '.join(parts) if parts else ''
+            st.markdown(f"- **{r['rep']}** — {r['pct']:.0f}% (${r['realistic']:,.0f} of ${r['quota']:,.0f}){detail}")
+
+    if behind:
+        st.markdown("**Behind Pace:**")
+        for r in behind:
+            parts = []
+            if r['inv'] > 0: parts.append(f"${r['inv']:,.0f} invoiced")
+            if r['pf'] > 0: parts.append(f"${r['pf']:,.0f} in fulfillment")
+            if r['upside'] > 0: parts.append(f"${r['upside']:,.0f} upside available")
+            detail = ': ' + ', '.join(parts) if parts else ''
+            st.markdown(f"- **{r['rep']}** — {r['pct']:.0f}% (${r['realistic']:,.0f} of ${r['quota']:,.0f}, **${r['gap']:,.0f} gap**){detail}")
+
+    st.markdown("---")
+
+    # --- DEAL LISTS ---
+    if not deals_df.empty and 'Status' in deals_df.columns:
+        best_deals = deals_df[deals_df['Status'] == 'Best Case'].copy()
+        opp_deals = deals_df[deals_df['Status'] == 'Opportunity'].copy()
+
+        for label, ddf, color in [("Best Case Deals", best_deals, "#f59e0b"), ("Opportunity Deals", opp_deals, "#a78bfa")]:
+            if not ddf.empty and 'Amount' in ddf.columns:
+                ddf['Amount_Num'] = pd.to_numeric(ddf['Amount'], errors='coerce').fillna(0)
+                ddf = ddf[ddf['Amount_Num'] > 0].sort_values('Amount_Num', ascending=False)
+                if not ddf.empty:
+                    st.markdown(f"### {label} ({len(ddf)})")
+                    show_cols = []
+                    if 'Deal Name' in ddf.columns: show_cols.append('Deal Name')
+                    if 'Deal Owner' in ddf.columns: show_cols.append('Deal Owner')
+                    show_cols.append('Amount_Num')
+                    display = ddf[show_cols].rename(columns={'Amount_Num': 'Amount'})
+                    st.dataframe(
+                        display.style.format({'Amount': '${:,.0f}'}),
+                        use_container_width=True, hide_index=True,
+                    )
+
+    # --- FOCUS AREAS ---
+    st.markdown("---")
+    st.markdown(f"### This Week's Focus ({phase_label})")
+
+    if phase == 'early':
+        if team['pa_nodate'] > 0:
+            st.markdown(f"- **Schedule ${team['pa_nodate']:,.0f} in unscheduled PAs** — fastest path to moving the realistic number")
+        if team['hs_best'] > 0:
+            st.markdown(f"- **Advance Best Case deals (${team['hs_best']:,.0f}) to Expect** — early quarter = highest conversion probability")
+        st.markdown("- **Build pipeline coverage** — target 1.3x quota in face value pipeline")
+    elif phase == 'mid':
+        if team['pa_nodate'] > 0:
+            st.markdown(f"- **Urgent: ${team['pa_nodate']:,.0f} in PA No Date** — if not scheduled this week, risks slipping to next quarter")
+        st.markdown("- **Convert HubSpot pipeline to SOs** — every Expect deal without a SO is a week closer to missing the quarter")
+        if team['pa_old'] > 0:
+            st.markdown(f"- **Resolve stale PAs (${team['pa_old']:,.0f})** — 2+ week stale PAs are likely blocked. Escalate or remove")
+    else:
+        pf_total = team['pf_date'] + team['pf_nodate']
+        st.markdown(f"- **Protect PF orders (${pf_total:,.0f})** — work with ops daily to confirm ship dates and clear blockers")
+        if team['pa_date'] > 0:
+            st.markdown(f"- **Rush PA with dates (${team['pa_date']:,.0f})** — push for same-week approval")
+        st.markdown("- **Everything else is upside.** Don't chase new deals — close what's in hand")
+
+    # Footer
+    st.markdown("---")
+    st.caption(f"Calyx Containers · Revenue Operations · {q_label} · {phase_label} · Generated {get_mst_time().strftime('%I:%M %p %Z')}")
 
 # Main app
 def main():
