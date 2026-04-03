@@ -704,7 +704,13 @@ QUARTER_END = "2026-06-30"
 # Per-rep quotas for this quarter.
 # Edit this dict to add/remove reps or change targets.
 REP_QUOTAS = {
-    # "Rep Name": quota_amount,
+    "Jake Lynch": 2_739_194,
+    "Dave Borkowski": 1_013_647,
+    "Brad Sherman": 566_039,
+    "Lance Mitton": 241_753,
+    "Alex Gonzalez": 0,
+    "Owen Labombard": 0,
+    "Shopify ECommerce": 0,
 }
 
 # Deals tab: raw HubSpot data. The code filters by date range + excluded stages.

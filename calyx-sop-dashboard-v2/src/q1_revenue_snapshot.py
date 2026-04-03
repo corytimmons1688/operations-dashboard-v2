@@ -36,13 +36,17 @@ SPREADSHEET_ID = get_spreadsheet_id()
 Q1_START = datetime(2026, 1, 1)
 Q1_END = datetime(2026, 3, 31, 23, 59, 59)
 
-# Q1 2026 fixed quota (historical - won't change)
-Q1_TEAM_QUOTA = 4_700_000
+# Q1 2026 fixed quotas (historical - won't change)
+Q1_TEAM_QUOTA = 4_560_633
 
-# Q1 2026 per-rep quotas (historical)
 Q1_REP_QUOTAS = {
-    # Populate with actual rep quotas if needed for individual rep views
-    # e.g. 'John Smith': 800000,
+    "Jake Lynch": 2_739_194,
+    "Dave Borkowski": 1_013_647,
+    "Brad Sherman": 566_039,
+    "Lance Mitton": 241_753,
+    "Alex Gonzalez": 0,
+    "Owen Labombard": 0,
+    "Shopify ECommerce": 0,
 }
 
 # ============================================================================
