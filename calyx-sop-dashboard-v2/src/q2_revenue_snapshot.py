@@ -6116,220 +6116,49 @@ def main():
     if 'q2_data_load_time' not in st.session_state:
         st.session_state.data_load_time = get_mst_time()
     
-    # Dashboard tagline
-    st.markdown("""
-    <div style='text-align: center; padding: 10px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                 color: white; border-radius: 10px; margin-bottom: 20px;'>
-        <h3>📊 Sales Forecast Dashboard</h3>
-        <p style='font-size: 14px; margin: 0;'>Where numbers meet reality (and sometimes they argue)</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Sidebar
+    # Sidebar — compact controls only (app.py handles main navigation)
     with st.sidebar:
-        # Sexy header with gradient
         st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 25px;
-            border-radius: 15px;
-            text-align: center;
-            margin-bottom: 20px;
-            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
-        ">
-            <h1 style="
-                color: white;
-                font-size: 28px;
-                margin: 0;
-                font-weight: 800;
-                text-shadow: 0 2px 10px rgba(0,0,0,0.3);
-            ">📊 Calyx Command</h1>
-            <p style="
-                color: rgba(255,255,255,0.9);
-                font-size: 14px;
-                margin: 8px 0 0 0;
-                font-weight: 500;
-            ">Q2 2026 Sales Intelligence</p>
-        </div>
+        <p style="color: #475569; font-size: 0.6rem; font-weight: 600; letter-spacing: 1.5px;
+                   text-transform: uppercase; margin: 16px 0 6px 4px;">Q2 2026 CONTROLS</p>
         """, unsafe_allow_html=True)
-        
-        # Custom navigation with icons and descriptions
-        st.markdown("### 🧭 Navigation")
-        
-        # ERP-style navigation with CSS styling
-        st.markdown("""
-        <style>
-        div[data-testid="stRadio"] > div {
-            gap: 8px;
-        }
-        
-        div[data-testid="stRadio"] > div > label {
-            background: rgba(30, 41, 59, 0.6) !important;
-            border: 1px solid rgba(71, 85, 105, 0.5) !important;
-            border-left: 4px solid transparent !important;
-            border-radius: 8px !important;
-            padding: 12px 16px !important;
-            cursor: pointer !important;
-            transition: all 0.3s ease !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1) !important;
-            width: 100% !important;
-            margin-bottom: 4px !important;
-        }
-        
-        div[data-testid="stRadio"] > div > label:hover {
-            background: rgba(51, 65, 85, 0.8) !important;
-            border-color: rgba(100, 116, 139, 0.7) !important;
-            transform: translateX(4px);
-        }
-        
-        div[data-testid="stRadio"] > div > label[data-checked="true"] {
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
-            border: 2px solid #3b82f6 !important;
-            border-left: 4px solid #60a5fa !important;
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3) !important;
-        }
-        
-        div[data-testid="stRadio"] > div > label[data-checked="true"]:hover {
-            transform: translateX(0);
-        }
-        
-        div[data-testid="stRadio"] label p {
-            font-size: 14px !important;
-            font-weight: 600 !important;
-            margin: 0 !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Create navigation options
+
+        # View selector
         view_mode = st.radio(
-            "Select View:",
-            ["👥 Team Overview", "👤 Individual Rep", "📊 CRO Scorecard"],
+            "View",
+            ["Team Overview", "Individual Rep", "CRO Scorecard"],
             label_visibility="collapsed",
-            key="q2_nav_selector"
+            key="q2_nav_selector",
+            format_func=lambda x: {"Team Overview": "👥  Team Overview", "Individual Rep": "👤  Individual Rep", "CRO Scorecard": "📊  CRO Scorecard"}.get(x, x)
         )
-        
-        # Map display names back to internal names
-        view_mapping = {
-            "👥 Team Overview": "Team Overview",
-            "👤 Individual Rep": "Individual Rep",
-            "📊 CRO Scorecard": "CRO Scorecard"
-        }
-        
-        view_mode = view_mapping.get(view_mode, "Team Overview")
-        
+
         st.markdown("---")
-        
-        # NEW: Include Shipping Toggle
-        # This controls whether revenue amounts include shipping & tax or just product revenue
+
+        # Shipping toggle
         include_shipping = st.toggle(
-            "💰 Include Shipping & Tax",
+            "Include Shipping & Tax",
             value=True,
             key="q2_include_shipping_toggle",
-            help="When ON: Shows total transaction amount (includes shipping & tax). When OFF: Shows product revenue only (excludes shipping & tax)."
+            help="ON = total transaction amount. OFF = product revenue only."
         )
-        
-        # Store in session state for use in display functions
         st.session_state.q2_include_shipping = include_shipping
-        
-        st.markdown("---")
-        
-        # Sexy metrics cards for quick stats
+
+        # Quick stats
         biz_days = calculate_business_days_remaining()
-        
-        # Get data load time from session state
-        data_load_time = st.session_state.data_load_time
-        current_mst_time = get_mst_time()
-        time_since_load = current_mst_time - data_load_time
-        minutes_ago = int(time_since_load.total_seconds() / 60)
-        
-        if minutes_ago < 1:
-            time_ago_text = "Just now"
-        elif minutes_ago < 60:
-            time_ago_text = f"{minutes_ago} min ago"
-        else:
-            hours_ago = minutes_ago // 60
-            time_ago_text = f"{hours_ago} hr ago"
-        
-        st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.2) 100%);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 15px;
-        ">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 24px;">⏱️</span>
-                <div>
-                    <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px;">Q2 Days Left</div>
-                    <div style="font-size: 24px; font-weight: 700; color: #10b981;">""" + str(biz_days) + """</div>
-                </div>
-            </div>
-            <div style="font-size: 10px; opacity: 0.6;">Business days until Jun 30, 2026</div>
-        </div>
-        
-        <div style="
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(37, 99, 235, 0.2) 100%);
-            border: 1px solid rgba(59, 130, 246, 0.3);
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 15px;
-        ">
-            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                <span style="font-size: 24px;">🔄</span>
-                <div style="flex: 1;">
-                    <div style="font-size: 11px; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px;">Last Sync</div>
-                    <div style="font-size: 14px; font-weight: 600; color: #3b82f6;">""" + data_load_time.strftime('%I:%M %p %Z') + """</div>
-                </div>
-            </div>
-            <div style="font-size: 10px; opacity: 0.6;">""" + time_ago_text + """ • Manual refresh only</div>
+        st.markdown(f"""
+        <div style="display: flex; justify-content: space-between; padding: 8px 0; font-size: 0.75rem;">
+            <span style="color: #64748b;">Q2 Days Left</span>
+            <span style="color: #e2e8f0; font-weight: 600;">{biz_days}</span>
         </div>
         """, unsafe_allow_html=True)
-        
-        # Refresh button with gradient
-        if st.button("🔄 Refresh Data Now", use_container_width=True):
-            # Store snapshot before clearing cache
-            if 'q2_current_snapshot' in st.session_state:
-                st.session_state.previous_snapshot = st.session_state.current_snapshot
-            
-            # Clear cache and update timestamp
-            st.cache_data.clear()
-            st.session_state.data_load_time = get_mst_time()
-            
-            # Rerun to load fresh data
-            # Note: Your view selection, rep selection, and filters are automatically 
-            # preserved via Streamlit's widget keys (nav_selector, rep_selector, etc.)
-            st.rerun()
-        
-        st.markdown("---")
-        
-        # Sync Status - collapsed by default, for Xander
-        with st.expander("🔧 Sync Status (for Xander)"):
-            current_spreadsheet_id = st.secrets.get("SPREADSHEET_ID", DEFAULT_SPREADSHEET_ID)
-            st.write("**Spreadsheet ID:**")
-            st.code(current_spreadsheet_id)
-            
-            if "service_account" in st.secrets:
-                st.success("✅ GCP credentials found")
-                try:
-                    creds_dict = dict(st.secrets["service_account"])
-                    if 'client_email' in creds_dict:
-                        st.info(f"Service account: {creds_dict['client_email']}")
-                        st.caption("Make sure this email has 'Viewer' access to your Google Sheet")
-                except:
-                    st.error("Error reading credentials")
-            else:
-                st.error("❌ GCP credentials missing")
 
-        # --- QUOTA DISPLAY ---
-        if REP_QUOTAS:
-            st.markdown("---")
-            with st.expander(f"🎯 {QUARTER_LABEL} Quotas", expanded=False):
-                for rep_name_q, quota_val in sorted(REP_QUOTAS.items()):
-                    st.markdown(f"**{rep_name_q}:** ${quota_val:,.0f}")
-                st.markdown(f"---\n**Team Total:** ${sum(REP_QUOTAS.values()):,.0f}")
-                st.caption("Edit REP_QUOTAS in q2_revenue_snapshot.py to change.")
+        # Refresh
+        if st.button("↻  Refresh Data", use_container_width=True, key="q2_refresh_btn"):
+            if 'q2_current_snapshot' in st.session_state:
+                st.session_state.q2_previous_snapshot = st.session_state.q2_current_snapshot
+            st.cache_data.clear()
+            st.session_state.q2_data_load_time = get_mst_time()
+            st.rerun()
 
     # Load data
     with st.spinner("Loading data from Google Sheets..."):
