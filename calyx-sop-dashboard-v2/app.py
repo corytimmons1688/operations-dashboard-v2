@@ -391,20 +391,36 @@ def render_sidebar():
         ">Revenue</p>
         """, unsafe_allow_html=True)
 
-        # Navigation
+        # Navigation — current quarter
         section = st.radio(
             "Navigation",
-            options=[
-                "Q2 2026 Forecast",
-                "Q1 2026 Review",
-                "Q4 2025 Review",
-            ],
+            options=["Q2 2026 Forecast"],
             label_visibility="collapsed",
             key="main_nav",
+            format_func=lambda x: "📈  Q2 2026 Forecast"
+        )
+
+        # Past quarters section
+        st.markdown("""
+        <p style="
+            color: #7b85a0;
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin: 16px 0 6px 16px;
+            padding: 0;
+        ">Past Quarters</p>
+        """, unsafe_allow_html=True)
+
+        section_hist = st.radio(
+            "History",
+            options=["Q1 2026 Review", "Q4 2025 Review"],
+            label_visibility="collapsed",
+            key="main_nav_history",
             format_func=lambda x: {
-                "Q2 2026 Forecast": "📈  Q2 2026 Forecast",
-                "Q1 2026 Review":  "📊  Q1 2026 Review",
-                "Q4 2025 Review":  "📉  Q4 2025 Review",
+                "Q1 2026 Review": "📊  Q1 2026",
+                "Q4 2025 Review": "📉  Q4 2025",
             }.get(x, x)
         )
 
@@ -531,6 +547,8 @@ def render_sidebar():
     # Map sections to a canonical key
     revenue_map = {
         "Q2 2026 Forecast": "📈 Q2 Revenue Snapshot",
+    }
+    history_map = {
         "Q1 2026 Review": "🎯 Q1 2026 Review",
         "Q4 2025 Review": "📉 Q4 Revenue Snapshot",
     }
@@ -549,23 +567,29 @@ def render_sidebar():
 
     # Detect which group the user just interacted with
     prev_revenue = st.session_state.get("_prev_main_nav", section)
+    prev_history = st.session_state.get("_prev_main_nav_history", section_hist)
     prev_planning = st.session_state.get("_prev_main_nav_planning", section2)
     prev_ops = st.session_state.get("_prev_main_nav_ops", section3)
 
     if section != prev_revenue:
         st.session_state.last_nav_group = "revenue"
+    elif section_hist != prev_history:
+        st.session_state.last_nav_group = "history"
     elif section2 != prev_planning:
         st.session_state.last_nav_group = "planning"
     elif section3 != prev_ops:
         st.session_state.last_nav_group = "ops"
 
     st.session_state["_prev_main_nav"] = section
+    st.session_state["_prev_main_nav_history"] = section_hist
     st.session_state["_prev_main_nav_planning"] = section2
     st.session_state["_prev_main_nav_ops"] = section3
 
     group = st.session_state.last_nav_group
     if group == "revenue":
         return revenue_map.get(section, "📈 Q2 Revenue Snapshot")
+    elif group == "history":
+        return history_map.get(section_hist, "🎯 Q1 2026 Review")
     elif group == "planning":
         return planning_map.get(section2, "📊 S&OP Planning")
     else:
