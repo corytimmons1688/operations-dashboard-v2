@@ -941,31 +941,27 @@ def load_all_data():
         # The Deals tab has raw columns: A=Record ID, B=Deal Name, C=Deal Stage,
         # D=Close Date, E=Deal Owner First Name, F=Deal Owner Last Name, G=Amount,
         # H=Close Status, I=Pipeline, J=Create Date, K=Deal Type, ...
-        # Combine Deal Owner First + Last (cols E+F) into one column
+        # Use positional indexing (.iloc) because column names may have duplicates.
         col_names = raw_deals_df.columns.tolist()
+        num_cols = len(col_names)
 
-        # Combine first/last name if separate columns exist
-        if len(col_names) >= 6:
-            fname_col = col_names[4]  # E
-            lname_col = col_names[5]  # F
+        # Combine first/last name if separate columns exist (cols E+F = index 4+5)
+        if num_cols >= 6:
             raw_deals_df['_Deal Owner Combined'] = (
-                raw_deals_df[fname_col].fillna('').astype(str).str.strip() + ' ' +
-                raw_deals_df[lname_col].fillna('').astype(str).str.strip()
+                raw_deals_df.iloc[:, 4].fillna('').astype(str).str.strip() + ' ' +
+                raw_deals_df.iloc[:, 5].fillna('').astype(str).str.strip()
             ).str.strip()
 
         # Apply filters
-        # 1. Record ID not blank
-        record_id_col = col_names[0]
-        raw_deals_df = raw_deals_df[raw_deals_df[record_id_col].astype(str).str.strip() != '']
+        # 1. Record ID not blank (col A = index 0)
+        raw_deals_df = raw_deals_df[raw_deals_df.iloc[:, 0].astype(str).str.strip() != '']
 
-        # 2. Deal Stage not blank and not in excluded stages
-        stage_col = col_names[2]
-        raw_deals_df = raw_deals_df[raw_deals_df[stage_col].astype(str).str.strip() != '']
-        raw_deals_df = raw_deals_df[~raw_deals_df[stage_col].astype(str).str.strip().str.lower().isin(EXCLUDED_STAGES)]
+        # 2. Deal Stage not blank and not in excluded stages (col C = index 2)
+        raw_deals_df = raw_deals_df[raw_deals_df.iloc[:, 2].astype(str).str.strip() != '']
+        raw_deals_df = raw_deals_df[~raw_deals_df.iloc[:, 2].astype(str).str.strip().str.lower().isin(EXCLUDED_STAGES)]
 
-        # 3. Close Date within quarter range
-        close_date_col = col_names[3]
-        raw_deals_df['_close_dt'] = pd.to_datetime(raw_deals_df[close_date_col], errors='coerce')
+        # 3. Close Date within quarter range (col D = index 3)
+        raw_deals_df['_close_dt'] = pd.to_datetime(raw_deals_df.iloc[:, 3], errors='coerce')
         q_start = pd.Timestamp(QUARTER_START)
         q_end = pd.Timestamp(QUARTER_END)
         raw_deals_df = raw_deals_df[
@@ -976,36 +972,36 @@ def load_all_data():
 
         # Now rebuild the DataFrame to match the old "All Reps All Pipelines" format
         # that the rest of the code expects (23 columns with combined Deal Owner)
+        # Rebuild DataFrame with clean columns using positional access
+        # Cols: 0=Record ID, 1=Deal Name, 2=Deal Stage, 3=Close Date,
+        #       (skip 4,5 = first/last name), 6=Amount, 7=Close Status, ...
+        expected_headers = [
+            'Record ID', 'Deal Name', 'Deal Stage', 'Close Date',
+            'Deal Owner First Name Deal Owner Last Name',
+            'Amount', 'Close Status', 'Pipeline', 'Create Date', 'Deal Type',
+            'Netsuite SO#', 'Netsuite SO Link', 'New Design SKU', 'SKU',
+            'Netsuite Sales Order Number', 'Primary Associated Company',
+            'Average Leadtime', 'Pending Approval Date', 'Quarter',
+            'Deal Stage & Close Status', 'Probability', 'Probability Rev', 'Company Name'
+        ]
+
+        rebuilt_data = {}
+        # First 4 columns (A-D) by position
+        for pos, header in enumerate(expected_headers[:4]):
+            if pos < num_cols:
+                rebuilt_data[header] = raw_deals_df.iloc[:, pos].values
+
+        # Combined Deal Owner
         if '_Deal Owner Combined' in raw_deals_df.columns:
-            # Build the expected column structure:
-            # Record ID, Deal Name, Deal Stage, Close Date, Deal Owner (combined),
-            # Amount, Close Status, Pipeline, Create Date, Deal Type, ...
-            new_cols = []
-            new_cols.append(col_names[0])  # A: Record ID
-            new_cols.append(col_names[1])  # B: Deal Name
-            new_cols.append(col_names[2])  # C: Deal Stage
-            new_cols.append(col_names[3])  # D: Close Date
-            new_cols.append('_Deal Owner Combined')  # E+F combined
-            # G onwards (index 6+)
-            for i in range(6, len(col_names)):
-                new_cols.append(col_names[i])
-            new_cols = [c for c in new_cols if c in raw_deals_df.columns]
-            raw_deals_df = raw_deals_df[new_cols].copy()
+            rebuilt_data[expected_headers[4]] = raw_deals_df['_Deal Owner Combined'].values
 
-            # Rename to match expected header format
-            expected_headers = [
-                'Record ID', 'Deal Name', 'Deal Stage', 'Close Date',
-                'Deal Owner First Name Deal Owner Last Name',
-                'Amount', 'Close Status', 'Pipeline', 'Create Date', 'Deal Type',
-                'Netsuite SO#', 'Netsuite SO Link', 'New Design SKU', 'SKU',
-                'Netsuite Sales Order Number', 'Primary Associated Company',
-                'Average Leadtime', 'Pending Approval Date', 'Quarter',
-                'Deal Stage & Close Status', 'Probability', 'Probability Rev', 'Company Name'
-            ]
-            if len(raw_deals_df.columns) <= len(expected_headers):
-                raw_deals_df.columns = expected_headers[:len(raw_deals_df.columns)]
+        # Columns G onwards (index 6+) map to expected_headers[5:]
+        for out_idx, header in enumerate(expected_headers[5:]):
+            src_pos = 6 + out_idx  # G=6, H=7, I=8, ...
+            if src_pos < num_cols:
+                rebuilt_data[header] = raw_deals_df.iloc[:, src_pos].values
 
-        deals_df = raw_deals_df
+        deals_df = pd.DataFrame(rebuilt_data)
     else:
         deals_df = raw_deals_df if not raw_deals_df.empty else pd.DataFrame()
     
