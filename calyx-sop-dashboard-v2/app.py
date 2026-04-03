@@ -110,335 +110,206 @@ def get_mst_time():
 # CUSTOM CSS - DRAMATIC DARK MODE UI (Matching Q1 Revenue Snapshot)
 # =============================================================================
 def inject_custom_css():
-    """Inject custom CSS for dark, sexy styling."""
+    """Inject custom CSS for polished SaaS-grade dark UI."""
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
-    /* ==============================================
-       FORCE DARK THEME EVERYWHERE (Cleaned up - removed problematic selectors)
-       ============================================== */
+    /* === BASE === */
     .stApp {
-        background: linear-gradient(135deg, #0a0f1a 0%, #0f172a 50%, #1e1b4b 100%) !important;
+        background: #0b0f19 !important;
         color: #e2e8f0 !important;
-    }
-
-    /* ==============================================
-       TYPOGRAPHY - CRISP AND MODERN
-       ============================================== */
-    .stApp {
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
-    
+
+    /* === TYPOGRAPHY === */
     h1 {
-        font-size: 2.5rem !important;
-        font-weight: 900 !important;
-        background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #f472b6 100%) !important;
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        background-clip: text !important;
-        letter-spacing: -1px !important;
-        margin-bottom: 1rem !important;
-    }
-    
-    h2, h3, h4 {
-        color: #f1f5f9 !important;
-        font-weight: 700 !important;
+        font-size: 1.75rem !important;
+        font-weight: 800 !important;
+        color: #f8fafc !important;
+        -webkit-text-fill-color: #f8fafc !important;
         letter-spacing: -0.5px !important;
     }
-    
-    p, span, label, div {
-        color: #cbd5e1 !important;
-    }
+    h2 { font-size: 1.35rem !important; font-weight: 700 !important; color: #f1f5f9 !important; }
+    h3 { font-size: 1.1rem !important; font-weight: 600 !important; color: #e2e8f0 !important; }
+    h4 { font-size: 0.95rem !important; font-weight: 600 !important; color: #cbd5e1 !important; }
 
-    /* ==============================================
-       SIDEBAR - SLEEK DARK PANEL
-       ============================================== */
+    /* === SIDEBAR === */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #020617 0%, #0f172a 100%) !important;
-        border-right: 1px solid rgba(99, 102, 241, 0.2) !important;
+        background: #070a12 !important;
+        border-right: 1px solid rgba(255,255,255,0.06) !important;
     }
-    
     [data-testid="stSidebar"] > div:first-child {
         background: transparent !important;
-    }
-    
-    [data-testid="stSidebar"] [data-testid="stMarkdown"] {
-        color: #e2e8f0 !important;
+        padding-top: 0 !important;
     }
 
-    /* ==============================================
-       METRIC CARDS - GLOWING GLASS EFFECT
-       ============================================== */
-    [data-testid="stMetric"] {
-        background: linear-gradient(145deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%) !important;
-        border: 1px solid rgba(99, 102, 241, 0.3) !important;
-        border-radius: 20px !important;
-        padding: 1.5rem !important;
-        box-shadow: 
-            0 0 20px rgba(99, 102, 241, 0.15),
-            0 8px 32px rgba(0, 0, 0, 0.4),
-            inset 0 1px 0 rgba(255, 255, 255, 0.1) !important;
-        position: relative !important;
-        overflow: hidden !important;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    /* Sidebar radio items — clean nav pills */
+    [data-testid="stSidebar"] .stRadio > div {
+        gap: 2px !important;
     }
-    
-    [data-testid="stMetric"]::before {
-        content: "" !important;
-        position: absolute !important;
-        top: 0 !important;
-        left: 0 !important;
-        right: 0 !important;
-        height: 3px !important;
-        background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899) !important;
-        opacity: 0.8 !important;
-    }
-    
-    [data-testid="stMetric"]:hover {
-        transform: translateY(-8px) scale(1.02) !important;
-        border-color: rgba(139, 92, 246, 0.6) !important;
-        box-shadow: 
-            0 0 40px rgba(139, 92, 246, 0.3),
-            0 20px 60px rgba(0, 0, 0, 0.5) !important;
-    }
-    
-    [data-testid="stMetricLabel"] {
-        font-size: 0.75rem !important;
-        font-weight: 600 !important;
-        text-transform: uppercase !important;
-        letter-spacing: 1.5px !important;
-        color: #94a3b8 !important;
-        margin-bottom: 0.5rem !important;
-    }
-    
-    [data-testid="stMetricValue"] {
-        font-size: 2rem !important;
-        font-weight: 800 !important;
-        background: linear-gradient(135deg, #ffffff 0%, #60a5fa 100%) !important;
-        -webkit-background-clip: text !important;
-        -webkit-text-fill-color: transparent !important;
-        background-clip: text !important;
-        line-height: 1.2 !important;
-    }
-    
-    [data-testid="stMetricDelta"] {
-        font-size: 0.85rem !important;
-        font-weight: 600 !important;
-    }
-
-    /* ==============================================
-       BUTTONS - GRADIENT WITH GLOW
-       ============================================== */
-    .stButton > button {
-        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 12px !important;
-        padding: 0.75rem 1.5rem !important;
-        font-weight: 600 !important;
-        font-size: 0.9rem !important;
-        letter-spacing: 0.5px !important;
-        box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4) !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    .stButton > button:hover {
-        transform: translateY(-2px) !important;
-        box-shadow: 0 8px 25px rgba(124, 58, 237, 0.5) !important;
-    }
-
-    /* ==============================================
-       TABS - FUTURISTIC STYLE
-       ============================================== */
-    .stTabs [data-baseweb="tab-list"] {
-        background: rgba(15, 23, 42, 0.8) !important;
-        border-radius: 16px !important;
-        padding: 8px !important;
-        gap: 8px !important;
-        border: 1px solid rgba(99, 102, 241, 0.2) !important;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        border-radius: 12px !important;
-        padding: 12px 24px !important;
-        font-weight: 600 !important;
-        color: #94a3b8 !important;
-        transition: all 0.3s ease !important;
-    }
-    
-    .stTabs [data-baseweb="tab"]:hover {
-        background: rgba(99, 102, 241, 0.1) !important;
-        color: #e2e8f0 !important;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%) !important;
-        color: white !important;
-        box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4) !important;
-    }
-
-    /* ==============================================
-       DATA TABLES - DARK GLASS STYLE
-       ============================================== */
-    .stDataFrame {
-        background: rgba(15, 23, 42, 0.8) !important;
-        border-radius: 16px !important;
-        border: 1px solid rgba(99, 102, 241, 0.2) !important;
-        overflow: hidden !important;
-    }
-    
-    [data-testid="stDataFrame"] > div {
+    [data-testid="stSidebar"] .stRadio > div > label {
         background: transparent !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 10px 14px !important;
+        margin: 0 !important;
+        transition: all 0.15s ease !important;
+        cursor: pointer !important;
+        border-left: 3px solid transparent !important;
     }
-    
-    .stDataFrame thead th {
-        background: rgba(30, 41, 59, 0.9) !important;
-        color: #e2e8f0 !important;
-        font-weight: 700 !important;
+    [data-testid="stSidebar"] .stRadio > div > label:hover {
+        background: rgba(255,255,255,0.04) !important;
+        border-left-color: rgba(99, 102, 241, 0.3) !important;
+        transform: none !important;
+    }
+    [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] {
+        background: rgba(99, 102, 241, 0.1) !important;
+        border-left-color: #818cf8 !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] p {
+        color: #c7d2fe !important;
+        font-weight: 600 !important;
+    }
+    [data-testid="stSidebar"] .stRadio > div > label p {
+        font-size: 0.82rem !important;
+        font-weight: 500 !important;
+        color: #94a3b8 !important;
+        margin: 0 !important;
+    }
+
+    /* === METRIC CARDS === */
+    [data-testid="stMetric"] {
+        background: rgba(15, 23, 42, 0.6) !important;
+        border: 1px solid rgba(255,255,255,0.06) !important;
+        border-radius: 12px !important;
+        padding: 1.25rem !important;
+        transition: border-color 0.2s ease !important;
+    }
+    [data-testid="stMetric"]:hover {
+        border-color: rgba(99, 102, 241, 0.25) !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.7rem !important;
+        font-weight: 600 !important;
         text-transform: uppercase !important;
         letter-spacing: 1px !important;
-        font-size: 0.75rem !important;
-        padding: 16px !important;
-        border-bottom: 2px solid rgba(99, 102, 241, 0.3) !important;
+        color: #64748b !important;
     }
-    
-    .stDataFrame tbody td {
-        background: rgba(15, 23, 42, 0.6) !important;
-        color: #cbd5e1 !important;
-        padding: 12px 16px !important;
-        border-bottom: 1px solid rgba(99, 102, 241, 0.1) !important;
-    }
-    
-    .stDataFrame tbody tr:hover td {
-        background: rgba(99, 102, 241, 0.1) !important;
+    [data-testid="stMetricValue"] {
+        font-size: 1.6rem !important;
+        font-weight: 700 !important;
+        color: #f1f5f9 !important;
+        -webkit-text-fill-color: #f1f5f9 !important;
+        background: none !important;
     }
 
-    /* ==============================================
-       EXPANDER - SLEEK ACCORDION
-       ============================================== */
-    .streamlit-expanderHeader {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border-radius: 12px !important;
-        border: 1px solid rgba(99, 102, 241, 0.2) !important;
+    /* === BUTTONS === */
+    .stButton > button {
+        background: rgba(99, 102, 241, 0.15) !important;
+        color: #c7d2fe !important;
+        border: 1px solid rgba(99, 102, 241, 0.25) !important;
+        border-radius: 8px !important;
+        padding: 0.5rem 1rem !important;
+        font-weight: 500 !important;
+        font-size: 0.82rem !important;
+        box-shadow: none !important;
+        transition: all 0.15s ease !important;
+    }
+    .stButton > button:hover {
+        background: rgba(99, 102, 241, 0.25) !important;
+        border-color: rgba(99, 102, 241, 0.4) !important;
+        transform: none !important;
+        box-shadow: none !important;
+    }
+
+    /* === TABS === */
+    .stTabs [data-baseweb="tab-list"] {
+        background: transparent !important;
+        border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+        border-radius: 0 !important;
+        padding: 0 !important;
+        gap: 0 !important;
+        border: none !important;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 0 !important;
+        padding: 10px 20px !important;
+        font-weight: 500 !important;
+        font-size: 0.82rem !important;
+        color: #64748b !important;
+        border-bottom: 2px solid transparent !important;
+        background: transparent !important;
+        transition: all 0.15s ease !important;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #cbd5e1 !important;
+        background: transparent !important;
+    }
+    .stTabs [aria-selected="true"] {
         color: #e2e8f0 !important;
         font-weight: 600 !important;
-    }
-    
-    .streamlit-expanderContent {
-        background: rgba(15, 23, 42, 0.6) !important;
-        border: 1px solid rgba(99, 102, 241, 0.1) !important;
-        border-top: none !important;
-        border-radius: 0 0 12px 12px !important;
+        border-bottom-color: #818cf8 !important;
+        background: transparent !important;
+        box-shadow: none !important;
     }
 
-    /* ==============================================
-       SELECT BOXES & INPUTS
-       ============================================== */
+    /* === DATA TABLES === */
+    .stDataFrame {
+        border-radius: 8px !important;
+        border: 1px solid rgba(255,255,255,0.06) !important;
+        overflow: hidden !important;
+    }
+
+    /* === SELECT / INPUT === */
     .stSelectbox > div > div,
     .stMultiSelect > div > div,
     .stTextInput > div > div {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border: 1px solid rgba(99, 102, 241, 0.3) !important;
-        border-radius: 12px !important;
-        color: #e2e8f0 !important;
-    }
-    
-    .stSelectbox [data-baseweb="select"] > div,
-    .stMultiSelect [data-baseweb="select"] > div {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border-color: rgba(99, 102, 241, 0.3) !important;
+        background: rgba(15, 23, 42, 0.6) !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+        border-radius: 8px !important;
     }
 
-    /* ==============================================
-       RADIO BUTTONS - NAVIGATION STYLE
-       ============================================== */
-    .stRadio > div {
-        background: transparent !important;
-    }
-    
-    .stRadio > div > label {
-        background: rgba(30, 41, 59, 0.6) !important;
-        border: 1px solid rgba(99, 102, 241, 0.2) !important;
-        border-radius: 12px !important;
-        padding: 12px 16px !important;
-        margin-bottom: 8px !important;
-        transition: all 0.3s ease !important;
-        cursor: pointer !important;
-    }
-    
-    .stRadio > div > label:hover {
-        background: rgba(99, 102, 241, 0.15) !important;
-        border-color: rgba(99, 102, 241, 0.4) !important;
-        transform: translateX(4px) !important;
-    }
-    
-    .stRadio > div > label[data-checked="true"] {
-        background: linear-gradient(135deg, rgba(79, 70, 229, 0.3) 0%, rgba(124, 58, 237, 0.3) 100%) !important;
-        border-color: #7c3aed !important;
-        box-shadow: 0 0 20px rgba(124, 58, 237, 0.2) !important;
-    }
-
-    /* ==============================================
-       PLOTLY CHARTS - DARK THEME
-       ============================================== */
-    .js-plotly-plot .plotly .bg {
-        fill: transparent !important;
-    }
-
-    /* ==============================================
-       SCROLLBAR - SUBTLE DARK
-       ============================================== */
-    ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background: rgba(15, 23, 42, 0.5);
-        border-radius: 4px;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: rgba(99, 102, 241, 0.4);
-        border-radius: 4px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background: rgba(99, 102, 241, 0.6);
-    }
-
-    /* ==============================================
-       ALERTS & INFO BOXES
-       ============================================== */
-    .stAlert {
-        background: rgba(30, 41, 59, 0.8) !important;
-        border-radius: 12px !important;
-        border-left: 4px solid #6366f1 !important;
-    }
-    
-    .element-container div[data-testid="stAlert"] {
-        background: rgba(30, 41, 59, 0.8) !important;
-    }
-
-    /* ==============================================
-       DIVIDER
-       ============================================== */
+    /* === DIVIDER === */
     hr {
         border: none !important;
         height: 1px !important;
-        background: linear-gradient(90deg, transparent 0%, rgba(99, 102, 241, 0.3) 50%, transparent 100%) !important;
-        margin: 2rem 0 !important;
+        background: rgba(255,255,255,0.06) !important;
+        margin: 1.5rem 0 !important;
     }
 
-    /* ==============================================
-       SIDEBAR RADIO ANIMATION
-       ============================================== */
-    [data-testid="stSidebar"] .stRadio > div > label {
-        display: flex !important;
-        align-items: center !important;
-        gap: 8px !important;
+    /* === EXPANDER === */
+    .streamlit-expanderHeader {
+        background: rgba(15, 23, 42, 0.4) !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(255,255,255,0.06) !important;
+        font-weight: 500 !important;
+        font-size: 0.85rem !important;
     }
+    .streamlit-expanderContent {
+        border: 1px solid rgba(255,255,255,0.04) !important;
+        border-top: none !important;
+    }
+
+    /* === ALERTS === */
+    .stAlert {
+        background: rgba(15, 23, 42, 0.6) !important;
+        border-radius: 8px !important;
+        border-left: 3px solid #818cf8 !important;
+    }
+
+    /* === SCROLLBAR === */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+    /* === PLOTLY === */
+    .js-plotly-plot .plotly .bg { fill: transparent !important; }
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -447,208 +318,199 @@ def inject_custom_css():
 # SIDEBAR NAVIGATION
 # =============================================================================
 def render_sidebar():
-    """Render the sidebar with navigation."""
+    """Render a clean SaaS-grade sidebar."""
     with st.sidebar:
-        # Logo and branding
+        # Brand header — minimal and clean
         st.markdown("""
         <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #7c3aed 50%, #ec4899 100%);
-            padding: 25px;
-            border-radius: 20px;
-            text-align: center;
-            margin-bottom: 25px;
-            box-shadow: 0 10px 40px rgba(124, 58, 237, 0.4);
-            position: relative;
-            overflow: hidden;
+            padding: 24px 16px 20px 16px;
+            margin-bottom: 8px;
         ">
-            <div style="
-                position: absolute;
-                top: -50%;
-                left: -50%;
-                width: 200%;
-                height: 200%;
-                background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 60%);
-                animation: shimmer 3s infinite;
-            "></div>
-            <h1 style="
-                color: white;
-                font-size: 1.8rem;
-                margin: 0;
-                font-weight: 900;
-                text-shadow: 0 2px 10px rgba(0,0,0,0.3);
-                letter-spacing: -1px;
-                position: relative;
-            ">🚀 CALYX</h1>
-            <p style="
-                color: rgba(255,255,255,0.9);
-                font-size: 0.7rem;
-                margin: 8px 0 0 0;
-                font-weight: 600;
-                letter-spacing: 4px;
-                text-transform: uppercase;
-                position: relative;
-            ">COMMAND CENTER</p>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="
+                    width: 36px; height: 36px;
+                    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+                    border-radius: 10px;
+                    display: flex; align-items: center; justify-content: center;
+                    font-size: 18px;
+                    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+                ">🚀</div>
+                <div>
+                    <div style="font-size: 1rem; font-weight: 700; color: #f1f5f9; letter-spacing: -0.3px; line-height: 1.2;">Calyx</div>
+                    <div style="font-size: 0.65rem; font-weight: 500; color: #64748b; letter-spacing: 0.5px;">Command Center</div>
+                </div>
+            </div>
         </div>
-        <style>
-        @keyframes shimmer {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        </style>
         """, unsafe_allow_html=True)
-        
-        # Section Header
+
+        # Nav section label
         st.markdown("""
         <p style="
-            color: #64748b;
-            font-size: 0.65rem;
-            font-weight: 700;
-            letter-spacing: 3px;
+            color: #475569;
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 1.5px;
             text-transform: uppercase;
-            margin-bottom: 12px;
-            padding-left: 4px;
-        ">NAVIGATION</p>
+            margin: 0 0 6px 16px;
+            padding: 0;
+        ">Revenue</p>
         """, unsafe_allow_html=True)
-        
-        # Navigation Radio
+
+        # Navigation
         section = st.radio(
             "Navigation",
             options=[
-                "📈 Q2 Revenue Snapshot",
-                "🎯 Q1 2026 Review",
-                "📊 S&OP Planning",
-                "🛡️ Quality Management",
-                "📉 Q4 Revenue Snapshot",
-                "📅 2026 Yearly Planning",
-                "🎮 Revenue Operations Playground"
+                "Q2 2026 Forecast",
+                "Q1 2026 Review",
+                "Q4 2025 Review",
             ],
             label_visibility="collapsed",
-            key="main_nav"
+            key="main_nav",
+            format_func=lambda x: {
+                "Q2 2026 Forecast": "📈  Q2 2026 Forecast",
+                "Q1 2026 Review":  "📊  Q1 2026 Review",
+                "Q4 2025 Review":  "📉  Q4 2025 Review",
+            }.get(x, x)
         )
-        
-        st.markdown("---")
-        
-        # Quick Stats Cards
+
+        # Planning section
         st.markdown("""
         <p style="
-            color: #64748b;
-            font-size: 0.65rem;
-            font-weight: 700;
-            letter-spacing: 3px;
+            color: #475569;
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 1.5px;
             text-transform: uppercase;
-            margin-bottom: 12px;
-            padding-left: 4px;
-        ">QUICK STATS</p>
+            margin: 16px 0 6px 16px;
+            padding: 0;
+        ">Planning</p>
         """, unsafe_allow_html=True)
-        
-        # Current time card
+
+        section2 = st.radio(
+            "Planning",
+            options=[
+                "S&OP Planning",
+                "2026 Yearly Planning",
+            ],
+            label_visibility="collapsed",
+            key="main_nav_planning",
+            format_func=lambda x: {
+                "S&OP Planning":       "📋  S&OP Planning",
+                "2026 Yearly Planning": "📅  2026 Yearly Plan",
+            }.get(x, x)
+        )
+
+        # Operations section
+        st.markdown("""
+        <p style="
+            color: #475569;
+            font-size: 0.6rem;
+            font-weight: 600;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin: 16px 0 6px 16px;
+            padding: 0;
+        ">Operations</p>
+        """, unsafe_allow_html=True)
+
+        section3 = st.radio(
+            "Operations",
+            options=[
+                "Quality Management",
+                "Rev Ops Playground",
+            ],
+            label_visibility="collapsed",
+            key="main_nav_ops",
+            format_func=lambda x: {
+                "Quality Management": "🛡️  Quality Management",
+                "Rev Ops Playground": "🎮  Rev Ops Playground",
+            }.get(x, x)
+        )
+
+        st.markdown("""<div style="height: 16px;"></div>""", unsafe_allow_html=True)
+
+        # Quick info cards — compact
         current_time = get_mst_time()
         st.markdown(f"""
         <div style="
-            background: linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(37, 99, 235, 0.2) 100%);
-            border: 1px solid rgba(59, 130, 246, 0.3);
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 12px;
+            padding: 12px 16px;
+            margin: 0 8px;
+            background: rgba(255,255,255,0.02);
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.04);
         ">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <span style="font-size: 24px;">🕐</span>
-                <div>
-                    <div style="font-size: 0.65rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8;">Current Time (MST)</div>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #3b82f6;">{current_time.strftime('%I:%M %p')}</div>
-                </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 0.65rem; color: #475569; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">MST</span>
+                <span style="font-size: 0.8rem; color: #94a3b8; font-weight: 600;">{current_time.strftime('%I:%M %p')}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
-        
-        # System status card
-        st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.2) 100%);
-            border: 1px solid rgba(16, 185, 129, 0.3);
-            border-radius: 12px;
-            padding: 15px;
-            margin-bottom: 12px;
-        ">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <div style="
-                    width: 12px;
-                    height: 12px;
-                    background: #10b981;
-                    border-radius: 50%;
-                    box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
-                    animation: pulse 2s infinite;
-                "></div>
-                <div>
-                    <div style="font-size: 0.65rem; opacity: 0.7; text-transform: uppercase; letter-spacing: 1px; color: #94a3b8;">System Status</div>
-                    <div style="font-size: 0.9rem; font-weight: 700; color: #10b981;">All Systems Operational</div>
-                </div>
-            </div>
-        </div>
-        <style>
-        @keyframes pulse {
-            0%, 100% { opacity: 1; box-shadow: 0 0 10px rgba(16, 185, 129, 0.5); }
-            50% { opacity: 0.6; box-shadow: 0 0 20px rgba(16, 185, 129, 0.8); }
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        
-        # Refresh button
-        if st.button("🔄 Refresh All Data", use_container_width=True, key="refresh_btn"):
+
+        st.markdown("""<div style="height: 8px;"></div>""", unsafe_allow_html=True)
+
+        # Refresh
+        if st.button("↻  Refresh Data", use_container_width=True, key="refresh_btn"):
             st.cache_data.clear()
             st.rerun()
-        
-        st.markdown("---")
-        
-        # Help section
-        with st.expander("📚 Help & Navigation"):
-            st.markdown("""
-            <div style="font-size: 0.85rem; line-height: 1.6;">
-            
-            **📈 Q2 Revenue Snapshot**
-            Live Q2 2026 forecasting with interactive planning tools
 
-            **🎯 Q1 2026 Review**
-            Q1 2026 historical performance review ($3.92M)
-
-            **📊 S&OP Planning**
-            Sales & Operations planning with demand forecasting
-
-            **🛡️ Quality Management**
-            NC tracking, aging analysis, and quality metrics
-
-            **📉 Q4 Revenue Snapshot**
-            Q4 2025 historical performance data
-            
-            **📅 2026 Yearly Planning**
-            Annual strategic planning and capacity
-            
-            **🎮 Revenue Operations Playground**
-            QBR Generator & ad-hoc analysis tools
-            
-            </div>
-            """, unsafe_allow_html=True)
-        
-        # Version info
+        # Version
         st.markdown("""
         <div style="
             text-align: center;
-            padding: 15px;
-            margin-top: 20px;
-            border-top: 1px solid rgba(99, 102, 241, 0.2);
+            padding: 16px 0 8px 0;
+            margin-top: 12px;
         ">
-            <p style="font-size: 0.7rem; color: #64748b; margin: 0;">
-                Calyx Command Center v4.1
-            </p>
-            <p style="font-size: 0.65rem; color: #475569; margin: 4px 0 0 0;">
-                Built with ❤️ by Xander
-            </p>
+            <p style="font-size: 0.6rem; color: #334155; margin: 0;">v4.2 · Built by Xander</p>
         </div>
         """, unsafe_allow_html=True)
-        
-    return section
+
+    # Determine which section is active — only one radio group should be "active"
+    # Streamlit keeps state for all radio groups independently, so we use a
+    # session-state flag to track which group was last clicked.
+    # On each run, check which radios changed from their defaults.
+
+    # Map sections to a canonical key
+    revenue_map = {
+        "Q2 2026 Forecast": "📈 Q2 Revenue Snapshot",
+        "Q1 2026 Review": "🎯 Q1 2026 Review",
+        "Q4 2025 Review": "📉 Q4 Revenue Snapshot",
+    }
+    planning_map = {
+        "S&OP Planning": "📊 S&OP Planning",
+        "2026 Yearly Planning": "📅 2026 Yearly Planning",
+    }
+    ops_map = {
+        "Quality Management": "🛡️ Quality Management",
+        "Rev Ops Playground": "🎮 Revenue Operations Playground",
+    }
+
+    # Track last active group
+    if "last_nav_group" not in st.session_state:
+        st.session_state.last_nav_group = "revenue"
+
+    # Detect which group the user just interacted with
+    prev_revenue = st.session_state.get("_prev_main_nav", section)
+    prev_planning = st.session_state.get("_prev_main_nav_planning", section2)
+    prev_ops = st.session_state.get("_prev_main_nav_ops", section3)
+
+    if section != prev_revenue:
+        st.session_state.last_nav_group = "revenue"
+    elif section2 != prev_planning:
+        st.session_state.last_nav_group = "planning"
+    elif section3 != prev_ops:
+        st.session_state.last_nav_group = "ops"
+
+    st.session_state["_prev_main_nav"] = section
+    st.session_state["_prev_main_nav_planning"] = section2
+    st.session_state["_prev_main_nav_ops"] = section3
+
+    group = st.session_state.last_nav_group
+    if group == "revenue":
+        return revenue_map.get(section, "📈 Q2 Revenue Snapshot")
+    elif group == "planning":
+        return planning_map.get(section2, "📊 S&OP Planning")
+    else:
+        return ops_map.get(section3, "🛡️ Quality Management")
 
 
 # =============================================================================
