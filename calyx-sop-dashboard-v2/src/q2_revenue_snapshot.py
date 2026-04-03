@@ -5042,108 +5042,109 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     else:
         st.warning("📭 No additional forecast items")
 def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df=None, production_schedule_df=None, amie_update_df=None):
-    """Display individual rep dashboard with drill-down capability - REDESIGNED"""
-    
-    st.title(f"👤 {rep_name}'s Q2 2026 Forecast")
-    
-    # Show indicator for shipping mode
-    include_shipping = st.session_state.get('q2_include_shipping', True)
-    if include_shipping:
-        st.caption("💰 Revenue figures include shipping & tax")
-    else:
-        st.caption("📦 Revenue figures exclude shipping & tax (product revenue only)")
-    
-    # DEBUG: Show rep name matching info
-    with st.expander("🔧 Debug: Sales Order Rep Matching (for Xander)", expanded=False):
-        if not sales_orders_df.empty and 'Sales Rep' in sales_orders_df.columns:
-            unique_reps = sales_orders_df['Sales Rep'].unique().tolist()
-            st.write(f"**Looking for:** `{rep_name}`")
-            st.write(f"**Available Sales Reps in SO data:** {unique_reps}")
-            matches = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name]
-            st.write(f"**Exact matches found:** {len(matches)} orders")
-            if len(matches) == 0:
-                # Check for partial matches
-                partial = [r for r in unique_reps if rep_name.lower() in str(r).lower() or str(r).lower() in rep_name.lower()]
-                st.warning(f"**Possible partial matches:** {partial}")
-        else:
-            st.error("Sales Orders DataFrame is empty or missing 'Sales Rep' column")
-    
-    # Calculate metrics with details
+    """Display individual rep dashboard — clean, streamlined layout."""
+
+    st.title(f"{rep_name} — Q2 2026")
+
+    # Calculate metrics
     metrics = calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df)
-    
+
     if not metrics:
         st.error(f"No data found for {rep_name}")
         return
-    
-    # Calculate the key forecast totals
-    high_confidence = metrics['total_progress']  # Invoiced + PF(date) + PA(date) + HS E/C
-    
-    full_forecast = (high_confidence + 
-                    metrics['pending_fulfillment_no_date'] + 
-                    metrics['pending_approval_no_date'] + 
+
+    # Key totals
+    high_confidence = metrics['total_progress']
+    full_forecast = (high_confidence +
+                    metrics['pending_fulfillment_no_date'] +
+                    metrics['pending_approval_no_date'] +
                     metrics['pending_approval_old'])
-    
     gap_to_quota = metrics['quota'] - high_confidence
-    
-    potential_attainment_value = high_confidence + metrics['best_opp']
-    potential_attainment_pct = (potential_attainment_value / metrics['quota'] * 100) if metrics['quota'] > 0 else 0
-    
-    # NEW: Top Metrics Row (mirroring Team Scorecard)
-    st.markdown("### 📊 Rep Scorecard")
-    
-    metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
-    
-    with metric_col1:
-        st.metric(
-            label="💰 Quota",
-            value=f"${metrics['quota']/1000:.0f}K" if metrics['quota'] < 1000000 else f"${metrics['quota']/1000000:.1f}M",
-            help="Your Q2 2026 sales quota"
-        )
-    
-    with metric_col2:
-        high_conf_pct = (high_confidence / metrics['quota'] * 100) if metrics['quota'] > 0 else 0
-        st.metric(
-            label="💪 High Confidence Forecast",
-            value=f"${high_confidence/1000:.0f}K" if high_confidence < 1000000 else f"${high_confidence/1000000:.1f}M",
-            delta=f"{high_conf_pct:.1f}% of quota",
-            help="Invoiced & Shipped + PF (with date) + PA (with date) + HS Expect/Commit"
-        )
-    
-    with metric_col3:
-        full_forecast_pct = (full_forecast / metrics['quota'] * 100) if metrics['quota'] > 0 else 0
-        st.metric(
-            label="📊 Full Forecast (All Sources)",
-            value=f"${full_forecast/1000:.0f}K" if full_forecast < 1000000 else f"${full_forecast/1000000:.1f}M",
-            delta=f"{full_forecast_pct:.1f}% of quota",
-            help="Invoiced & Shipped + PF (with date) + PA (with date) + HS Expect/Commit + PF (without date) + PA (without date) + PA (>2 weeks old)"
-        )
-    
-    with metric_col4:
-        st.metric(
-            label="📉 Gap to Quota",
-            value=f"${gap_to_quota/1000:.0f}K" if abs(gap_to_quota) < 1000000 else f"${gap_to_quota/1000000:.1f}M",
-            delta=f"${-gap_to_quota/1000:.0f}K" if gap_to_quota < 0 else None,
-            delta_color="inverse",
-            help="Quota - (Invoiced & Shipped + PF (with date) + PA (with date) + HS Expect/Commit)"
-        )
-    
-    with metric_col5:
-        upside = potential_attainment_pct - high_conf_pct
-        st.metric(
-            label="⭐ Potential Attainment",
-            value=f"{potential_attainment_pct:.1f}%",
-            delta=f"+{upside:.1f}% upside",
-            help="(Invoiced & Shipped + PF (with date) + PA (with date) + HS Expect/Commit + HS Best Case/Opp) ÷ Quota"
-        )
-    
+    potential_value = high_confidence + metrics['best_opp']
+    potential_pct = (potential_value / metrics['quota'] * 100) if metrics['quota'] > 0 else 0
+
+    # ==================== SCORECARD ====================
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("Quota", f"${metrics['quota']:,.0f}")
+    with c2:
+        pct = (high_confidence / metrics['quota'] * 100) if metrics['quota'] > 0 else 0
+        st.metric("High Confidence", f"${high_confidence:,.0f}", delta=f"{pct:.0f}%")
+    with c3:
+        st.metric("Full Forecast", f"${full_forecast:,.0f}")
+    with c4:
+        st.metric("Gap to Quota", f"${gap_to_quota:,.0f}", delta_color="inverse")
+    with c5:
+        st.metric("Potential", f"{potential_pct:.0f}%", delta=f"+${metrics['best_opp']:,.0f} upside")
+
     st.markdown("---")
-    
-    # Invoices section for this rep
+
+    # ==================== REVENUE BREAKDOWN TABLE ====================
+    st.markdown("### Revenue Breakdown")
+
+    breakdown_data = [
+        {"Category": "Invoiced & Shipped", "Amount": metrics['orders'], "Status": "Locked"},
+        {"Category": "Pending Fulfillment (with date)", "Amount": metrics['pending_fulfillment'], "Status": "High confidence"},
+        {"Category": "Pending Approval (with date)", "Amount": metrics['pending_approval'], "Status": "High confidence"},
+        {"Category": "HubSpot Expect/Commit", "Amount": metrics['expect_commit'], "Status": "High confidence"},
+        {"Category": "PF (no date)", "Amount": metrics['pending_fulfillment_no_date'], "Status": "At risk"},
+        {"Category": "PA (no date)", "Amount": metrics['pending_approval_no_date'], "Status": "At risk"},
+        {"Category": "PA (>2 weeks old)", "Amount": metrics['pending_approval_old'], "Status": "At risk"},
+        {"Category": "HubSpot Best Case/Opp", "Amount": metrics['best_opp'], "Status": "Upside"},
+    ]
+    breakdown_df = pd.DataFrame(breakdown_data)
+    breakdown_df = breakdown_df[breakdown_df['Amount'] > 0]
+
+    if not breakdown_df.empty:
+        # Color-coded status
+        def style_status(val):
+            colors = {"Locked": "#10b981", "High confidence": "#3b82f6", "At risk": "#f59e0b", "Upside": "#a78bfa"}
+            return f"color: {colors.get(val, '#94a3b8')}"
+
+        st.dataframe(
+            breakdown_df.style.format({"Amount": "${:,.0f}"}).map(style_status, subset=["Status"]),
+            use_container_width=True,
+            hide_index=True,
+            height=35 * len(breakdown_df) + 38,
+        )
+
+        # Waterfall-style bar chart
+        fig = go.Figure(go.Waterfall(
+            name="Revenue",
+            orientation="v",
+            measure=["relative"] * len(breakdown_df),
+            x=breakdown_df['Category'].tolist(),
+            y=breakdown_df['Amount'].tolist(),
+            connector={"line": {"color": "rgba(129,140,248,0.3)"}},
+            increasing={"marker": {"color": "#818cf8"}},
+            decreasing={"marker": {"color": "#f87171"}},
+            totals={"marker": {"color": "#10b981"}},
+            text=[f"${v:,.0f}" for v in breakdown_df['Amount']],
+            textposition="outside",
+        ))
+        fig.add_shape(type="line", x0=-0.5, x1=len(breakdown_df) - 0.5,
+                      y0=metrics['quota'], y1=metrics['quota'],
+                      line=dict(color="#f87171", width=2, dash="dash"))
+        fig.add_annotation(x=len(breakdown_df) - 1, y=metrics['quota'],
+                          text=f"Quota: ${metrics['quota']:,.0f}", showarrow=False,
+                          yshift=15, font=dict(color="#f87171", size=11))
+        fig.update_layout(
+            showlegend=False, height=350,
+            plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#c9d1e0'),
+            xaxis=dict(tickangle=-30, tickfont=dict(size=10)),
+            yaxis=dict(gridcolor='rgba(129,140,248,0.08)'),
+            margin=dict(l=60, r=20, t=20, b=80),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # ==================== INVOICES ====================
     display_invoices_drill_down(invoices_df, rep_name)
-    
     st.markdown("---")
-    
-    # Build Your Own Forecast section
+
+    # ==================== BUILD YOUR OWN FORECAST ====================
     build_your_own_forecast_section(
         metrics,
         metrics['quota'],
@@ -5155,210 +5156,37 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
         production_schedule_df=production_schedule_df,
         amie_update_df=amie_update_df
     )
-    
     st.markdown("---")
-    
-    # HubSpot Deals Audit Section
-    display_hubspot_deals_audit(deals_df, rep_name)
-    
-    st.markdown("---")
-    
-    # SECTION 1: What's in NetSuite with Dates and HubSpot Expect/Commit
-    st.markdown(f"""
-    <div class="progress-breakdown">
-        <h3>💰 Section 1: What's in NetSuite with Dates and HubSpot Expect/Commit</h3>
-        <div class="progress-item">
-            <span class="progress-label">✅ Invoiced & Shipped</span>
-            <span class="progress-value">${metrics['orders']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment (with date)</span>
-            <span class="progress-value">${metrics['pending_fulfillment']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval (with date)</span>
-            <span class="progress-value">${metrics['pending_approval']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">🎯 HubSpot Expect/Commit</span>
-            <span class="progress-value">${metrics['expect_commit']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">💪 THE SAFE BET TOTAL</span>
-            <span class="progress-value">${high_confidence:,.0f}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Drill-down sections for Section 1
-    st.markdown("#### 📊 Section 1 Details")
-    
+
+    # ==================== HUBSPOT PIPELINE ANALYSIS ====================
+    st.markdown("### HubSpot Pipeline")
+
     col1, col2 = st.columns(2)
-    
     with col1:
-        display_drill_down_section(
-            "📦 Pending Fulfillment (with date)",
-            metrics['pending_fulfillment'],
-            metrics.get('pending_fulfillment_details', pd.DataFrame()),
-            f"{rep_name}_pf"
-        )
-        
-        display_drill_down_section(
-            "⏳ Pending Approval (with date)",
-            metrics['pending_approval'],
-            metrics.get('pending_approval_details', pd.DataFrame()),
-            f"{rep_name}_pa"
-        )
-    
-    with col2:
-        display_drill_down_section(
-            "🎯 HubSpot Expect/Commit",
-            metrics['expect_commit'],
-            metrics.get('expect_commit_deals', pd.DataFrame()),
-            f"{rep_name}_hs"
-        )
-        
-        display_drill_down_section(
-            "🎲 Best Case/Opportunity",
-            metrics['best_opp'],
-            metrics.get('best_opp_deals', pd.DataFrame()),
-            f"{rep_name}_bo"
-        )
-    
-    st.markdown("---")
-    
-    # SECTION 2: Full Forecast
-    st.markdown(f"""
-    <div class="progress-breakdown">
-        <h3>📊 Section 2: Full Forecast</h3>
-        <div class="progress-item">
-            <span class="progress-label">✅ Invoiced & Shipped</span>
-            <span class="progress-value">${metrics['orders']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment (with date)</span>
-            <span class="progress-value">${metrics['pending_fulfillment']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval (with date)</span>
-            <span class="progress-value">${metrics['pending_approval']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">🎯 HubSpot Expect/Commit</span>
-            <span class="progress-value">${metrics['expect_commit']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">📦 Pending Fulfillment (without date)</span>
-            <span class="progress-value">${metrics['pending_fulfillment_no_date']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">⏳ Pending Approval (without date)</span>
-            <span class="progress-value">${metrics['pending_approval_no_date']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">⏱️ Pending Approval (>2 weeks old)</span>
-            <span class="progress-value">${metrics['pending_approval_old']:,.0f}</span>
-        </div>
-        <div class="progress-item">
-            <span class="progress-label">📊 FULL FORECAST TOTAL</span>
-            <span class="progress-value">${full_forecast:,.0f}</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Drill-down sections for Section 2 (additional items)
-    st.markdown("#### 📊 Section 2 Additional Details")
-    
-    warning_col1, warning_col2, warning_col3 = st.columns(3)
-    
-    with warning_col1:
-        display_drill_down_section(
-            "📦 Pending Fulfillment (without date)",
-            metrics['pending_fulfillment_no_date'],
-            metrics.get('pending_fulfillment_no_date_details', pd.DataFrame()),
-            f"{rep_name}_pf_no_date"
-        )
-    
-    with warning_col2:
-        display_drill_down_section(
-            "⏳ Pending Approval (without date)",
-            metrics['pending_approval_no_date'],
-            metrics.get('pending_approval_no_date_details', pd.DataFrame()),
-            f"{rep_name}_pa_no_date"
-        )
-    
-    with warning_col3:
-        display_drill_down_section(
-            "⏱️ Old Pending Approval (>2 weeks)",
-            metrics['pending_approval_old'],
-            metrics.get('pending_approval_old_details', pd.DataFrame()),
-            f"{rep_name}_pa_old"
-        )
-    
-    st.markdown("---")
-    
-    # Q3 2026 Spillover Details (moved from Section 3)
-    st.markdown("#### 🦘 Q3 2026 Spillover Details")
-    st.caption("⚠️ These deals close in Q2 2026 but will ship in Q3 2026 due to lead times")
-    
-    spillover_col1, spillover_col2, spillover_col3 = st.columns(3)
-    
-    with spillover_col1:
-        display_drill_down_section(
-            "🎯 Expect/Commit (Q2 Spillover)",
-            metrics.get('q2_spillover_expect_commit', 0),
-            metrics.get('expect_commit_q2_spillover_deals', pd.DataFrame()),
-            f"{rep_name}_ec_q1"
-        )
-    
-    with spillover_col2:
-        display_drill_down_section(
-            "🎲 Best Case/Opp (Q2 Spillover)",
-            metrics.get('q2_spillover_best_opp', 0),
-            metrics.get('best_opp_q2_spillover_deals', pd.DataFrame()),
-            f"{rep_name}_bo_q1"
-        )
-    
-    with spillover_col3:
-        display_drill_down_section(
-            "📦 All Q3 2026 Spillover",
-            metrics.get('q2_spillover_total', 0),
-            metrics.get('all_q2_spillover_deals', pd.DataFrame()),
-            f"{rep_name}_all_q2"
-        )
-    
-    st.markdown("---")
-    
-    # Charts
-    st.markdown("### 📊 Visual Analysis")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        gap_chart = create_gap_chart(metrics, f"{rep_name} - Q2 2026 Forecast Progress")
-        st.plotly_chart(gap_chart, use_container_width=True)
-    
-    with col2:
         status_chart = create_status_breakdown_chart(deals_df, rep_name)
         if status_chart:
             st.plotly_chart(status_chart, use_container_width=True)
-        else:
-            st.info("No deal data available for this rep")
-    
-    # Pipeline breakdown
-    st.markdown("### 📊 Pipeline Breakdown by Status")
-    pipeline_chart = create_pipeline_breakdown_chart(deals_df, rep_name)
-    if pipeline_chart:
-        st.plotly_chart(pipeline_chart, use_container_width=True)
-    else:
-        st.info("📭 Nothing to see here... yet!")
-    
+    with col2:
+        pipeline_chart = create_pipeline_breakdown_chart(deals_df, rep_name)
+        if pipeline_chart:
+            st.plotly_chart(pipeline_chart, use_container_width=True)
+
     # Timeline
-    st.markdown("### 📅 Deal Timeline by Expected Close Date")
     timeline_chart = create_deals_timeline(deals_df, rep_name)
     if timeline_chart:
         st.plotly_chart(timeline_chart, use_container_width=True)
-    else:
-        st.info("📭 Nothing to see here... yet!")
+
+    # ==================== Q3 SPILLOVER ====================
+    q3_spill_total = metrics.get('q3_spillover_total', metrics.get('q2_spillover_total', 0))
+    if q3_spill_total > 0:
+        st.markdown("---")
+        st.markdown("### Q3 2026 Spillover")
+        st.caption("Deals closing in Q2 that ship in Q3 due to lead times")
+        sc1, sc2 = st.columns(2)
+        with sc1:
+            st.metric("Expect/Commit Spillover", f"${metrics.get('q3_spillover_expect_commit', metrics.get('q2_spillover_expect_commit', 0)):,.0f}")
+        with sc2:
+            st.metric("Best Case/Opp Spillover", f"${metrics.get('q3_spillover_best_opp', metrics.get('q2_spillover_best_opp', 0)):,.0f}")
 
 # ============================================================================
 # CRO WEEKLY SCORECARD - Replicates Google Apps Script Email Report
