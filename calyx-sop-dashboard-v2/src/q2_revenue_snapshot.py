@@ -690,12 +690,33 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # Google Sheets Configuration
-# Reads from st.secrets["SPREADSHEET_ID"] if available, otherwise uses default
 DEFAULT_SPREADSHEET_ID = "15JhBZ_7aHHZA1W1qsoC2163borL6RYjk0xTDWPmWPfA"
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
+# =============================================================================
+# QUARTER CONFIGURATION
+# Change these values each quarter — everything else adapts automatically.
+# =============================================================================
+QUARTER_LABEL = "Q2 2026"
+QUARTER_START = "2026-04-01"
+QUARTER_END = "2026-06-30"
+
+# Deals tab: raw HubSpot data. The code filters by date range + excluded stages.
+DEALS_SHEET_NAME = "Deals"
+DEALS_RANGE = "A:X"  # Columns A through X in the raw Deals tab
+
+# Deal stages to EXCLUDE (same logic as the old array formula)
+EXCLUDED_STAGES = [
+    "cancelled",
+    "checkout abandoned",
+    "closed lost",
+    "closed won",
+    "sales order created in ns",
+    "ncr",
+    "shipped",
+]
+
 # Cache version for manual refresh control
-# No TTL - data only refreshes when user clicks refresh button
 CACHE_VERSION = "v66_company_name_columns"
 
 @st.cache_data  # Removed TTL - cache persists until manually cleared
@@ -907,25 +928,86 @@ def apply_q2_fulfillment_logic(deals_df):
 
 def load_all_data():
     """Load all necessary data from Google Sheets"""
-    
-    #st.sidebar.info("🔄 Loading data from Google Sheets...")
-    
-    # Load deals data - extend range to include all columns through Company Name (Column X)
-    # Columns: A-Record ID, B-Deal Name, C-Deal Stage, D-Close Date, E-Deal Owner First Name, F-Deal Owner Last Name,
-    #          G-Amount, H-Close Status, I-Pipeline, J-Create Date, K-Deal Type, L-Netsuite SO#, M-Netsuite SO Link,
-    #          N-New Design SKU, O-SKU, P-Netsuite Sales Order Number, Q-Primary Associated Company, R-Average Leadtime,
-    #          S-Pending Approval Date, T-Quarter, U-Deal Stage & Close Status, V-Probability, W-Probability Rev, X-Company Name
-    deals_df = load_google_sheets_data("All Reps All Pipelines", "A:X", version=CACHE_VERSION)
-    
-    # DEBUG: Show what we got from HubSpot
-    if not deals_df.empty:
-        pass  # Debug info removed
-        #st.sidebar.success(f"📊 HubSpot raw data: {len(deals_df)} rows, {len(deals_df.columns)} columns")
-        pass  # Debug info removed
+
+    # --- Load raw Deals tab and apply filtering in Python ---
+    # This replaces the old "All Reps All Pipelines" array formula approach.
+    # The filtering logic mirrors what the formula did:
+    #   - Close Date within quarter range
+    #   - Exclude cancelled/closed/shipped stages
+    #   - Record ID not blank, Deal Stage not blank
+    raw_deals_df = load_google_sheets_data(DEALS_SHEET_NAME, DEALS_RANGE, version=CACHE_VERSION)
+
+    if not raw_deals_df.empty and len(raw_deals_df.columns) >= 6:
+        # The Deals tab has raw columns: A=Record ID, B=Deal Name, C=Deal Stage,
+        # D=Close Date, E=Deal Owner First Name, F=Deal Owner Last Name, G=Amount,
+        # H=Close Status, I=Pipeline, J=Create Date, K=Deal Type, ...
+        # Combine Deal Owner First + Last (cols E+F) into one column
+        col_names = raw_deals_df.columns.tolist()
+
+        # Combine first/last name if separate columns exist
+        if len(col_names) >= 6:
+            fname_col = col_names[4]  # E
+            lname_col = col_names[5]  # F
+            raw_deals_df['_Deal Owner Combined'] = (
+                raw_deals_df[fname_col].fillna('').astype(str).str.strip() + ' ' +
+                raw_deals_df[lname_col].fillna('').astype(str).str.strip()
+            ).str.strip()
+
+        # Apply filters
+        # 1. Record ID not blank
+        record_id_col = col_names[0]
+        raw_deals_df = raw_deals_df[raw_deals_df[record_id_col].astype(str).str.strip() != '']
+
+        # 2. Deal Stage not blank and not in excluded stages
+        stage_col = col_names[2]
+        raw_deals_df = raw_deals_df[raw_deals_df[stage_col].astype(str).str.strip() != '']
+        raw_deals_df = raw_deals_df[~raw_deals_df[stage_col].astype(str).str.strip().str.lower().isin(EXCLUDED_STAGES)]
+
+        # 3. Close Date within quarter range
+        close_date_col = col_names[3]
+        raw_deals_df['_close_dt'] = pd.to_datetime(raw_deals_df[close_date_col], errors='coerce')
+        q_start = pd.Timestamp(QUARTER_START)
+        q_end = pd.Timestamp(QUARTER_END)
+        raw_deals_df = raw_deals_df[
+            (raw_deals_df['_close_dt'] >= q_start) &
+            (raw_deals_df['_close_dt'] <= q_end)
+        ]
+        raw_deals_df = raw_deals_df.drop(columns=['_close_dt'])
+
+        # Now rebuild the DataFrame to match the old "All Reps All Pipelines" format
+        # that the rest of the code expects (23 columns with combined Deal Owner)
+        if '_Deal Owner Combined' in raw_deals_df.columns:
+            # Build the expected column structure:
+            # Record ID, Deal Name, Deal Stage, Close Date, Deal Owner (combined),
+            # Amount, Close Status, Pipeline, Create Date, Deal Type, ...
+            new_cols = []
+            new_cols.append(col_names[0])  # A: Record ID
+            new_cols.append(col_names[1])  # B: Deal Name
+            new_cols.append(col_names[2])  # C: Deal Stage
+            new_cols.append(col_names[3])  # D: Close Date
+            new_cols.append('_Deal Owner Combined')  # E+F combined
+            # G onwards (index 6+)
+            for i in range(6, len(col_names)):
+                new_cols.append(col_names[i])
+            new_cols = [c for c in new_cols if c in raw_deals_df.columns]
+            raw_deals_df = raw_deals_df[new_cols].copy()
+
+            # Rename to match expected header format
+            expected_headers = [
+                'Record ID', 'Deal Name', 'Deal Stage', 'Close Date',
+                'Deal Owner First Name Deal Owner Last Name',
+                'Amount', 'Close Status', 'Pipeline', 'Create Date', 'Deal Type',
+                'Netsuite SO#', 'Netsuite SO Link', 'New Design SKU', 'SKU',
+                'Netsuite Sales Order Number', 'Primary Associated Company',
+                'Average Leadtime', 'Pending Approval Date', 'Quarter',
+                'Deal Stage & Close Status', 'Probability', 'Probability Rev', 'Company Name'
+            ]
+            if len(raw_deals_df.columns) <= len(expected_headers):
+                raw_deals_df.columns = expected_headers[:len(raw_deals_df.columns)]
+
+        deals_df = raw_deals_df
     else:
-        pass  # Debug info removed
-        #st.sidebar.error("❌ No HubSpot data loaded!")
-        pass
+        deals_df = raw_deals_df if not raw_deals_df.empty else pd.DataFrame()
     
     # Load dashboard info (rep quotas)
     dashboard_df = load_google_sheets_data("Dashboard Info", "A:B", version=CACHE_VERSION)
@@ -6231,10 +6313,88 @@ def main():
                     st.error("Error reading credentials")
             else:
                 st.error("❌ GCP credentials missing")
-    
+
+        # --- QUOTA SETTINGS ---
+        st.markdown("---")
+        with st.expander(f"⚙️ {QUARTER_LABEL} Quota Settings", expanded=False):
+            st.caption("Set per-rep quotas for the current quarter. Click Apply when done.")
+
+            # Initialize quota state from session state
+            quota_state_key = f"q2_rep_quotas"
+            if quota_state_key not in st.session_state:
+                # Default reps — will be populated from data on first load
+                st.session_state[quota_state_key] = {}
+
+            saved_quotas = st.session_state[quota_state_key]
+
+            # Allow adding a new rep
+            with st.form(key="quota_settings_form"):
+                st.markdown("**Rep Quotas:**")
+
+                # Show existing reps with editable quotas
+                updated_quotas = {}
+                for rep_name_q, current_quota in sorted(saved_quotas.items()):
+                    updated_quotas[rep_name_q] = st.number_input(
+                        rep_name_q,
+                        value=int(current_quota),
+                        min_value=0,
+                        step=10000,
+                        format="%d",
+                        key=f"quota_input_{rep_name_q}",
+                    )
+
+                st.markdown("---")
+                st.markdown("**Add New Rep:**")
+                new_rep_col1, new_rep_col2 = st.columns([2, 1])
+                with new_rep_col1:
+                    new_rep_name = st.text_input("Rep Name", key="new_rep_name_input", placeholder="e.g. John Smith")
+                with new_rep_col2:
+                    new_rep_quota = st.number_input("Quota", value=0, min_value=0, step=10000, format="%d", key="new_rep_quota_input")
+
+                quota_submitted = st.form_submit_button("✅ Apply Quotas", use_container_width=True, type="primary")
+
+                if quota_submitted:
+                    # Save updated quotas
+                    final_quotas = dict(updated_quotas)
+                    if new_rep_name and new_rep_name.strip():
+                        final_quotas[new_rep_name.strip()] = new_rep_quota
+                    st.session_state[quota_state_key] = final_quotas
+                    st.success(f"✅ Quotas saved for {len(final_quotas)} reps")
+                    st.rerun()
+
     # Load data
     with st.spinner("Loading data from Google Sheets..."):
         deals_df, dashboard_df, invoices_df, sales_orders_df, q4_push_df, production_schedule_df, amie_update_df = load_all_data()
+
+    # --- BUILD DASHBOARD_DF FROM QUOTA SETTINGS ---
+    # If user has configured quotas, use those instead of the sheet
+    quota_state_key = f"q2_rep_quotas"
+    saved_quotas = st.session_state.get(quota_state_key, {})
+
+    # Auto-populate rep list from deals data if quotas haven't been set yet
+    if not saved_quotas and not deals_df.empty and 'Deal Owner' in deals_df.columns:
+        unique_reps = deals_df['Deal Owner'].dropna().unique().tolist()
+        for rep in unique_reps:
+            rep = str(rep).strip()
+            if rep and rep.lower() not in ('nan', ''):
+                saved_quotas[rep] = 0
+        st.session_state[quota_state_key] = saved_quotas
+
+    # Also add reps from invoices if present
+    if not saved_quotas and not invoices_df.empty and 'Sales Rep' in invoices_df.columns:
+        unique_reps = invoices_df['Sales Rep'].dropna().unique().tolist()
+        for rep in unique_reps:
+            rep = str(rep).strip()
+            if rep and rep.lower() not in ('nan', '', 'house'):
+                if rep not in saved_quotas:
+                    saved_quotas[rep] = 0
+        st.session_state[quota_state_key] = saved_quotas
+
+    # Build dashboard_df from quota settings (overrides sheet data)
+    if saved_quotas:
+        quota_rows = [{'Rep Name': rep, 'Quota': quota} for rep, quota in saved_quotas.items()]
+        dashboard_df = pd.DataFrame(quota_rows)
+        dashboard_df['NetSuite Orders'] = 0
     
     # DEBUG: Show shipping toggle column detection (for Xander)
     with st.sidebar.expander("🔧 Shipping Toggle Debug", expanded=False):
