@@ -408,18 +408,16 @@ def render_sidebar():
             }.get(x, x)
         )
 
-        # Q2 sub-navigation (only shown when Q2 Forecast is selected)
+        # Q2 sub-navigation — nested directly under Q2, no separate label
         if section == "Q2 2026 Forecast":
             st.markdown("""
-            <p style="
-                color: #7b85a0;
-                font-size: 0.55rem;
-                font-weight: 600;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-                margin: 12px 0 4px 28px;
-                padding: 0;
-            ">View</p>
+            <style>
+            /* Tighten and indent the Q2 sub-nav */
+            [data-testid="stSidebar"] div[data-testid="stRadio"]:has(> div > label > div > p:first-child) + div[data-testid="stRadio"] {
+                margin-top: -8px;
+            }
+            </style>
+            <div style="margin-left: 20px; border-left: 2px solid rgba(129,140,248,0.2); padding-left: 0; margin-top: -4px; margin-bottom: 4px;">
             """, unsafe_allow_html=True)
             q2_view = st.radio(
                 "Q2 View",
@@ -427,11 +425,12 @@ def render_sidebar():
                 label_visibility="collapsed",
                 key="q2_app_view_selector",
                 format_func=lambda x: {
-                    "Team Overview": "   👥  Team Overview",
-                    "Individual Rep": "   👤  Individual Rep",
-                    "CRO Scorecard": "   📊  CRO Scorecard",
+                    "Team Overview": "👥 Team Overview",
+                    "Individual Rep": "👤 Individual Rep",
+                    "CRO Scorecard": "📊 CRO Scorecard",
                 }.get(x, x)
             )
+            st.markdown("</div>", unsafe_allow_html=True)
 
         # Planning section
         st.markdown("""
