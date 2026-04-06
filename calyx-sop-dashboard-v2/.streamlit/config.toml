@@ -1,9 +1,9 @@
 [theme]
-# Calyx Containers Brand Colors
-primaryColor = "#0033A1"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F1F2F2"
-textColor = "#1A1A1A"
+# Calyx Containers — Neutral Warm Gray
+primaryColor = "#4f46e5"
+backgroundColor = "#f8f9fb"
+secondaryBackgroundColor = "#eef0f4"
+textColor = "#1e293b"
 font = "sans serif"
 
 [server]
@@ -17,4 +17,3 @@ gatherUsageStats = false
 
 [runner]
 fastReruns = true
-

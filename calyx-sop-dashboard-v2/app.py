@@ -128,8 +128,8 @@ def inject_custom_css():
 
     /* === SIDEBAR === */
     [data-testid="stSidebar"] {
-        background: #f8fafc !important;
-        border-right: 1px solid #e2e8f0 !important;
+        background: #f0f2f6 !important;
+        border-right: 1px solid #dde1e8 !important;
     }
     [data-testid="stSidebar"] > div:first-child {
         background: transparent !important;
@@ -149,11 +149,11 @@ def inject_custom_css():
         transition: all 0.15s ease !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label:hover {
-        background: #f1f5f9 !important;
+        background: #e8ebf0 !important;
         border-left-color: #c7d2fe !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] {
-        background: #eef2ff !important;
+        background: #e8ecf7 !important;
         border-left-color: #4f46e5 !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] p {
@@ -170,10 +170,10 @@ def inject_custom_css():
     /* === METRIC CARDS === */
     [data-testid="stMetric"] {
         background: #ffffff !important;
-        border: 1px solid #e2e8f0 !important;
+        border: 1px solid #e0e4ea !important;
         border-radius: 12px !important;
         padding: 1.25rem !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.03) !important;
     }
     [data-testid="stMetric"]:hover {
         border-color: #c7d2fe !important;
@@ -267,7 +267,7 @@ def inject_custom_css():
 
     /* === EXPANDER === */
     .streamlit-expanderHeader {
-        background: #f8fafc !important;
+        background: #f0f2f6 !important;
         border-radius: 8px !important;
         border: 1px solid #e2e8f0 !important;
         font-weight: 500 !important;
