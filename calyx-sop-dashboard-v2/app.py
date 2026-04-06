@@ -247,11 +247,36 @@ def inject_custom_css():
         background: transparent !important;
     }
 
-    /* === DATA TABLES — readable with bright headers === */
+    /* === DATA TABLES — polished dark glass === */
     .stDataFrame {
         border-radius: 10px !important;
         border: 1px solid rgba(129, 140, 248, 0.12) !important;
         overflow: hidden !important;
+    }
+    /* Table header */
+    .stDataFrame [data-testid="stDataFrameResizable"] th,
+    .stDataFrame thead th {
+        background: rgba(17, 25, 50, 0.9) !important;
+        color: #c7d2fe !important;
+        font-weight: 600 !important;
+        font-size: 0.72rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.5px !important;
+        padding: 10px 12px !important;
+        border-bottom: 2px solid rgba(129, 140, 248, 0.2) !important;
+    }
+    /* Table cells */
+    .stDataFrame td {
+        padding: 8px 12px !important;
+        font-size: 0.82rem !important;
+        border-bottom: 1px solid rgba(129, 140, 248, 0.06) !important;
+    }
+    /* Alternating row tint */
+    .stDataFrame tbody tr:nth-child(even) td {
+        background: rgba(129, 140, 248, 0.03) !important;
+    }
+    .stDataFrame tbody tr:hover td {
+        background: rgba(129, 140, 248, 0.08) !important;
     }
 
     /* === CHECKBOXES — ensure bright labels === */

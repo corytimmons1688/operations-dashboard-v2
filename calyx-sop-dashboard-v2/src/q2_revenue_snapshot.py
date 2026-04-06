@@ -3361,9 +3361,9 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
             
             # Format Amount columns in Data DF
             if 'Amount' in data_df.columns:
-                data_df['Amount'] = data_df['Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "$0.00")
+                data_df['Amount'] = data_df['Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
             if 'Prob_Amount' in data_df.columns:
-                data_df['Prob_Amount'] = data_df['Prob_Amount'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "$0.00")
+                data_df['Prob_Amount'] = data_df['Prob_Amount'].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
             
             final_csv = summary_df.to_csv(index=False) + "\n" + data_df.to_csv(index=False)
             
@@ -3431,7 +3431,7 @@ def display_hubspot_deals_audit(deals_df, rep_name=None):
                         display_data.append({
                             'Link': deal_link,
                             'Deal Name': row.get('Deal Name', ''),
-                            'Amount': '$0.00',
+                            'Amount': '$0',
                             'Status': row.get('Status', ''),
                             'Pipeline': row.get('Pipeline', ''),
                             'Close Date': row.get('Close Date', ''),
@@ -4481,7 +4481,7 @@ def display_drill_down_section(title, amount, details_df, key_suffix):
     """Display a collapsible section with order details - WITH PROPER SO# AND LINKS"""
     
     item_count = len(details_df)
-    with st.expander(f"{title}: ${amount:,.2f} (👀 Click to see {item_count} {'item' if item_count == 1 else 'items'})"):
+    with st.expander(f"{title}: ${amount:,.0f} (👀 Click to see {item_count} {'item' if item_count == 1 else 'items'})"):
         if not details_df.empty:
             # DEBUG: Check for duplicate columns
             if details_df.columns.duplicated().any():
@@ -4513,7 +4513,7 @@ def display_drill_down_section(title, amount, details_df, key_suffix):
                     if 'Deal Name' in details_df.columns:
                         display_df['Deal Name'] = details_df['Deal Name']
                     if 'Amount' in details_df.columns:
-                        display_df['Amount'] = details_df['Amount'].apply(lambda x: f"${x:,.2f}")
+                        display_df['Amount'] = details_df['Amount'].apply(lambda x: f"${x:,.0f}")
                     if 'Status' in details_df.columns:
                         display_df['Status'] = details_df['Status']
                     if 'Pipeline' in details_df.columns:
@@ -4548,7 +4548,7 @@ def display_drill_down_section(title, amount, details_df, key_suffix):
                     if 'Customer' in details_df.columns:
                         display_df['Customer'] = details_df['Customer']
                     if 'Amount' in details_df.columns:
-                        display_df['Amount'] = details_df['Amount'].apply(lambda x: f"${x:,.2f}")
+                        display_df['Amount'] = details_df['Amount'].apply(lambda x: f"${x:,.0f}")
                     if 'Status' in details_df.columns:
                         display_df['Status'] = details_df['Status']
                     if 'Order Start Date' in details_df.columns:
@@ -4582,7 +4582,7 @@ def display_drill_down_section(title, amount, details_df, key_suffix):
                     )
                     
                     # Summary statistics
-                    st.caption(f"Total: ${details_df['Amount'].sum():,.2f} | Count: {len(details_df)} items")
+                    st.caption(f"Total: ${details_df['Amount'].sum():,.0f} | Count: {len(details_df)} items")
                 else:
                     # Fallback - show available columns for debugging
                     st.warning(f"Could not format data. Available columns: {details_df.columns.tolist()}")
@@ -5254,7 +5254,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         if not sales_orders_df.empty and 'Sales Rep' in sales_orders_df.columns:
             rep_so = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name]
             if 'Updated_Status_Clean' in rep_so.columns:
-                amt_col = 'Amount' if include_shipping or 'Net_Amount' not in rep_so.columns else 'Net_Amount'
+                amt_col = 'Amount' if (include_shipping or 'Net_Amount' not in rep_so.columns) else 'Net_Amount'
                 def so_sum(status_val):
                     matched = rep_so[rep_so['Updated_Status_Clean'] == status_val]
                     return pd.to_numeric(matched[amt_col], errors='coerce').fillna(0).sum() if not matched.empty else 0
