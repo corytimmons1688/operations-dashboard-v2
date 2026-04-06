@@ -110,42 +110,33 @@ def get_mst_time():
 # CUSTOM CSS - DRAMATIC DARK MODE UI (Matching Q1 Revenue Snapshot)
 # =============================================================================
 def inject_custom_css():
-    """Inject custom CSS — bright futuristic theme with high contrast."""
+    """Inject custom CSS — clean light theme matching Streamlit config."""
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 
-    /* === BASE — bright dark with blue-black tones === */
+    /* === BASE === */
     .stApp {
-        background: #0f1729 !important;
-        color: #e8edf5 !important;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
     }
 
-    /* === TYPOGRAPHY — bright and readable === */
-    h1 {
-        font-size: 1.75rem !important;
-        font-weight: 800 !important;
-        color: #ffffff !important;
-        -webkit-text-fill-color: #ffffff !important;
-        letter-spacing: -0.5px !important;
-    }
-    h2 { font-size: 1.35rem !important; font-weight: 700 !important; color: #f0f4ff !important; }
-    h3 { font-size: 1.1rem !important; font-weight: 600 !important; color: #e0e7ff !important; }
-    h4 { font-size: 0.95rem !important; font-weight: 600 !important; color: #c7d2fe !important; }
-    p, span, label, div { color: #c9d1e0 !important; }
+    /* === TYPOGRAPHY === */
+    h1 { font-size: 1.75rem !important; font-weight: 800 !important; color: #0f172a !important; letter-spacing: -0.5px !important; }
+    h2 { font-size: 1.35rem !important; font-weight: 700 !important; color: #1e293b !important; }
+    h3 { font-size: 1.1rem !important; font-weight: 600 !important; color: #1e293b !important; }
+    h4 { font-size: 0.95rem !important; font-weight: 600 !important; color: #334155 !important; }
 
-    /* === SIDEBAR — slightly lighter panel === */
+    /* === SIDEBAR === */
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0c1221 0%, #111a2e 100%) !important;
-        border-right: 1px solid rgba(129, 140, 248, 0.15) !important;
+        background: #f8fafc !important;
+        border-right: 1px solid #e2e8f0 !important;
     }
     [data-testid="stSidebar"] > div:first-child {
         background: transparent !important;
         padding-top: 0 !important;
     }
 
-    /* Sidebar radio — bright accent on active */
+    /* Sidebar radio items */
     [data-testid="stSidebar"] .stRadio > div { gap: 2px !important; }
     [data-testid="stSidebar"] .stRadio > div > label {
         background: transparent !important;
@@ -158,74 +149,70 @@ def inject_custom_css():
         transition: all 0.15s ease !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label:hover {
-        background: rgba(129, 140, 248, 0.08) !important;
-        border-left-color: rgba(129, 140, 248, 0.4) !important;
+        background: #f1f5f9 !important;
+        border-left-color: #c7d2fe !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] {
-        background: rgba(129, 140, 248, 0.15) !important;
-        border-left-color: #a5b4fc !important;
+        background: #eef2ff !important;
+        border-left-color: #4f46e5 !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] p {
-        color: #e0e7ff !important;
+        color: #312e81 !important;
         font-weight: 600 !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label p {
         font-size: 0.82rem !important;
         font-weight: 500 !important;
-        color: #8b95b0 !important;
+        color: #64748b !important;
         margin: 0 !important;
     }
 
-    /* === METRIC CARDS — glass with bright values === */
+    /* === METRIC CARDS === */
     [data-testid="stMetric"] {
-        background: rgba(17, 25, 50, 0.7) !important;
-        border: 1px solid rgba(129, 140, 248, 0.15) !important;
+        background: #ffffff !important;
+        border: 1px solid #e2e8f0 !important;
         border-radius: 12px !important;
         padding: 1.25rem !important;
-        backdrop-filter: blur(10px) !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
     }
     [data-testid="stMetric"]:hover {
-        border-color: rgba(129, 140, 248, 0.3) !important;
+        border-color: #c7d2fe !important;
+        box-shadow: 0 2px 8px rgba(79,70,229,0.08) !important;
     }
     [data-testid="stMetricLabel"] {
         font-size: 0.7rem !important;
         font-weight: 600 !important;
         text-transform: uppercase !important;
         letter-spacing: 1px !important;
-        color: #8b95b0 !important;
+        color: #64748b !important;
     }
     [data-testid="stMetricValue"] {
         font-size: 1.6rem !important;
         font-weight: 700 !important;
-        color: #ffffff !important;
-        -webkit-text-fill-color: #ffffff !important;
-        background: none !important;
-    }
-    [data-testid="stMetricDelta"] {
-        color: #a5b4fc !important;
+        color: #0f172a !important;
     }
 
-    /* === BUTTONS — vivid indigo === */
+    /* === BUTTONS === */
     .stButton > button {
-        background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%) !important;
+        background: #4f46e5 !important;
         color: #ffffff !important;
         border: none !important;
         border-radius: 8px !important;
         padding: 0.5rem 1rem !important;
         font-weight: 600 !important;
         font-size: 0.82rem !important;
-        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.25) !important;
+        box-shadow: 0 1px 3px rgba(79,70,229,0.2) !important;
         transition: all 0.15s ease !important;
     }
     .stButton > button:hover {
-        box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4) !important;
-        filter: brightness(1.1) !important;
+        background: #4338ca !important;
+        box-shadow: 0 2px 8px rgba(79,70,229,0.3) !important;
     }
 
-    /* === TABS — bright underline === */
+    /* === TABS === */
     .stTabs [data-baseweb="tab-list"] {
         background: transparent !important;
-        border-bottom: 1px solid rgba(129, 140, 248, 0.12) !important;
+        border-bottom: 1px solid #e2e8f0 !important;
         border-radius: 0 !important;
         padding: 0 !important;
         gap: 0 !important;
@@ -235,140 +222,68 @@ def inject_custom_css():
         padding: 10px 20px !important;
         font-weight: 500 !important;
         font-size: 0.85rem !important;
-        color: #7b85a0 !important;
+        color: #94a3b8 !important;
         border-bottom: 2px solid transparent !important;
         background: transparent !important;
     }
-    .stTabs [data-baseweb="tab"]:hover { color: #c7d2fe !important; }
+    .stTabs [data-baseweb="tab"]:hover { color: #475569 !important; }
     .stTabs [aria-selected="true"] {
-        color: #e0e7ff !important;
+        color: #4f46e5 !important;
         font-weight: 600 !important;
-        border-bottom-color: #818cf8 !important;
+        border-bottom-color: #4f46e5 !important;
         background: transparent !important;
     }
 
-    /* === DATA TABLES — polished dark glass === */
+    /* === DATA TABLES === */
     .stDataFrame {
         border-radius: 10px !important;
-        border: 1px solid rgba(129, 140, 248, 0.12) !important;
+        border: 1px solid #e2e8f0 !important;
         overflow: hidden !important;
     }
-    /* Table header */
-    .stDataFrame [data-testid="stDataFrameResizable"] th,
-    .stDataFrame thead th {
-        background: rgba(17, 25, 50, 0.9) !important;
-        color: #c7d2fe !important;
+
+    /* === FORM SUBMIT === */
+    .stFormSubmitButton > button {
+        background: #4f46e5 !important;
+        color: #ffffff !important;
+        border: none !important;
         font-weight: 600 !important;
-        font-size: 0.72rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.5px !important;
-        padding: 10px 12px !important;
-        border-bottom: 2px solid rgba(129, 140, 248, 0.2) !important;
-    }
-    /* Table cells */
-    .stDataFrame td {
-        padding: 8px 12px !important;
-        font-size: 0.82rem !important;
-        border-bottom: 1px solid rgba(129, 140, 248, 0.06) !important;
-    }
-    /* Alternating row tint */
-    .stDataFrame tbody tr:nth-child(even) td {
-        background: rgba(129, 140, 248, 0.03) !important;
-    }
-    .stDataFrame tbody tr:hover td {
-        background: rgba(129, 140, 248, 0.08) !important;
     }
 
-    /* === CHECKBOXES — ensure bright labels === */
-    .stCheckbox label span { color: #d0d7e5 !important; }
-    .stCheckbox label p { color: #d0d7e5 !important; }
-
-    /* === TOGGLE === */
-    .stToggle label span { color: #c9d1e0 !important; }
-
-    /* === SELECT / INPUT — readable inputs === */
+    /* === SELECT / INPUT === */
     .stSelectbox > div > div,
     .stMultiSelect > div > div,
     .stTextInput > div > div {
-        background: rgba(17, 25, 50, 0.6) !important;
-        border: 1px solid rgba(129, 140, 248, 0.15) !important;
+        border: 1px solid #e2e8f0 !important;
         border-radius: 8px !important;
-        color: #e0e7ff !important;
-    }
-
-    /* === DROPDOWN MENU — dark background with readable text === */
-    [data-baseweb="popover"],
-    [data-baseweb="menu"],
-    [data-baseweb="select"] ul,
-    [role="listbox"] {
-        background: #1a2240 !important;
-        border: 1px solid rgba(129, 140, 248, 0.2) !important;
-    }
-    [data-baseweb="menu"] li,
-    [role="option"],
-    [data-baseweb="select"] ul li {
-        background: #1a2240 !important;
-        color: #e0e7ff !important;
-    }
-    [data-baseweb="menu"] li:hover,
-    [role="option"]:hover {
-        background: rgba(129, 140, 248, 0.15) !important;
-        color: #ffffff !important;
-    }
-    [aria-selected="true"][role="option"] {
-        background: rgba(129, 140, 248, 0.25) !important;
-        color: #ffffff !important;
     }
 
     /* === DIVIDER === */
     hr {
         border: none !important;
         height: 1px !important;
-        background: rgba(129, 140, 248, 0.1) !important;
+        background: #e2e8f0 !important;
         margin: 1.5rem 0 !important;
     }
 
-    /* === EXPANDER — visible text === */
+    /* === EXPANDER === */
     .streamlit-expanderHeader {
-        background: rgba(17, 25, 50, 0.5) !important;
+        background: #f8fafc !important;
         border-radius: 8px !important;
-        border: 1px solid rgba(129, 140, 248, 0.12) !important;
+        border: 1px solid #e2e8f0 !important;
         font-weight: 500 !important;
         font-size: 0.85rem !important;
-        color: #c7d2fe !important;
-    }
-    .streamlit-expanderContent {
-        border: 1px solid rgba(129, 140, 248, 0.08) !important;
-        border-top: none !important;
     }
 
     /* === ALERTS === */
     .stAlert {
-        background: rgba(17, 25, 50, 0.6) !important;
         border-radius: 8px !important;
-        border-left: 3px solid #818cf8 !important;
-    }
-
-    /* === FORM SUBMIT BUTTON — bright and clear === */
-    .stFormSubmitButton > button {
-        background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%) !important;
-        color: #ffffff !important;
-        border: none !important;
-        font-weight: 600 !important;
-        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.3) !important;
     }
 
     /* === SCROLLBAR === */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: rgba(129, 140, 248, 0.2); border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: rgba(129, 140, 248, 0.4); }
-
-    /* === PLOTLY === */
-    .js-plotly-plot .plotly .bg { fill: transparent !important; }
-
-    /* === CAPTIONS — visible === */
-    .stCaption, [data-testid="stCaptionContainer"] { color: #8b95b0 !important; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
     </style>
     """, unsafe_allow_html=True)
@@ -389,15 +304,15 @@ def render_sidebar():
             <div style="display: flex; align-items: center; gap: 12px;">
                 <div style="
                     width: 38px; height: 38px;
-                    background: linear-gradient(135deg, #818cf8, #a78bfa);
+                    background: linear-gradient(135deg, #4f46e5, #6366f1);
                     border-radius: 10px;
                     display: flex; align-items: center; justify-content: center;
                     font-size: 18px;
-                    box-shadow: 0 4px 16px rgba(129, 140, 248, 0.35);
+                    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.2);
                 ">🚀</div>
                 <div>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; line-height: 1.2;">Calyx</div>
-                    <div style="font-size: 0.65rem; font-weight: 500; color: #8b95b0; letter-spacing: 0.5px;">Command Center</div>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #0f172a; letter-spacing: -0.3px; line-height: 1.2;">Calyx</div>
+                    <div style="font-size: 0.65rem; font-weight: 500; color: #94a3b8; letter-spacing: 0.5px;">Command Center</div>
                 </div>
             </div>
         </div>
@@ -406,7 +321,7 @@ def render_sidebar():
         # Nav section label
         st.markdown("""
         <p style="
-            color: #7b85a0;
+            color: #94a3b8;
             font-size: 0.6rem;
             font-weight: 600;
             letter-spacing: 1.5px;
@@ -455,7 +370,7 @@ def render_sidebar():
         # Past quarters section
         st.markdown("""
         <p style="
-            color: #7b85a0;
+            color: #94a3b8;
             font-size: 0.6rem;
             font-weight: 600;
             letter-spacing: 1.5px;
@@ -479,7 +394,7 @@ def render_sidebar():
         # Planning section
         st.markdown("""
         <p style="
-            color: #7b85a0;
+            color: #94a3b8;
             font-size: 0.6rem;
             font-weight: 600;
             letter-spacing: 1.5px;
@@ -506,7 +421,7 @@ def render_sidebar():
         # Operations section
         st.markdown("""
         <p style="
-            color: #7b85a0;
+            color: #94a3b8;
             font-size: 0.6rem;
             font-weight: 600;
             letter-spacing: 1.5px;
@@ -538,13 +453,13 @@ def render_sidebar():
         <div style="
             padding: 12px 16px;
             margin: 0 8px;
-            background: rgba(129, 140, 248, 0.06);
+            background: #f8fafc;
             border-radius: 8px;
-            border: 1px solid rgba(129, 140, 248, 0.1);
+            border: 1px solid #e2e8f0;
         ">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.65rem; color: #8b95b0; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">MST</span>
-                <span style="font-size: 0.8rem; color: #c7d2fe; font-weight: 600;">{current_time.strftime('%I:%M %p')}</span>
+                <span style="font-size: 0.65rem; color: #94a3b8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">MST</span>
+                <span style="font-size: 0.8rem; color: #334155; font-weight: 600;">{current_time.strftime('%I:%M %p')}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -563,7 +478,7 @@ def render_sidebar():
             padding: 16px 0 8px 0;
             margin-top: 12px;
         ">
-            <p style="font-size: 0.6rem; color: #6b7394; margin: 0;">v4.2 · Built by Xander</p>
+            <p style="font-size: 0.6rem; color: #94a3b8; margin: 0;">v4.2 · Built by Xander</p>
         </div>
         """, unsafe_allow_html=True)
 
