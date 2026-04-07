@@ -4826,21 +4826,26 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         m = rep_metrics[rep]
         q = quotas.get(rep, 0)
         fv = m['face_value']
+        fp = m['full_pipeline']
+        pw = m['prob_weighted']
         pct = ((fv / q * 100) if q > 0 else 0)
         table_rows.append({
             'Rep': rep, 'Inv': m['invoiced'], 'PF': m['pf_date'], 'PA': m['pa_date'],
-            'E/C': m['hs_expect'], 'Core': m['total_core'], 'PF ND': m['pf_nodate'],
+            'E/C': m['hs_expect'], 'Total': m['total_core'], 'PF ND': m['pf_nodate'],
             'PA ND': m['pa_nodate'], 'PA Old': m['pa_old'], 'All Q': m['all_q'],
             'Best': m['hs_best'], 'Opp': m['hs_opp'], 'Face Value': fv,
-            'Quota': q, '%': pct,
+            'PF Spill': m['pf_spill'], 'PA Spill': m['pa_spill'], 'Q3 Spill': m['hs_spill'],
+            'Full Pipe': fp, 'Prob-Wtd': pw, 'Quota': q, '%': pct,
         })
 
     # Team total row
     table_rows.append({
         'Rep': 'TOTAL', 'Inv': team['invoiced'], 'PF': team['pf_date'], 'PA': team['pa_date'],
-        'E/C': team['hs_expect'], 'Core': team['total_core'], 'PF ND': team['pf_nodate'],
+        'E/C': team['hs_expect'], 'Total': team['total_core'], 'PF ND': team['pf_nodate'],
         'PA ND': team['pa_nodate'], 'PA Old': team['pa_old'], 'All Q': team['all_q'],
         'Best': team['hs_best'], 'Opp': team['hs_opp'], 'Face Value': team['face_value'],
+        'PF Spill': team['pf_spill'], 'PA Spill': team['pa_spill'], 'Q3 Spill': team['hs_spill'],
+        'Full Pipe': team['full_pipeline'], 'Prob-Wtd': team['prob_weighted'],
         'Quota': team_quota, '%': (team['face_value'] / team_quota * 100) if team_quota > 0 else 0,
     })
 
@@ -4894,6 +4899,40 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         prob_df,
         use_container_width=True, hide_index=True, height=35 * len(prob_df) + 38,
     )
+
+    st.markdown("---")
+
+    # --- PIPELINE BREAKDOWN TABLES ---
+    # Calculate metrics by pipeline
+    pipeline_names = ['Acquisition (New Customer)', 'Growth Pipeline (Upsell/Cross-sell)',
+                      'Retention (Existing Product)', 'Ecommerce Pipeline']
+    pipeline_short = {'Acquisition (New Customer)': 'Acquisition',
+                      'Growth Pipeline (Upsell/Cross-sell)': 'Growth',
+                      'Retention (Existing Product)': 'Retention',
+                      'Ecommerce Pipeline': 'Ecommerce'}
+
+    def normalize_pipeline(raw):
+        if not raw: return ''
+        p = str(raw).strip().lower()
+        if 'acquisition' in p: return 'Acquisition (New Customer)'
+        if 'growth' in p: return 'Growth Pipeline (Upsell/Cross-sell)'
+        if 'retention' in p or 'manually built' in p: return 'Retention (Existing Product)'
+        if 'ecommerce' in p or 'e-commerce' in p: return 'Ecommerce Pipeline'
+        return ''
+
+    def calc_pipeline(pipeline_name):
+        match = lambda df, col: df[df.get('_pipeline', pd.Series()) == pipeline_name] if '_pipeline' in df.columns else pd.DataFrame()
+        # For now, return zeros — pipeline data requires HubSpot Pipeline column mapping
+        return {k: 0 for k in ['invoiced', 'pf_date', 'pa_date', 'hs_expect', 'total_core',
+                                'pf_nodate', 'pa_nodate', 'pa_old', 'all_q', 'hs_best', 'hs_opp',
+                                'face_value', 'pf_spill', 'pa_spill', 'hs_spill', 'full_pipeline',
+                                'realistic', 'prob_weighted']}
+
+    # Only show pipeline tables if we have pipeline data in deals
+    has_pipeline = not deals_df.empty and 'Pipeline' in deals_df.columns
+    if has_pipeline:
+        st.markdown("### Face Value by Pipeline")
+        st.caption("Pipeline breakdown coming soon — requires pipeline column mapping in invoice and SO data")
 
     st.markdown("---")
 
