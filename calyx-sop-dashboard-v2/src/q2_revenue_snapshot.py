@@ -4663,7 +4663,10 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         # Sales Orders
         pf_date = pf_nodate = pa_date = pa_nodate = pa_old = pf_spill = pa_spill = 0
         if not sales_orders_df.empty and 'Sales Rep' in sales_orders_df.columns:
-            rep_so = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name]
+            rep_so = sales_orders_df[sales_orders_df['Sales Rep'] == rep_name].copy()
+            # Create Updated_Status_Clean if it doesn't exist yet
+            if 'Updated_Status_Clean' not in rep_so.columns and 'Updated Status' in rep_so.columns:
+                rep_so['Updated_Status_Clean'] = rep_so['Updated Status'].astype(str).str.strip()
             if 'Updated_Status_Clean' in rep_so.columns:
                 amt_col = 'Amount' if (include_shipping or 'Net_Amount' not in rep_so.columns) else 'Net_Amount'
                 def so_sum(status_val):
@@ -4952,29 +4955,20 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
         })
     rep_standings.sort(key=lambda x: x['pct'], reverse=True)
 
-    leading = [r for r in rep_standings if r['pct'] >= 90]
-    behind = [r for r in rep_standings if r['pct'] < 70]
-
-    if leading:
-        st.markdown("**Leading:**")
-        for r in leading:
-            parts = []
-            if r['inv'] > 0: parts.append(f"${r['inv']:,.0f} invoiced")
-            if r['pf'] > 0: parts.append(f"${r['pf']:,.0f} in fulfillment")
-            if r['pa'] > 0: parts.append(f"${r['pa']:,.0f} in PA")
-            if r['hs'] > 0: parts.append(f"${r['hs']:,.0f} in Expect")
-            detail = ': ' + ', '.join(parts) if parts else ''
-            st.markdown(f"- **{r['rep']}** — {r['pct']:.0f}% (${r['realistic']:,.0f} of ${r['quota']:,.0f}){detail}")
-
-    if behind:
-        st.markdown("**Behind Pace:**")
-        for r in behind:
-            parts = []
-            if r['inv'] > 0: parts.append(f"${r['inv']:,.0f} invoiced")
-            if r['pf'] > 0: parts.append(f"${r['pf']:,.0f} in fulfillment")
-            if r['upside'] > 0: parts.append(f"${r['upside']:,.0f} upside available")
-            detail = ': ' + ', '.join(parts) if parts else ''
-            st.markdown(f"- **{r['rep']}** — {r['pct']:.0f}% (${r['realistic']:,.0f} of ${r['quota']:,.0f}, **${r['gap']:,.0f} gap**){detail}")
+    # Build standings as a table to avoid LaTeX $ parsing issues
+    standings_rows = []
+    for r in rep_standings:
+        status = "Leading" if r['pct'] >= 90 else ("On Track" if r['pct'] >= 70 else "Behind")
+        standings_rows.append({
+            'Rep': r['rep'], 'Status': status, 'Attainment': f"{r['pct']:.0f}%",
+            'Realistic': f"${r['realistic']:,.0f}", 'Quota': f"${r['quota']:,.0f}",
+            'Gap': f"${r['gap']:,.0f}", 'Invoiced': f"${r['inv']:,.0f}",
+            'PF': f"${r['pf']:,.0f}", 'Upside': f"${r['upside']:,.0f}",
+        })
+    if standings_rows:
+        standings_df = pd.DataFrame(standings_rows)
+        st.dataframe(standings_df, use_container_width=True, hide_index=True,
+                     height=35 * len(standings_df) + 38)
 
     st.markdown("---")
 
