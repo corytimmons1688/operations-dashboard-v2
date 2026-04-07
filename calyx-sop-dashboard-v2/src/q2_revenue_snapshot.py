@@ -1358,11 +1358,7 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
                 
                 if not comparison_df.empty:
                     st.dataframe(
-                        comparison_df.style.format({
-                            'Current Actual': '${:,.0f}',
-                            'Previous Actual': '${:,.0f}',
-                            'Δ Actual': '${:,.0f}'
-                        }),
+                        (lambda df: df.assign(**{c: df[c].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "") for c in ['Current Actual', 'Previous Actual', 'Δ Actual'] if c in df.columns}))(comparison_df),
                         use_container_width=True
                     )
                 else:
@@ -2593,7 +2589,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         pivot_df = pivot_df.sort_values('Total', ascending=False)
         
         st.dataframe(
-            pivot_df.style.format('${:,.0f}'),
+            (lambda df: df.apply(lambda col: col.apply(lambda x: f'${x:,.0f}' if isinstance(x, (int, float)) and pd.notna(x) else x)))(pivot_df),
             use_container_width=True
         )
     else:
@@ -4517,7 +4513,7 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
             return f"color: {colors.get(val, '#94a3b8')}"
 
         st.dataframe(
-            breakdown_df.style.format({"Amount": "${:,.0f}"}).map(style_status, subset=["Status"]),
+            (lambda df: df.assign(Amount=df["Amount"].apply(lambda x: f"${x:,.0f}")))(breakdown_df),
             use_container_width=True,
             hide_index=True,
             height=35 * len(breakdown_df) + 38,
@@ -4797,7 +4793,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
 
     if not bd.empty:
         st.dataframe(
-            bd.style.format({"Amount": "${:,.0f}"}),
+            (lambda df: df.assign(Amount=df["Amount"].apply(lambda x: f"${x:,.0f}")))(bd),
             use_container_width=True, hide_index=True, height=35 * len(bd) + 38,
         )
 
@@ -4850,8 +4846,12 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
 
     fv_df = pd.DataFrame(table_rows)
     money_cols = [c for c in fv_df.columns if c not in ('Rep', '%')]
+    # Format numbers as strings so Streamlit displays them correctly
+    for c in money_cols:
+        fv_df[c] = fv_df[c].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
+    fv_df['%'] = fv_df['%'].apply(lambda x: f"{x:.0f}%")
     st.dataframe(
-        fv_df.style.format({c: '${:,.0f}' for c in money_cols}).format({'%': '{:.0f}%'}),
+        fv_df,
         use_container_width=True, hide_index=True, height=35 * len(fv_df) + 38,
     )
 
@@ -4887,8 +4887,11 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
 
     prob_df = pd.DataFrame(prob_rows)
     pmoney = [c for c in prob_df.columns if c not in ('Rep', '%')]
+    for c in pmoney:
+        prob_df[c] = prob_df[c].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "$0")
+    prob_df['%'] = prob_df['%'].apply(lambda x: f"{x:.0f}%")
     st.dataframe(
-        prob_df.style.format({c: '${:,.0f}' for c in pmoney}).format({'%': '{:.0f}%'}),
+        prob_df,
         use_container_width=True, hide_index=True, height=35 * len(prob_df) + 38,
     )
 
@@ -4953,7 +4956,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
                     show_cols.append('Amount_Num')
                     display = ddf[show_cols].rename(columns={'Amount_Num': 'Amount'})
                     st.dataframe(
-                        display.style.format({'Amount': '${:,.0f}'}),
+                        (lambda df: df.assign(Amount=df["Amount"].apply(lambda x: f"${x:,.0f}")))(display),
                         use_container_width=True, hide_index=True,
                     )
 
