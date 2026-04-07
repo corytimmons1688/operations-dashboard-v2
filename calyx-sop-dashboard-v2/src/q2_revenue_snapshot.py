@@ -1077,7 +1077,7 @@ def create_dod_audit_section(deals_df, dashboard_df, invoices_df, sales_orders_d
         st.markdown(f"""
         <div class='audit-section'>
             <p><strong>Previous Snapshot:</strong> {previous['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} 
-            ({hours_ago:.1f} hours ago)</p>
+            ({hours_ago:.0f} hours ago)</p>
         </div>
         """, unsafe_allow_html=True)
         
@@ -4043,11 +4043,11 @@ def display_progress_breakdown(metrics):
     # Add attainment info below
     col1, col2 = st.columns(2)
     with col1:
-        st.metric("Current Attainment", f"{metrics['attainment_pct']:.1f}%", 
+        st.metric("Current Attainment", f"{metrics['attainment_pct']:.0f}%", 
                  delta=f"${metrics['total_progress']:,.0f} of ${metrics['quota']:,.0f}",
                  help="This is real money! 💵")
     with col2:
-        st.metric("If Everything Goes Right", f"{metrics['potential_attainment']:.1f}%",
+        st.metric("If Everything Goes Right", f"{metrics['potential_attainment']:.0f}%",
                  delta=f"+${metrics['best_opp']:,.0f} Best Case/Opp",
                  help="The optimist's view (we believe! 🌟)")
 
@@ -4210,7 +4210,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     with col1:
         st.metric(
             label="🎯 Total Quota",
-            value=f"${team_quota/1000:.0f}K" if team_quota < 1000000 else f"${team_quota/1000000:.1f}M",
+            value=f"${team_quota:,.0f}",
             delta=None,
             help="Q2 2026 Sales Target"
         )
@@ -4218,23 +4218,23 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     with col2:
         st.metric(
             label="💪 High Confidence Forecast",
-            value=f"${base_forecast/1000:.0f}K" if base_forecast < 1000000 else f"${base_forecast/1000000:.1f}M",
-            delta=f"{base_attainment_pct:.1f}% of quota",
+            value=f"${base_forecast:,.0f}",
+            delta=f"{base_attainment_pct:.0f}% of quota",
             help="Invoiced + PF (with date) + PA (with date) + HS Expect/Commit"
         )
    
     with col3:
         st.metric(
             label="📊 Full Forecast (All Sources)",
-            value=f"${full_forecast/1000:.0f}K" if full_forecast < 1000000 else f"${full_forecast/1000000:.1f}M",
-            delta=f"{full_attainment_pct:.1f}% of quota",
+            value=f"${full_forecast:,.0f}",
+            delta=f"{full_attainment_pct:.0f}% of quota",
             help="Invoiced + PF (with date) + PA (with date) + HS Expect/Commit + PF (without date) + PA (without date) + PA (>2 weeks old)"
         )
     
     with col4:
         st.metric(
             label="📉 Gap to Quota",
-            value=f"${base_gap/1000:.0f}K" if abs(base_gap) < 1000000 else f"${base_gap/1000000:.1f}M",
+            value=f"${base_gap:,.0f}",
             delta=f"${-base_gap/1000:.0f}K" if base_gap < 0 else None,
             delta_color="inverse",
             help="Quota - (Invoiced + PF (with date) + PA (with date) + HS Expect/Commit)"
@@ -4243,7 +4243,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     with col5:
         st.metric(
             label="📈 Optimistic Gap",
-            value=f"${optimistic_gap/1000:.0f}K" if abs(optimistic_gap) < 1000000 else f"${optimistic_gap/1000000:.1f}M",
+            value=f"${optimistic_gap:,.0f}",
             delta=f"${-optimistic_gap/1000:.0f}K" if optimistic_gap < 0 else None,
             delta_color="inverse",
             help="Quota - (High Confidence + HS Best Case + PF (no date) + PA (no date) + PA >2 weeks)"
@@ -4252,8 +4252,8 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
     with col6:
         st.metric(
             label="🌟 Potential Attainment",
-            value=f"{potential_attainment:.1f}%",
-            delta=f"+{potential_attainment - base_attainment_pct:.1f}% upside",
+            value=f"{potential_attainment:.0f}%",
+            delta=f"+{potential_attainment - base_attainment_pct:.0f}% upside",
             help="(High Confidence + HS Best Case/Opp) ÷ Quota"
         )
     
@@ -4271,7 +4271,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
             - **Pending Approval (with date):** ${team_pa:,.0f}
             - **HubSpot Expect/Commit:** ${team_hs:,.0f}
             - **Total:** ${base_forecast:,.0f}
-            - **% of Quota:** {base_attainment_pct:.1f}%
+            - **% of Quota:** {base_attainment_pct:.0f}%
             """)
         
         with breakdown_col2:
@@ -4289,7 +4289,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
             - PA (>2 weeks): ${team_old_pa:,.0f}
             
             **Total:** ${full_forecast:,.0f}
-            - **% of Quota:** {full_attainment_pct:.1f}%
+            - **% of Quota:** {full_attainment_pct:.0f}%
             """)
         
         st.markdown("---")
@@ -4361,14 +4361,14 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
         st.caption("Confirmed orders and forecast with dates")
         base_progress = min(base_attainment_pct / 100, 1.0)
         st.progress(base_progress)
-        st.caption(f"Current: {base_attainment_pct:.1f}% | Potential: {potential_attainment:.1f}%")
+        st.caption(f"Current: {base_attainment_pct:.0f}% | Potential: {potential_attainment:.0f}%")
    
     with col2:
         st.markdown("**📊 Full Forecast Progress**")
         st.caption("All sources including orders without dates")
         full_progress = min(full_attainment_pct / 100, 1.0)
         st.progress(full_progress)
-        st.caption(f"Current: {full_attainment_pct:.1f}%")
+        st.caption(f"Current: {full_attainment_pct:.0f}%")
    
     # Base Forecast Chart with Enhanced Annotations
     st.markdown("### 💪 High Confidence Forecast Breakdown")
@@ -4811,7 +4811,7 @@ def display_cro_scorecard(deals_df, dashboard_df, invoices_df, sales_orders_df):
     if remaining_gap > 0 and upside > 0:
         coverage = upside / remaining_gap
         if coverage >= 1:
-            st.success(f"Upside pipeline (${upside:,.0f}) covers the gap {coverage:.1f}x over.")
+            st.success(f"Upside pipeline (${upside:,.0f}) covers the gap {coverage:.0f}x over.")
         else:
             shortfall = remaining_gap - upside
             st.error(f"Even if all upside converts, still ${shortfall:,.0f} short. New pipeline needed.")
