@@ -584,6 +584,10 @@ def load_all_data():
                 invoices_df.columns[10]: 'Amount',
                 invoices_df.columns[14]: 'Sales Rep'
             }
+
+            # Map Created From (Column E - index 4) for partial fulfillment lookup
+            if len(invoices_df.columns) > 4:
+                rename_dict[invoices_df.columns[4]] = 'Created From'
             
             # NEW: Map Corrected Customer Name (Column T - index 19) and Rep Master (Column U - index 20)
             if len(invoices_df.columns) > 19:
@@ -888,10 +892,13 @@ def load_all_data():
                     if mask.any():
                         sales_orders_df.loc[mask, col] = sales_orders_df.loc[mask, col] + pd.DateOffset(years=100)
         
-        # Filter to include Pending Approval, Pending Fulfillment, AND Pending Billing/Partially Fulfilled
+        # Filter to include relevant SO statuses
         if 'Status' in sales_orders_df.columns:
             sales_orders_df = sales_orders_df[
-                sales_orders_df['Status'].isin(['Pending Approval', 'Pending Fulfillment', 'Pending Billing/Partially Fulfilled'])
+                sales_orders_df['Status'].isin([
+                    'Pending Approval', 'Pending Fulfillment',
+                    'Pending Billing/Partially Fulfilled', 'Partially Fulfilled'
+                ])
             ]
         
         # Calculate age for Old Pending Approval
@@ -1735,6 +1742,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         'PA_Q2_Spillover':  {'label': '⏩ PA Spillover (Q2 2026)'},
         'PA_NoDate':     {'label': 'Pending Approval (No Date)'},
         'PA_Old':        {'label': 'Pending Approval (>2 Wks)'},
+        'Partial':       {'label': 'Partially Fulfilled (Remaining)'},
     }
     
     hs_categories = {
@@ -1755,7 +1763,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     # --- 3. CREATE DISPLAY DATAFRAMES ---
     
     # === USE CENTRALIZED CATEGORIZATION FUNCTION ===
-    so_categories = categorize_sales_orders(sales_orders_df, rep_name)
+    so_categories = categorize_sales_orders(sales_orders_df, rep_name, invoices_df=invoices_df)
     
     # Determine which amount column to use based on shipping toggle
     include_shipping = st.session_state.get('q2_include_shipping', True)
@@ -1855,7 +1863,11 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
         'PA_Date': format_ns_view(so_categories['pa_date'], 'PA_Date'),
         'PA_Q4_Spillover': format_ns_view(so_categories['pa_q1_spillover'], 'PA_Date'),
         'PA_Q2_Spillover': format_ns_view(so_categories['pa_q3_spillover'], 'PA_Date'),
-        'PA_NoDate': format_ns_view(so_categories['pa_nodate'], 'None')
+        'PA_NoDate': format_ns_view(so_categories['pa_nodate'], 'None'),
+        'Partial': (lambda df: format_ns_view(
+            df.assign(**{'Amount': df['Remaining_Amount']}) if 'Remaining_Amount' in df.columns and not df.empty else df,
+            'Promise'
+        ))(so_categories['partially_fulfilled'])
     }
 
     hs_dfs = {}
@@ -2917,22 +2929,17 @@ def calculate_team_metrics(deals_df, dashboard_df):
     }
 
 # ========== CENTRALIZED SALES ORDER CATEGORIZATION ==========
-def categorize_sales_orders(sales_orders_df, rep_name=None):
+def categorize_sales_orders(sales_orders_df, rep_name=None, invoices_df=None):
     """
     SINGLE SOURCE OF TRUTH for categorizing sales orders into forecast buckets.
-    
-    SIMPLIFIED VERSION: Uses the pre-calculated "Updated Status" column (Column AG)
-    from the Google Sheet instead of calculating status categories in Python.
-    
-    Valid "Updated Status" values:
-    - PA No Date
-    - PA with Date
-    - PF with Date (Ext)
-    - PF with Date (Int)
-    - PF No Date (Int)
-    - PF No Date (Ext)
-    - PA Old (>2 Weeks)
-    
+
+    Uses the pre-calculated "Updated Status" column (Column AG) from the Google Sheet.
+
+    For Partially Fulfilled / Pending Billing orders (no Updated Status):
+    - Looks up invoices via 'Created From' column to find what's been shipped
+    - Invoiced portion counted as revenue (added to invoices totals upstream)
+    - Remaining amount stays in a separate 'partially_fulfilled' bucket
+
     Returns a dictionary with categorized DataFrames and their amounts.
     """
     empty_result = {
@@ -2943,6 +2950,8 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         'pa_date': pd.DataFrame(), 'pa_date_amount': 0,
         'pa_nodate': pd.DataFrame(), 'pa_nodate_amount': 0,
         'pa_old': pd.DataFrame(), 'pa_old_amount': 0,
+        'partially_fulfilled': pd.DataFrame(), 'partially_fulfilled_amount': 0,
+        'partially_fulfilled_invoiced': 0,
         'pf_q1_spillover': pd.DataFrame(), 'pf_q1_spillover_amount': 0,
         'pa_q1_spillover': pd.DataFrame(), 'pa_q1_spillover_amount': 0,
         'pf_q3_spillover': pd.DataFrame(), 'pf_q3_spillover_amount': 0,
@@ -3007,7 +3016,51 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
     
     # PA Old (>2 Weeks) -> pa_old
     pa_old = orders[orders['Updated_Status_Clean'] == 'PA Old (>2 Weeks)'].copy()
-    
+
+    # === PARTIALLY FULFILLED / PENDING BILLING ===
+    # These orders have no Updated Status category — handle via invoice lookup
+    partial_statuses = ['Pending Billing/Partially Fulfilled', 'Partially Fulfilled']
+    if 'Status' in orders.columns:
+        partial_orders = orders[orders['Status'].isin(partial_statuses)].copy()
+        # Exclude any that already got categorized via Updated Status
+        if not partial_orders.empty and 'Updated_Status_Clean' in partial_orders.columns:
+            already_categorized = partial_orders['Updated_Status_Clean'].isin([
+                'PF with Date (Ext)', 'PF with Date (Int)', 'PF No Date (Ext)', 'PF No Date (Int)',
+                'PA with Date', 'PA No Date', 'PA Old (>2 Weeks)'
+            ])
+            partial_orders = partial_orders[~already_categorized].copy()
+    else:
+        partial_orders = pd.DataFrame()
+
+    # Calculate remaining amounts by looking up invoiced amounts
+    partial_invoiced_total = 0
+    if not partial_orders.empty and invoices_df is not None and not invoices_df.empty:
+        # Build lookup: SO number -> total invoiced amount
+        if 'Created From' in invoices_df.columns and 'Amount' in invoices_df.columns:
+            inv_by_so = invoices_df.groupby('Created From')['Amount'].sum().to_dict()
+
+            # For each partial order, calculate remaining
+            remaining_amounts = []
+            for idx in partial_orders.index:
+                so_num = str(partial_orders.at[idx, 'Display_SO_Num']).strip() if 'Display_SO_Num' in partial_orders.columns else ''
+                so_amount = pd.to_numeric(partial_orders.at[idx, 'Amount'] if 'Amount' in partial_orders.columns else 0, errors='coerce') or 0
+
+                # Look up how much has been invoiced for this SO
+                invoiced_for_so = 0
+                for created_from, inv_amount in inv_by_so.items():
+                    cf = str(created_from).strip()
+                    # Match SO number in Created From (could be exact match or contain SO#)
+                    if so_num and (cf == so_num or so_num in cf or cf.endswith(so_num)):
+                        invoiced_for_so += inv_amount
+
+                remaining = max(0, so_amount - invoiced_for_so)
+                remaining_amounts.append(remaining)
+                partial_invoiced_total += invoiced_for_so
+
+            partial_orders['Remaining_Amount'] = remaining_amounts
+            # Filter out fully invoiced orders (remaining = 0)
+            partial_orders = partial_orders[partial_orders['Remaining_Amount'] > 0].copy()
+
     # === SPILLOVER DETECTION ===
     # Match Apps Script V5 logic: PF/PA orders with dates AFTER Q2 end are spillover
     q2_end = pd.Timestamp('2026-06-30')
@@ -3070,6 +3123,11 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
                 return df['Amount'].sum()
         return 0
     
+    # Calculate partially fulfilled remaining amount
+    partial_remaining = 0
+    if not partial_orders.empty and 'Remaining_Amount' in partial_orders.columns:
+        partial_remaining = partial_orders['Remaining_Amount'].sum()
+
     return {
         'pf_date_ext': pf_date_ext,
         'pf_date_ext_amount': get_amount(pf_date_ext),
@@ -3085,6 +3143,9 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         'pa_nodate_amount': get_amount(pa_nodate),
         'pa_old': pa_old,
         'pa_old_amount': get_amount(pa_old),
+        'partially_fulfilled': partial_orders,
+        'partially_fulfilled_amount': partial_remaining,
+        'partially_fulfilled_invoiced': partial_invoiced_total,
         'pf_q1_spillover': pf_q1_spillover,
         'pf_q1_spillover_amount': get_amount(pf_q1_spillover),
         'pa_q1_spillover': pa_q1_spillover,
@@ -3095,7 +3156,7 @@ def categorize_sales_orders(sales_orders_df, rep_name=None):
         'pa_q3_spillover_amount': get_amount(pa_q3_spillover)
     }
 
-def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None):
+def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None, invoices_df=None):
     """Calculate metrics for a specific rep with detailed order lists for drill-down"""
     
     # Get rep's quota and orders
@@ -3203,7 +3264,7 @@ def calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df=None
     q1_spillover_total = expect_commit_q1_spillover + best_opp_q1_spillover
     
     # === USE CENTRALIZED CATEGORIZATION FUNCTION ===
-    so_categories = categorize_sales_orders(sales_orders_df, rep_name)
+    so_categories = categorize_sales_orders(sales_orders_df, rep_name, invoices_df=invoices_df)
     
     # Extract amounts
     pending_fulfillment = so_categories['pf_date_ext_amount'] + so_categories['pf_date_int_amount']
@@ -4113,7 +4174,7 @@ def display_team_dashboard(deals_df, dashboard_df, invoices_df, sales_orders_df,
         if rep_name in excluded_reps:
             continue
             
-        rep_metrics = calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df)
+        rep_metrics = calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df, invoices_df=invoices_df)
         if rep_metrics:
             section1_total = (rep_metrics['orders'] + rep_metrics['pending_fulfillment'] +
                               rep_metrics['pending_approval'] + rep_metrics['expect_commit'])
@@ -4458,7 +4519,7 @@ def display_rep_dashboard(rep_name, deals_df, dashboard_df, invoices_df, sales_o
     st.title(f"{rep_name} — Q2 2026")
 
     # Calculate metrics
-    metrics = calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df)
+    metrics = calculate_rep_metrics(rep_name, deals_df, dashboard_df, sales_orders_df, invoices_df=invoices_df)
 
     if not metrics:
         st.error(f"No data found for {rep_name}")
