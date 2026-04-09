@@ -3037,29 +3037,49 @@ def categorize_sales_orders(sales_orders_df, rep_name=None, invoices_df=None):
     if not partial_orders.empty and invoices_df is not None and not invoices_df.empty:
         # Build lookup: SO number -> total invoiced amount
         if 'Created From' in invoices_df.columns and 'Amount' in invoices_df.columns:
-            inv_by_so = invoices_df.groupby('Created From')['Amount'].sum().to_dict()
+            # Ensure invoice amounts are numeric
+            inv_df = invoices_df.copy()
+            inv_df['_inv_amount'] = pd.to_numeric(inv_df['Amount'], errors='coerce').fillna(0)
+
+            # Normalize Created From: extract just the numeric SO number
+            # Created From might be "Sales Order #12345" or "SO12345" or just "12345"
+            import re
+            def extract_so_number(val):
+                s = str(val).strip()
+                # Extract digits — SO numbers are numeric
+                nums = re.findall(r'\d+', s)
+                return nums[-1] if nums else s  # Use last number found
+
+            inv_df['_cf_normalized'] = inv_df['Created From'].apply(extract_so_number)
+            inv_by_so = inv_df.groupby('_cf_normalized')['_inv_amount'].sum().to_dict()
 
             # For each partial order, calculate remaining
             remaining_amounts = []
             for idx in partial_orders.index:
-                so_num = str(partial_orders.at[idx, 'Display_SO_Num']).strip() if 'Display_SO_Num' in partial_orders.columns else ''
+                so_num_raw = str(partial_orders.at[idx, 'Display_SO_Num']).strip() if 'Display_SO_Num' in partial_orders.columns else ''
+                so_num_normalized = extract_so_number(so_num_raw)
+
                 so_amount = pd.to_numeric(partial_orders.at[idx, 'Amount'] if 'Amount' in partial_orders.columns else 0, errors='coerce') or 0
 
                 # Look up how much has been invoiced for this SO
-                invoiced_for_so = 0
-                for created_from, inv_amount in inv_by_so.items():
-                    cf = str(created_from).strip()
-                    # Match SO number in Created From (could be exact match or contain SO#)
-                    if so_num and (cf == so_num or so_num in cf or cf.endswith(so_num)):
-                        invoiced_for_so += inv_amount
+                invoiced_for_so = inv_by_so.get(so_num_normalized, 0)
 
                 remaining = max(0, so_amount - invoiced_for_so)
                 remaining_amounts.append(remaining)
                 partial_invoiced_total += invoiced_for_so
 
             partial_orders['Remaining_Amount'] = remaining_amounts
+            partial_orders['Invoiced_Amount'] = [
+                inv_by_so.get(extract_so_number(str(partial_orders.at[idx, 'Display_SO_Num']).strip()), 0)
+                for idx in partial_orders.index
+            ]
             # Filter out fully invoiced orders (remaining = 0)
             partial_orders = partial_orders[partial_orders['Remaining_Amount'] > 0].copy()
+    else:
+        # No invoice data — keep full SO amount as remaining
+        if not partial_orders.empty and 'Amount' in partial_orders.columns:
+            partial_orders['Remaining_Amount'] = pd.to_numeric(partial_orders['Amount'], errors='coerce').fillna(0)
+            partial_orders['Invoiced_Amount'] = 0
 
     # === SPILLOVER DETECTION ===
     # Match Apps Script V5 logic: PF/PA orders with dates AFTER Q2 end are spillover
