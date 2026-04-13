@@ -2448,7 +2448,7 @@ def build_your_own_forecast_section(metrics, quota, rep_name=None, deals_df=None
     pipeline_color = "#a78bfa" if use_probability_for_calc else "#60a5fa"  # Purple for prob, blue for raw
     
     st.markdown(f"""
-    <div style="
+    <div id="q2-sticky-forecast-bar" style="
         position: fixed;
         bottom: 24px;
         left: 50%;

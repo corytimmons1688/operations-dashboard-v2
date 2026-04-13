@@ -845,7 +845,22 @@ def main():
     """Main application entry point."""
     inject_custom_css()
     section = render_sidebar()
-    
+
+    # Cleanup: remove any stale fixed-position elements from previous pages
+    # (like the Q2 sticky forecast bar) so they don't bleed into other views
+    if section != "📈 Q2 Revenue Snapshot":
+        st.markdown("""
+        <script>
+        (function() {
+            const stale = window.parent.document.querySelectorAll('#q2-sticky-forecast-bar');
+            stale.forEach(el => el.remove());
+        })();
+        </script>
+        <style>
+        #q2-sticky-forecast-bar { display: none !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
     # Map the navigation options
     if section == "📈 Q2 Revenue Snapshot":
         render_q2_revenue_section()
