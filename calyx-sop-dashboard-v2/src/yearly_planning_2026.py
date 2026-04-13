@@ -6738,8 +6738,537 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
 
 # ========== MAIN RENDER FUNCTION ==========
 
+
+# =============================================================================
+# CRM-STYLE CUSTOMER DRILL-DOWN HELPERS
+# =============================================================================
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def build_rep_company_roster(rep_name, sales_orders_df, invoices_df, deals_df):
+    """Build a roster of companies for a rep with key metrics per company.
+
+    Returns a list of dicts — one per company — with:
+      company, last_order_date, days_since_last_order, ytd_revenue,
+      current_quarter_rev, open_ar, pipeline_value, deal_count, status
+    """
+    from datetime import datetime as _dt, timedelta as _td
+
+    today = _dt.now()
+    year_start = _dt(today.year, 1, 1)
+    quarter = (today.month - 1) // 3
+    quarter_start = _dt(today.year, quarter * 3 + 1, 1)
+
+    companies = get_customers_for_rep(rep_name, sales_orders_df, invoices_df)
+    roster = []
+
+    # Pre-compute rep-scoped dataframes once
+    all_reps_mode = (rep_name == "All Reps")
+
+    if not invoices_df.empty:
+        if all_reps_mode:
+            rep_invoices = invoices_df.copy()
+        elif 'Rep Master' in invoices_df.columns:
+            rep_invoices = invoices_df[invoices_df['Rep Master'] == rep_name].copy()
+        else:
+            rep_invoices = pd.DataFrame()
+    else:
+        rep_invoices = pd.DataFrame()
+
+    if not sales_orders_df.empty:
+        if all_reps_mode:
+            rep_orders = sales_orders_df.copy()
+        elif 'Rep Master' in sales_orders_df.columns:
+            rep_orders = sales_orders_df[sales_orders_df['Rep Master'] == rep_name].copy()
+        else:
+            rep_orders = pd.DataFrame()
+    else:
+        rep_orders = pd.DataFrame()
+
+    # Ensure Date column is datetime for invoices
+    if not rep_invoices.empty and 'Date' in rep_invoices.columns:
+        rep_invoices['Date'] = pd.to_datetime(rep_invoices['Date'], errors='coerce')
+
+    for company in companies:
+        # Invoices for this company
+        if not rep_invoices.empty and 'Corrected Customer' in rep_invoices.columns:
+            comp_inv = rep_invoices[rep_invoices['Corrected Customer'] == company]
+        else:
+            comp_inv = pd.DataFrame()
+
+        # Sales orders for this company
+        if not rep_orders.empty and 'Corrected Customer Name' in rep_orders.columns:
+            comp_so = rep_orders[rep_orders['Corrected Customer Name'] == company]
+        else:
+            comp_so = pd.DataFrame()
+
+        # Last order date — from invoices (real shipped revenue)
+        last_order_date = None
+        days_since_last = None
+        if not comp_inv.empty and 'Date' in comp_inv.columns:
+            valid_dates = comp_inv['Date'].dropna()
+            if len(valid_dates) > 0:
+                last_order_date = valid_dates.max()
+                days_since_last = (today - last_order_date).days
+
+        # YTD Revenue (invoices this calendar year)
+        ytd_rev = 0
+        current_q_rev = 0
+        if not comp_inv.empty and 'Amount' in comp_inv.columns and 'Date' in comp_inv.columns:
+            ytd_mask = comp_inv['Date'] >= year_start
+            ytd_rev = pd.to_numeric(comp_inv.loc[ytd_mask, 'Amount'], errors='coerce').fillna(0).sum()
+            q_mask = comp_inv['Date'] >= quarter_start
+            current_q_rev = pd.to_numeric(comp_inv.loc[q_mask, 'Amount'], errors='coerce').fillna(0).sum()
+
+        # Open AR (invoices with remaining balance)
+        open_ar = 0
+        if not comp_inv.empty:
+            if 'Amount Remaining' in comp_inv.columns:
+                open_ar = pd.to_numeric(comp_inv['Amount Remaining'], errors='coerce').fillna(0).sum()
+            elif 'Status' in comp_inv.columns and 'Amount' in comp_inv.columns:
+                open_mask = ~comp_inv['Status'].astype(str).str.lower().isin(['paid in full', 'paid'])
+                open_ar = pd.to_numeric(comp_inv.loc[open_mask, 'Amount'], errors='coerce').fillna(0).sum()
+
+        # Deals for this company
+        comp_deals = get_customer_deals(company, rep_name, deals_df)
+        pipeline_value = 0
+        deal_count = 0
+        if not comp_deals.empty:
+            # Exclude closed won/lost from pipeline value
+            if 'Close Status' in comp_deals.columns:
+                open_deals = comp_deals[~comp_deals['Close Status'].astype(str).str.lower().isin(['closed won', 'closed lost'])]
+            else:
+                open_deals = comp_deals
+            deal_count = len(open_deals)
+            if 'Amount' in open_deals.columns:
+                pipeline_value = pd.to_numeric(open_deals['Amount'], errors='coerce').fillna(0).sum()
+
+        # Status
+        if days_since_last is None:
+            status = "never"
+        elif days_since_last <= 30:
+            status = "active"
+        elif days_since_last <= 90:
+            status = "at_risk"
+        else:
+            status = "dormant"
+
+        roster.append({
+            "company": company,
+            "last_order_date": last_order_date,
+            "days_since_last_order": days_since_last,
+            "ytd_revenue": float(ytd_rev),
+            "current_quarter_rev": float(current_q_rev),
+            "open_ar": float(open_ar),
+            "pipeline_value": float(pipeline_value),
+            "deal_count": int(deal_count),
+            "status": status,
+        })
+
+    return roster
+
+
+def _status_color(status):
+    """Map status to hex color for dots."""
+    return {
+        "active":  "#10b981",
+        "at_risk": "#f59e0b",
+        "dormant": "#ef4444",
+        "never":   "#94a3b8",
+    }.get(status, "#94a3b8")
+
+
+def _status_label(status):
+    return {
+        "active":  "Active",
+        "at_risk": "At Risk",
+        "dormant": "Dormant",
+        "never":   "No Orders Yet",
+    }.get(status, "—")
+
+
+def _format_last_order(row):
+    """Human-friendly last-order display."""
+    if row.get("last_order_date") is None:
+        return "No orders"
+    dt = row["last_order_date"]
+    days = row.get("days_since_last_order", 0) or 0
+    if days == 0:
+        rel = "today"
+    elif days == 1:
+        rel = "1 day ago"
+    elif days < 30:
+        rel = f"{days} days ago"
+    elif days < 60:
+        rel = "1 month ago"
+    else:
+        rel = f"{days // 30} months ago"
+    return f"{dt.strftime('%b %d, %Y')} · {rel}"
+
+
+def render_crm_rep_picker(sales_orders_df, invoices_df):
+    """Screen 1: Rep selector."""
+    st.markdown("### Who are you?")
+    st.caption("Pick your name to see your accounts.")
+
+    rep_list = get_rep_list(sales_orders_df, invoices_df)
+    # Build options: All Reps first for leadership, then sorted reps
+    options = ["— Select —", "All Reps"] + sorted(rep_list)
+
+    selected = st.selectbox(
+        "Sales Rep",
+        options,
+        key="crm_rep_picker_select",
+        label_visibility="collapsed",
+    )
+
+    if selected and selected != "— Select —":
+        st.session_state.crm_selected_rep = selected
+        st.session_state.crm_view = "company_list"
+        st.rerun()
+
+
+def render_crm_company_list(rep_name, sales_orders_df, invoices_df, deals_df):
+    """Screen 2: Clickable card grid of the rep's companies."""
+    # Header + switch-rep link
+    col_hdr, col_switch = st.columns([6, 1])
+    with col_hdr:
+        st.markdown(f"### {rep_name} · Companies")
+    with col_switch:
+        if st.button("Switch Rep", key="crm_switch_rep_btn", use_container_width=True):
+            st.session_state.crm_view = "rep_picker"
+            st.session_state.crm_selected_rep = None
+            st.rerun()
+
+    # Build roster
+    with qbr_loading("Building your account roster..."):
+        roster = build_rep_company_roster(rep_name, sales_orders_df, invoices_df, deals_df)
+
+    if not roster:
+        st.info(f"No customers found for **{rep_name}** yet.")
+        return
+
+    # Search / sort / filter bar
+    col_search, col_sort, col_filter = st.columns([3, 2, 2])
+    with col_search:
+        search = st.text_input("🔍 Search companies", key="crm_company_search", placeholder="Type to filter by name…")
+    with col_sort:
+        sort_by = st.selectbox(
+            "Sort by",
+            ["Last Order (recent)", "Last Order (oldest)", "YTD Revenue", "Pipeline Value", "A–Z"],
+            key="crm_company_sort",
+        )
+    with col_filter:
+        filter_by = st.selectbox(
+            "Show",
+            ["All", "Active", "At Risk", "Dormant", "No Orders Yet"],
+            key="crm_company_filter",
+        )
+
+    # Apply filters
+    filtered = roster
+    if search:
+        s = search.lower().strip()
+        filtered = [r for r in filtered if s in r["company"].lower()]
+
+    status_map = {"All": None, "Active": "active", "At Risk": "at_risk", "Dormant": "dormant", "No Orders Yet": "never"}
+    if status_map.get(filter_by):
+        filtered = [r for r in filtered if r["status"] == status_map[filter_by]]
+
+    # Sort
+    if sort_by == "Last Order (recent)":
+        filtered = sorted(filtered, key=lambda r: (r["last_order_date"] or pd.Timestamp.min), reverse=True)
+    elif sort_by == "Last Order (oldest)":
+        filtered = sorted(filtered, key=lambda r: (r["last_order_date"] or pd.Timestamp.max))
+    elif sort_by == "YTD Revenue":
+        filtered = sorted(filtered, key=lambda r: r["ytd_revenue"], reverse=True)
+    elif sort_by == "Pipeline Value":
+        filtered = sorted(filtered, key=lambda r: r["pipeline_value"], reverse=True)
+    elif sort_by == "A–Z":
+        filtered = sorted(filtered, key=lambda r: r["company"].lower())
+
+    st.caption(f"Showing **{len(filtered)}** of {len(roster)} accounts")
+    st.markdown("")
+
+    if not filtered:
+        st.info("No companies match your filters.")
+        return
+
+    # 3-column card grid
+    cols_per_row = 3
+    for i in range(0, len(filtered), cols_per_row):
+        row_cards = filtered[i:i + cols_per_row]
+        cols = st.columns(cols_per_row)
+        for j, card in enumerate(row_cards):
+            with cols[j]:
+                _render_company_card(card)
+
+
+def _render_company_card(card):
+    """Render a single company card."""
+    dot_color = _status_color(card["status"])
+    status_lbl = _status_label(card["status"])
+    last_order = _format_last_order(card)
+
+    with st.container(border=True):
+        # Header row: company name + status dot
+        st.markdown(f"""
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
+                <div style="font-size: 1.05rem; font-weight: 700; color: #0f172a; line-height: 1.3;">{card['company']}</div>
+                <div style="display: flex; align-items: center; gap: 6px;">
+                    <div style="width: 10px; height: 10px; border-radius: 50%; background: {dot_color}; box-shadow: 0 0 8px {dot_color}66;"></div>
+                    <span style="font-size: 0.7rem; color: #64748b; font-weight: 600;">{status_lbl}</span>
+                </div>
+            </div>
+            <div style="font-size: 0.78rem; color: #64748b; margin-bottom: 12px;">📦 {last_order}</div>
+        """, unsafe_allow_html=True)
+
+        # Metrics grid
+        m1, m2 = st.columns(2)
+        with m1:
+            st.markdown(f"""
+                <div style="background: #f1f5f9; border-radius: 8px; padding: 8px 10px;">
+                    <div style="font-size: 0.62rem; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">YTD Revenue</div>
+                    <div style="font-size: 1rem; color: #0f172a; font-weight: 700;">${card['ytd_revenue']:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with m2:
+            st.markdown(f"""
+                <div style="background: #fef3c7; border-radius: 8px; padding: 8px 10px;">
+                    <div style="font-size: 0.62rem; color: #78350f; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Open AR</div>
+                    <div style="font-size: 1rem; color: #78350f; font-weight: 700;">${card['open_ar']:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        m3, m4 = st.columns(2)
+        with m3:
+            st.markdown(f"""
+                <div style="background: #ede9fe; border-radius: 8px; padding: 8px 10px; margin-top: 8px;">
+                    <div style="font-size: 0.62rem; color: #4c1d95; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Pipeline</div>
+                    <div style="font-size: 1rem; color: #4c1d95; font-weight: 700;">${card['pipeline_value']:,.0f}</div>
+                </div>
+            """, unsafe_allow_html=True)
+        with m4:
+            st.markdown(f"""
+                <div style="background: #dbeafe; border-radius: 8px; padding: 8px 10px; margin-top: 8px;">
+                    <div style="font-size: 0.62rem; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">Open Deals</div>
+                    <div style="font-size: 1rem; color: #1e3a8a; font-weight: 700;">{card['deal_count']}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("")
+        # Click-through button
+        if st.button("Open Account →", key=f"crm_card_{card['company']}", use_container_width=True, type="primary"):
+            st.session_state.crm_selected_company = card["company"]
+            st.session_state.crm_view = "company_detail"
+            st.rerun()
+
+
+def compute_period_bounds(period_label, custom_start=None, custom_end=None):
+    """Return (start_date, end_date) tuple for a named period."""
+    from datetime import datetime as _dt, timedelta as _td
+
+    today = _dt.now()
+    if period_label == "This Quarter":
+        quarter = (today.month - 1) // 3
+        return _dt(today.year, quarter * 3 + 1, 1), today
+    elif period_label == "This Year":
+        return _dt(today.year, 1, 1), today
+    elif period_label == "Last 90 Days":
+        return today - _td(days=90), today
+    elif period_label == "Last 12 Months":
+        return today - _td(days=365), today
+    elif period_label == "All Time":
+        return None, None
+    elif period_label == "Custom Range" and custom_start and custom_end:
+        return (_dt.combine(custom_start, _dt.min.time()),
+                _dt.combine(custom_end, _dt.max.time()))
+    return None, None
+
+
+def render_company_summary_hero(company, rep_name, period_label, sales_orders_df, invoices_df, deals_df):
+    """Render the 4 metric cards + trend chart + narrative at the top of the detail page."""
+    start, end = compute_period_bounds(
+        period_label,
+        st.session_state.get("crm_custom_start"),
+        st.session_state.get("crm_custom_end"),
+    )
+
+    # Filter invoices for this company
+    if not invoices_df.empty and 'Corrected Customer' in invoices_df.columns:
+        comp_inv = invoices_df[invoices_df['Corrected Customer'] == company].copy()
+        if 'Date' in comp_inv.columns:
+            comp_inv['Date'] = pd.to_datetime(comp_inv['Date'], errors='coerce')
+    else:
+        comp_inv = pd.DataFrame()
+
+    # Apply period filter
+    period_inv = comp_inv
+    if start and end and not period_inv.empty and 'Date' in period_inv.columns:
+        period_inv = period_inv[(period_inv['Date'] >= start) & (period_inv['Date'] <= end)]
+
+    # Revenue (period)
+    period_rev = 0
+    if not period_inv.empty and 'Amount' in period_inv.columns:
+        period_rev = pd.to_numeric(period_inv['Amount'], errors='coerce').fillna(0).sum()
+
+    # Open AR (all time — AR isn't period-scoped)
+    open_ar = 0
+    if not comp_inv.empty:
+        if 'Amount Remaining' in comp_inv.columns:
+            open_ar = pd.to_numeric(comp_inv['Amount Remaining'], errors='coerce').fillna(0).sum()
+        elif 'Status' in comp_inv.columns and 'Amount' in comp_inv.columns:
+            open_mask = ~comp_inv['Status'].astype(str).str.lower().isin(['paid in full', 'paid'])
+            open_ar = pd.to_numeric(comp_inv.loc[open_mask, 'Amount'], errors='coerce').fillna(0).sum()
+
+    # Pipeline
+    comp_deals = get_customer_deals(company, rep_name, deals_df)
+    pipeline_value = 0
+    deal_count = 0
+    if not comp_deals.empty:
+        if 'Close Status' in comp_deals.columns:
+            open_deals = comp_deals[~comp_deals['Close Status'].astype(str).str.lower().isin(['closed won', 'closed lost'])]
+        else:
+            open_deals = comp_deals
+        deal_count = len(open_deals)
+        if 'Amount' in open_deals.columns:
+            pipeline_value = pd.to_numeric(open_deals['Amount'], errors='coerce').fillna(0).sum()
+
+    # Last order
+    last_order_str = "No orders yet"
+    if not comp_inv.empty and 'Date' in comp_inv.columns:
+        valid_dates = comp_inv['Date'].dropna()
+        if len(valid_dates) > 0:
+            last_dt = valid_dates.max()
+            days = (pd.Timestamp.now() - last_dt).days
+            last_order_str = f"{last_dt.strftime('%b %d, %Y')} ({days}d ago)"
+
+    # 4 metric cards
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric(f"Revenue ({period_label})", f"${period_rev:,.0f}")
+    with c2:
+        st.metric("Pipeline Value", f"${pipeline_value:,.0f}", delta=f"{deal_count} open deals")
+    with c3:
+        st.metric("Open AR", f"${open_ar:,.0f}")
+    with c4:
+        st.metric("Last Order", last_order_str)
+
+    # Monthly revenue trend
+    if not period_inv.empty and 'Date' in period_inv.columns and 'Amount' in period_inv.columns:
+        trend = period_inv.copy()
+        trend['Month'] = trend['Date'].dt.to_period('M').dt.to_timestamp()
+        trend['Amount'] = pd.to_numeric(trend['Amount'], errors='coerce').fillna(0)
+        monthly = trend.groupby('Month', as_index=False)['Amount'].sum().sort_values('Month')
+        if not monthly.empty:
+            import plotly.express as _px
+            fig = _px.line(monthly, x='Month', y='Amount', markers=True, title=None)
+            fig.update_traces(line=dict(color='#4f46e5', width=3), marker=dict(size=8))
+            fig.update_layout(
+                height=220,
+                margin=dict(l=10, r=10, t=20, b=10),
+                xaxis_title=None, yaxis_title=None,
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                showlegend=False,
+            )
+            fig.update_yaxes(tickformat="$,.0f")
+            st.plotly_chart(fig, use_container_width=True)
+
+    # One-line narrative
+    orders_count = len(period_inv) if not period_inv.empty else 0
+    if orders_count > 0:
+        st.caption(f"📊 {orders_count} invoice(s) in {period_label.lower()} · {deal_count} open deal(s) · ${period_rev:,.0f} recognized revenue")
+    else:
+        st.caption(f"📊 No invoices in {period_label.lower()} · {deal_count} open deal(s)")
+
+
+def render_crm_company_detail(rep_name, company, sales_orders_df, invoices_df, deals_df,
+                               invoice_line_items_df, ncr_df):
+    """Screen 3: Full company drill-down page with period selector and 4 sub-tabs."""
+    # Breadcrumb
+    col_back, col_bc = st.columns([1, 6])
+    with col_back:
+        if st.button("← Back", key="crm_back_btn", use_container_width=True):
+            st.session_state.crm_view = "company_list"
+            st.session_state.crm_selected_company = None
+            st.rerun()
+    with col_bc:
+        st.markdown(f"""
+            <div style="padding: 8px 0;">
+                <span style="color: #64748b; font-size: 0.85rem;">{rep_name}</span>
+                <span style="color: #cbd5e1; margin: 0 8px;">/</span>
+                <span style="color: #0f172a; font-size: 1.15rem; font-weight: 700;">{company}</span>
+            </div>
+        """, unsafe_allow_html=True)
+
+    # Period selector
+    period_options = ["This Quarter", "This Year", "Last 90 Days", "Last 12 Months", "All Time", "Custom Range"]
+    if "crm_period" not in st.session_state:
+        st.session_state.crm_period = "This Quarter"
+
+    col_period, _ = st.columns([2, 4])
+    with col_period:
+        st.selectbox("Time Period", period_options, key="crm_period")
+
+    if st.session_state.crm_period == "Custom Range":
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            st.date_input("Start", key="crm_custom_start")
+        with cc2:
+            st.date_input("End", key="crm_custom_end")
+
+    st.markdown("---")
+
+    # Hero summary
+    render_company_summary_hero(company, rep_name, st.session_state.crm_period,
+                                 sales_orders_df, invoices_df, deals_df)
+
+    st.markdown("---")
+
+    # Sync session state so existing sub-tools filter to this customer
+    st.session_state["qbr_customer_selector"] = [company]
+    st.session_state["qbr_rep_selector"] = rep_name
+
+    # Sub-tabs
+    tab_options = ["📋 Overview", "📦 Forecasting", "🔄 SKU History", "📊 Period Comparison"]
+    if "crm_active_tab" not in st.session_state:
+        st.session_state.crm_active_tab = tab_options[0]
+
+    current = st.session_state.crm_active_tab
+    tcols = st.columns(len(tab_options))
+    for i, opt in enumerate(tab_options):
+        with tcols[i]:
+            is_active = (current == opt)
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(opt, key=f"crm_subtab_{i}", use_container_width=True, type=btn_type):
+                st.session_state.crm_active_tab = opt
+                st.rerun()
+
+    st.markdown("---")
+
+    # Lazy-render only the active sub-tab
+    active = st.session_state.crm_active_tab
+    if active == "📋 Overview":
+        render_qbr_generator_content()
+    elif active == "📦 Forecasting":
+        render_product_forecasting_tool()
+    elif active == "🔄 SKU History":
+        render_sku_order_history_tool()
+    elif active == "📊 Period Comparison":
+        render_period_comparison_tool()
+
+
 def render_yearly_planning_2026():
-    """Main entry point — lazy-renders only the selected sub-section for speed."""
+    """Main entry point — CRM-style customer drill-down.
+
+    Three-screen flow:
+      1. Rep picker       (who are you?)
+      2. Company list     (your accounts, as clickable cards)
+      3. Company detail   (summary hero + 4 sub-tabs scoped to one company)
+
+    Power-user "Tools Mode" available for anyone who wants the raw filter-driven
+    tools without the CRM wrapper.
+    """
 
     # Header
     st.markdown("""
@@ -6754,14 +7283,61 @@ def render_yearly_planning_2026():
         ">
             <div style="font-size: 2rem;">📊</div>
             <div>
-                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">QBR Generator</h1>
-                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">QBR Generation & Product Forecasting Tools</p>
+                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">Account Dashboard</h1>
+                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">Your accounts, deals, and revenue — at a glance.</p>
             </div>
         </div>
     """, unsafe_allow_html=True)
 
-    # Sub-section selector — app.py may set 'qbr_active_tab' from sidebar,
-    # otherwise fall back to an inline radio so this page stands alone.
+    # Load data once — cached. Shared across all CRM screens.
+    with qbr_loading("Loading customer data..."):
+        sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df = load_qbr_data()
+
+    # Initialize CRM state
+    if "crm_view" not in st.session_state:
+        st.session_state.crm_view = "rep_picker"
+
+    # Mode toggle — CRM vs. Tools (power-user mode with raw filter-driven tools)
+    col_mode, _ = st.columns([2, 5])
+    with col_mode:
+        mode = st.radio(
+            "Mode",
+            ["🏢 Account View", "🔧 Tools"],
+            key="crm_mode",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+    st.markdown("")
+
+    if mode == "🔧 Tools":
+        # Power-user mode: raw tools, no customer-centric wrapper.
+        # Clear any CRM scope so tools don't stay filtered to a single customer.
+        st.session_state["qbr_customer_selector"] = []
+        _render_tools_mode()
+        return
+
+    # CRM flow
+    if st.session_state.crm_view == "rep_picker" or not st.session_state.get("crm_selected_rep"):
+        render_crm_rep_picker(sales_orders_df, invoices_df)
+    elif st.session_state.crm_view == "company_list":
+        render_crm_company_list(st.session_state.crm_selected_rep,
+                                 sales_orders_df, invoices_df, deals_df)
+    elif st.session_state.crm_view == "company_detail":
+        render_crm_company_detail(
+            st.session_state.crm_selected_rep,
+            st.session_state.crm_selected_company,
+            sales_orders_df, invoices_df, deals_df,
+            invoice_line_items_df, ncr_df,
+        )
+    else:
+        # Safety net — if state is corrupted, reset to rep picker
+        st.session_state.crm_view = "rep_picker"
+        st.rerun()
+
+
+def _render_tools_mode():
+    """Legacy tools-mode: raw filter-driven sub-tools (no customer wrapper)."""
     tab_options = [
         "📋 QBR Generator",
         "📦 Product Forecasting Tool",
@@ -6772,20 +7348,18 @@ def render_yearly_planning_2026():
     if "qbr_active_tab" not in st.session_state:
         st.session_state.qbr_active_tab = tab_options[0]
 
-    # Inline pill selector — click to switch without re-rendering other tabs
     current = st.session_state.qbr_active_tab
     cols = st.columns(len(tab_options))
     for i, opt in enumerate(tab_options):
         with cols[i]:
             is_active = (current == opt)
             btn_type = "primary" if is_active else "secondary"
-            if st.button(opt, key=f"qbr_tab_{i}", use_container_width=True, type=btn_type):
+            if st.button(opt, key=f"tools_tab_{i}", use_container_width=True, type=btn_type):
                 st.session_state.qbr_active_tab = opt
                 st.rerun()
 
     st.markdown("---")
 
-    # LAZY RENDER — only the selected tab's code runs this pass
     active = st.session_state.qbr_active_tab
     if active == "📋 QBR Generator":
         render_qbr_generator_content()
