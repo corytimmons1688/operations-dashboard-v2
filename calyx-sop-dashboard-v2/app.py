@@ -126,17 +126,21 @@ def inject_custom_css():
     h3 { font-size: 1.1rem !important; font-weight: 600 !important; color: #1e293b !important; }
     h4 { font-size: 0.95rem !important; font-weight: 600 !important; color: #334155 !important; }
 
-    /* === SIDEBAR === */
+    /* === SIDEBAR — dark navy SaaS style === */
     [data-testid="stSidebar"] {
-        background: #f0f2f6 !important;
-        border-right: 1px solid #dde1e8 !important;
+        background: #0f1b2d !important;
+        border-right: 1px solid rgba(255,255,255,0.06) !important;
     }
     [data-testid="stSidebar"] > div:first-child {
         background: transparent !important;
         padding-top: 0 !important;
     }
+    [data-testid="stSidebar"] * { color: #cbd5e1 !important; }
+    [data-testid="stSidebar"] h1,
+    [data-testid="stSidebar"] h2,
+    [data-testid="stSidebar"] h3 { color: #f1f5f9 !important; }
 
-    /* Sidebar radio items */
+    /* Sidebar radio items — clean nav */
     [data-testid="stSidebar"] .stRadio > div { gap: 2px !important; }
     [data-testid="stSidebar"] .stRadio > div > label {
         background: transparent !important;
@@ -149,22 +153,36 @@ def inject_custom_css():
         transition: all 0.15s ease !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label:hover {
-        background: #e8ebf0 !important;
-        border-left-color: #c7d2fe !important;
+        background: rgba(129,140,248,0.08) !important;
+        border-left-color: rgba(129,140,248,0.4) !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] {
-        background: #e8ecf7 !important;
-        border-left-color: #4f46e5 !important;
+        background: rgba(99,102,241,0.15) !important;
+        border-left-color: #818cf8 !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label[data-checked="true"] p {
-        color: #312e81 !important;
+        color: #c7d2fe !important;
         font-weight: 600 !important;
     }
     [data-testid="stSidebar"] .stRadio > div > label p {
-        font-size: 0.82rem !important;
+        font-size: 0.85rem !important;
         font-weight: 500 !important;
-        color: #64748b !important;
+        color: #94a3b8 !important;
         margin: 0 !important;
+    }
+    /* Sidebar buttons (refresh) — dark-friendly */
+    [data-testid="stSidebar"] .stButton > button {
+        background: rgba(255,255,255,0.04) !important;
+        color: #cbd5e1 !important;
+        border: 1px solid rgba(255,255,255,0.08) !important;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(129,140,248,0.15) !important;
+        border-color: rgba(129,140,248,0.3) !important;
+    }
+    /* Sidebar divider */
+    [data-testid="stSidebar"] hr {
+        background: rgba(255,255,255,0.06) !important;
     }
 
     /* === METRIC CARDS === */
@@ -293,37 +311,38 @@ def inject_custom_css():
 # SIDEBAR NAVIGATION
 # =============================================================================
 def render_sidebar():
-    """Render a clean SaaS-grade sidebar."""
+    """Render a clean SaaS-grade sidebar — dark navy style."""
     with st.sidebar:
-        # Brand header
+        # Brand header — Calyx Containers logo block
         st.markdown("""
         <div style="
-            padding: 24px 16px 20px 16px;
-            margin-bottom: 8px;
+            padding: 20px 16px 20px 16px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
         ">
             <div style="display: flex; align-items: center; gap: 12px;">
                 <div style="
-                    width: 38px; height: 38px;
-                    background: linear-gradient(135deg, #4f46e5, #6366f1);
+                    width: 44px; height: 44px;
+                    background: linear-gradient(135deg, #3b82f6, #06b6d4);
                     border-radius: 10px;
                     display: flex; align-items: center; justify-content: center;
-                    font-size: 18px;
-                    box-shadow: 0 2px 8px rgba(79, 70, 229, 0.2);
-                ">🚀</div>
+                    font-size: 22px;
+                    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+                ">📦</div>
                 <div>
-                    <div style="font-size: 1.05rem; font-weight: 700; color: #0f172a; letter-spacing: -0.3px; line-height: 1.2;">Calyx</div>
-                    <div style="font-size: 0.65rem; font-weight: 500; color: #94a3b8; letter-spacing: 0.5px;">Command Center</div>
+                    <div style="font-size: 1.05rem; font-weight: 700; color: #f1f5f9; letter-spacing: -0.3px; line-height: 1.2;">Calyx Containers</div>
+                    <div style="font-size: 0.62rem; font-weight: 600; color: #64748b; letter-spacing: 1.2px; text-transform: uppercase; margin-top: 2px;">calyxcontainers.com</div>
                 </div>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-        # Nav section label
+        # Nav section label — INSIGHTS / REVENUE
         st.markdown("""
         <p style="
-            color: #94a3b8;
-            font-size: 0.6rem;
-            font-weight: 600;
+            color: #3b82f6;
+            font-size: 0.62rem;
+            font-weight: 700;
             letter-spacing: 1.5px;
             text-transform: uppercase;
             margin: 0 0 6px 16px;
@@ -349,7 +368,7 @@ def render_sidebar():
             [data-testid="stSidebar"] div:has(> [data-testid="stRadio"] div[data-baseweb="radio"] + div[data-baseweb="radio"] + div[data-baseweb="radio"]) {
                 margin-left: 18px !important;
                 padding-left: 12px !important;
-                border-left: 2px solid rgba(129,140,248,0.2) !important;
+                border-left: 2px solid rgba(129,140,248,0.3) !important;
                 margin-top: -8px !important;
                 margin-bottom: 4px !important;
             }
@@ -370,12 +389,12 @@ def render_sidebar():
         # Past quarters section
         st.markdown("""
         <p style="
-            color: #94a3b8;
-            font-size: 0.6rem;
-            font-weight: 600;
+            color: #06b6d4;
+            font-size: 0.62rem;
+            font-weight: 700;
             letter-spacing: 1.5px;
             text-transform: uppercase;
-            margin: 16px 0 6px 16px;
+            margin: 20px 0 6px 16px;
             padding: 0;
         ">Past Quarters</p>
         """, unsafe_allow_html=True)
@@ -394,12 +413,12 @@ def render_sidebar():
         # Planning section
         st.markdown("""
         <p style="
-            color: #94a3b8;
-            font-size: 0.6rem;
-            font-weight: 600;
+            color: #a78bfa;
+            font-size: 0.62rem;
+            font-weight: 700;
             letter-spacing: 1.5px;
             text-transform: uppercase;
-            margin: 16px 0 6px 16px;
+            margin: 20px 0 6px 16px;
             padding: 0;
         ">Planning</p>
         """, unsafe_allow_html=True)
@@ -421,12 +440,12 @@ def render_sidebar():
         # Operations section
         st.markdown("""
         <p style="
-            color: #94a3b8;
-            font-size: 0.6rem;
-            font-weight: 600;
+            color: #10b981;
+            font-size: 0.62rem;
+            font-weight: 700;
             letter-spacing: 1.5px;
             text-transform: uppercase;
-            margin: 16px 0 6px 16px;
+            margin: 20px 0 6px 16px;
             padding: 0;
         ">Operations</p>
         """, unsafe_allow_html=True)
@@ -453,13 +472,13 @@ def render_sidebar():
         <div style="
             padding: 12px 16px;
             margin: 0 8px;
-            background: #f8fafc;
+            background: rgba(255,255,255,0.03);
             border-radius: 8px;
-            border: 1px solid #e2e8f0;
+            border: 1px solid rgba(255,255,255,0.06);
         ">
             <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.65rem; color: #94a3b8; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">MST</span>
-                <span style="font-size: 0.8rem; color: #334155; font-weight: 600;">{current_time.strftime('%I:%M %p')}</span>
+                <span style="font-size: 0.65rem; color: #64748b; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;">MST</span>
+                <span style="font-size: 0.8rem; color: #e0e7ff; font-weight: 600;">{current_time.strftime('%I:%M %p')}</span>
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -477,8 +496,9 @@ def render_sidebar():
             text-align: center;
             padding: 16px 0 8px 0;
             margin-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.06);
         ">
-            <p style="font-size: 0.6rem; color: #94a3b8; margin: 0;">v4.2 · Built by Xander</p>
+            <p style="font-size: 0.6rem; color: #475569; margin: 0;">v4.2 · Built by Xander</p>
         </div>
         """, unsafe_allow_html=True)
 
