@@ -6696,43 +6696,8 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
 # ========== MAIN RENDER FUNCTION ==========
 
 def render_yearly_planning_2026():
-    """Main entry point - shows navigation tabs for QBR and Product Forecasting"""
-    
-    # Navigation tabs styling
-    st.markdown("""
-        <style>
-        /* Navigation tab styling */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            padding: 8px 16px;
-            border-radius: 12px;
-            border: 1px solid #334155;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background: transparent;
-            border-radius: 8px;
-            color: #94a3b8;
-            font-weight: 600;
-            padding: 12px 24px;
-        }
-        .stTabs [data-baseweb="tab"]:hover {
-            background: #334155;
-            color: #f1f5f9;
-        }
-        .stTabs [aria-selected="true"] {
-            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
-            color: white !important;
-        }
-        .stTabs [data-baseweb="tab-highlight"] {
-            display: none;
-        }
-        .stTabs [data-baseweb="tab-border"] {
-            display: none;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    
+    """Main entry point — lazy-renders only the selected sub-section for speed."""
+
     # Header
     st.markdown("""
         <div style="
@@ -6746,25 +6711,46 @@ def render_yearly_planning_2026():
         ">
             <div style="font-size: 2rem;">📊</div>
             <div>
-                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">2026 Yearly Planning</h1>
+                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">QBR Generator</h1>
                 <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">QBR Generation & Product Forecasting Tools</p>
             </div>
         </div>
     """, unsafe_allow_html=True)
-    
-    # Navigation tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool", "🔄 SKU Order History", "📊 Period Comparison"])
-    
-    with tab1:
+
+    # Sub-section selector — app.py may set 'qbr_active_tab' from sidebar,
+    # otherwise fall back to an inline radio so this page stands alone.
+    tab_options = [
+        "📋 QBR Generator",
+        "📦 Product Forecasting Tool",
+        "🔄 SKU Order History",
+        "📊 Period Comparison",
+    ]
+
+    if "qbr_active_tab" not in st.session_state:
+        st.session_state.qbr_active_tab = tab_options[0]
+
+    # Inline pill selector — click to switch without re-rendering other tabs
+    current = st.session_state.qbr_active_tab
+    cols = st.columns(len(tab_options))
+    for i, opt in enumerate(tab_options):
+        with cols[i]:
+            is_active = (current == opt)
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(opt, key=f"qbr_tab_{i}", use_container_width=True, type=btn_type):
+                st.session_state.qbr_active_tab = opt
+                st.rerun()
+
+    st.markdown("---")
+
+    # LAZY RENDER — only the selected tab's code runs this pass
+    active = st.session_state.qbr_active_tab
+    if active == "📋 QBR Generator":
         render_qbr_generator_content()
-    
-    with tab2:
+    elif active == "📦 Product Forecasting Tool":
         render_product_forecasting_tool()
-    
-    with tab3:
+    elif active == "🔄 SKU Order History":
         render_sku_order_history_tool()
-    
-    with tab4:
+    elif active == "📊 Period Comparison":
         render_period_comparison_tool()
 
 
