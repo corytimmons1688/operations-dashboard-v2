@@ -4407,6 +4407,337 @@ def get_customer_deals(customer_name, rep_name, deals_df):
     return matches
 
 
+# =========================================================================
+# CRM DRILL-DOWN: Parent/Child Account Roll-Up Helpers
+# =========================================================================
+# Many corporate customers use a "Parent : Child" naming convention in both
+# NetSuite (Corrected Customer Name / Corrected Customer) and HubSpot deals
+# (Company Name 2). Example:
+#   "AYR Wellness, Inc. : Ayr Wellness (OH)"
+#   "AYR Wellness, Inc. : AYR Canntech LLC (PA)"
+#   "AYR Wellness, Inc. : AYR Liberty Health Sciences (FL)"
+# These helpers detect the hierarchy and roll metrics up to the parent.
+
+
+def _crm_extract_parent(customer_name):
+    """Return the parent portion of a 'Parent : Child' name, or None.
+
+    Standalone customers (no ' : ' delimiter) return None so callers can treat
+    them as non-rolled-up accounts.
+    """
+    if not customer_name or pd.isna(customer_name):
+        return None
+    name = str(customer_name).strip()
+    if ' : ' in name:
+        parent = name.split(' : ')[0].strip()
+        if parent:
+            return parent
+    return None
+
+
+def _crm_normalize(name):
+    """Lightweight normalization used for reconciling names across systems."""
+    if not name or pd.isna(name):
+        return ''
+    n = str(name).lower().strip()
+    n = re.sub(r'[^a-z0-9 ]+', ' ', n)
+    n = re.sub(r'\s+', ' ', n)
+    return n
+
+
+def build_parent_child_map(sales_orders_df, invoices_df, deals_df):
+    """Scan all three data sources and build parent<->child lookups.
+
+    Returns a dict with three keys:
+      - parent_to_children: {parent_name: [child_name, ...]}
+      - child_to_parent:    {child_name: parent_name}
+      - normalized_child_to_parent: {normalized_child: parent_name}
+    Children are taken from any 'Parent : Child' value found in:
+      - sales_orders_df['Corrected Customer Name']
+      - invoices_df['Corrected Customer']
+      - deals_df['Company Name 2']
+    """
+    names = set()
+
+    if sales_orders_df is not None and not sales_orders_df.empty \
+            and 'Corrected Customer Name' in sales_orders_df.columns:
+        names.update(sales_orders_df['Corrected Customer Name'].dropna().unique())
+
+    if invoices_df is not None and not invoices_df.empty \
+            and 'Corrected Customer' in invoices_df.columns:
+        names.update(invoices_df['Corrected Customer'].dropna().unique())
+
+    if deals_df is not None and not deals_df.empty \
+            and 'Company Name 2' in deals_df.columns:
+        names.update(deals_df['Company Name 2'].dropna().unique())
+
+    parent_to_children = {}
+    child_to_parent = {}
+    normalized_child_to_parent = {}
+
+    for name in names:
+        if not name or str(name).strip() in ('', 'nan', 'None', '#N/A'):
+            continue
+        parent = _crm_extract_parent(name)
+        if not parent:
+            continue
+        child = str(name).strip()
+        child_to_parent[child] = parent
+        normalized_child_to_parent[_crm_normalize(child)] = parent
+        parent_to_children.setdefault(parent, [])
+        if child not in parent_to_children[parent]:
+            parent_to_children[parent].append(child)
+
+    # Sort children within each parent for stable UI
+    for parent in parent_to_children:
+        parent_to_children[parent].sort()
+
+    return {
+        'parent_to_children': parent_to_children,
+        'child_to_parent': child_to_parent,
+        'normalized_child_to_parent': normalized_child_to_parent,
+    }
+
+
+def resolve_account_customers(account, scope_mode, child, parent_map):
+    """Expand an account selection into the list of underlying customer names.
+
+    - If ``account`` is a parent in the map:
+        * ``scope_mode == 'parent'`` -> all children
+        * ``scope_mode == 'child'``  -> [child] when provided, else all children
+    - Otherwise (standalone customer) -> [account]
+    """
+    if not account:
+        return []
+    parent_to_children = parent_map.get('parent_to_children', {})
+    if account in parent_to_children:
+        children = parent_to_children[account]
+        if scope_mode == 'child' and child and child in children:
+            return [child]
+        return list(children)
+    return [account]
+
+
+def build_rep_account_roster(rep_name, sales_orders_df, invoices_df, deals_df,
+                             parent_map, group_by_parent=True, today=None):
+    """Build the card-grid roster for a rep, optionally rolled up by parent.
+
+    Returns a list of dicts, one per account (parent or standalone), each with:
+        account, is_parent, child_count, children,
+        last_order_date, most_recent_child, days_since_last_order,
+        ytd_revenue, current_quarter_rev, open_ar,
+        pipeline_value, deal_count, status
+    """
+    if today is None:
+        try:
+            today = datetime.now(ZoneInfo('America/New_York')).replace(tzinfo=None)
+        except Exception:
+            today = datetime.now()
+
+    year_start = datetime(today.year, 1, 1)
+    quarter_idx = (today.month - 1) // 3
+    quarter_start = datetime(today.year, quarter_idx * 3 + 1, 1)
+
+    # Customers this rep touches (before parent grouping)
+    customers = get_customers_for_rep(rep_name, sales_orders_df, invoices_df)
+    if not customers:
+        return []
+
+    child_to_parent = parent_map.get('child_to_parent', {})
+
+    # Group customers into accounts
+    accounts = {}  # account_name -> {'is_parent': bool, 'children': [customer_name, ...]}
+    for customer in customers:
+        parent = child_to_parent.get(customer) if group_by_parent else None
+        if parent:
+            acct = accounts.setdefault(parent, {'is_parent': True, 'children': []})
+            if customer not in acct['children']:
+                acct['children'].append(customer)
+        else:
+            # Standalone (or grouping disabled)
+            acct = accounts.setdefault(customer, {'is_parent': False, 'children': [customer]})
+
+    # Precompute per-customer metrics once
+    so = sales_orders_df if sales_orders_df is not None else pd.DataFrame()
+    inv = invoices_df if invoices_df is not None else pd.DataFrame()
+    deals = deals_df if deals_df is not None else pd.DataFrame()
+
+    # Open deals: Close Status empty / 'Open' (anything not Won/Lost)
+    open_deals = pd.DataFrame()
+    if not deals.empty and 'Close Status' in deals.columns:
+        cs = deals['Close Status'].fillna('').astype(str).str.strip().str.lower()
+        open_deals = deals[~cs.isin(['won', 'lost', 'closed won', 'closed lost'])].copy()
+
+    roster = []
+    for account_name, data in accounts.items():
+        child_list = data['children']
+        is_parent = data['is_parent'] and len(child_list) > 1
+
+        # Last order date across children (using Order Start Date)
+        last_order_date = pd.NaT
+        most_recent_child = None
+        if not so.empty and 'Corrected Customer Name' in so.columns and 'Order Start Date' in so.columns:
+            mask = so['Corrected Customer Name'].isin(child_list)
+            rows = so[mask]
+            if not rows.empty:
+                rows = rows.dropna(subset=['Order Start Date'])
+                if not rows.empty:
+                    idx = rows['Order Start Date'].idxmax()
+                    last_order_date = rows.loc[idx, 'Order Start Date']
+                    most_recent_child = rows.loc[idx, 'Corrected Customer Name']
+
+        days_since_last_order = None
+        if pd.notna(last_order_date):
+            try:
+                days_since_last_order = (today - pd.Timestamp(last_order_date).to_pydatetime()).days
+            except Exception:
+                days_since_last_order = None
+
+        # Invoice-driven metrics
+        ytd_revenue = 0.0
+        current_quarter_rev = 0.0
+        open_ar = 0.0
+        if not inv.empty and 'Corrected Customer' in inv.columns:
+            inv_rows = inv[inv['Corrected Customer'].isin(child_list)]
+            if not inv_rows.empty:
+                if 'Date' in inv_rows.columns and 'Amount' in inv_rows.columns:
+                    ytd_rows = inv_rows[inv_rows['Date'] >= year_start]
+                    ytd_revenue = float(ytd_rows['Amount'].sum() or 0)
+                    q_rows = inv_rows[inv_rows['Date'] >= quarter_start]
+                    current_quarter_rev = float(q_rows['Amount'].sum() or 0)
+                if 'Status' in inv_rows.columns and 'Amount Remaining' in inv_rows.columns:
+                    open_rows = inv_rows[inv_rows['Status'].str.strip().str.lower() == 'open']
+                    open_ar = float(open_rows['Amount Remaining'].sum() or 0)
+
+        # Pipeline (open deals) — match deals by Company Name OR Company Name 2
+        pipeline_value = 0.0
+        deal_count = 0
+        if not open_deals.empty:
+            match = pd.Series(False, index=open_deals.index)
+            if 'Company Name' in open_deals.columns:
+                match = match | open_deals['Company Name'].isin(child_list)
+            if 'Company Name 2' in open_deals.columns:
+                match = match | open_deals['Company Name 2'].isin(child_list)
+            matched = open_deals[match]
+            if not matched.empty:
+                if 'Amount' in matched.columns:
+                    pipeline_value = float(matched['Amount'].sum() or 0)
+                deal_count = len(matched)
+
+        # Status based on days since last order
+        if days_since_last_order is None:
+            status = 'never'
+        elif days_since_last_order <= 30:
+            status = 'active'
+        elif days_since_last_order <= 90:
+            status = 'at_risk'
+        else:
+            status = 'dormant'
+
+        roster.append({
+            'account': account_name,
+            'is_parent': is_parent,
+            'child_count': len(child_list) if is_parent else 0,
+            'children': list(child_list),
+            'last_order_date': last_order_date if pd.notna(last_order_date) else None,
+            'most_recent_child': most_recent_child,
+            'days_since_last_order': days_since_last_order,
+            'ytd_revenue': ytd_revenue,
+            'current_quarter_rev': current_quarter_rev,
+            'open_ar': open_ar,
+            'pipeline_value': pipeline_value,
+            'deal_count': deal_count,
+            'status': status,
+        })
+
+    return roster
+
+
+def build_child_breakdown(parent_name, sales_orders_df, invoices_df, deals_df,
+                          parent_map, today=None):
+    """One row per child of a parent account, for the detail-page table."""
+    children = parent_map.get('parent_to_children', {}).get(parent_name, [])
+    if not children:
+        return []
+
+    if today is None:
+        try:
+            today = datetime.now(ZoneInfo('America/New_York')).replace(tzinfo=None)
+        except Exception:
+            today = datetime.now()
+    year_start = datetime(today.year, 1, 1)
+
+    so = sales_orders_df if sales_orders_df is not None else pd.DataFrame()
+    inv = invoices_df if invoices_df is not None else pd.DataFrame()
+    deals = deals_df if deals_df is not None else pd.DataFrame()
+
+    open_deals = pd.DataFrame()
+    if not deals.empty and 'Close Status' in deals.columns:
+        cs = deals['Close Status'].fillna('').astype(str).str.strip().str.lower()
+        open_deals = deals[~cs.isin(['won', 'lost', 'closed won', 'closed lost'])].copy()
+
+    rows = []
+    for child in children:
+        last_order = None
+        days_since = None
+        if not so.empty and 'Corrected Customer Name' in so.columns and 'Order Start Date' in so.columns:
+            c_rows = so[so['Corrected Customer Name'] == child].dropna(subset=['Order Start Date'])
+            if not c_rows.empty:
+                last_order = c_rows['Order Start Date'].max()
+                try:
+                    days_since = (today - pd.Timestamp(last_order).to_pydatetime()).days
+                except Exception:
+                    days_since = None
+
+        ytd_rev = 0.0
+        open_ar = 0.0
+        if not inv.empty and 'Corrected Customer' in inv.columns:
+            inv_rows = inv[inv['Corrected Customer'] == child]
+            if not inv_rows.empty:
+                if 'Date' in inv_rows.columns and 'Amount' in inv_rows.columns:
+                    ytd_rows = inv_rows[inv_rows['Date'] >= year_start]
+                    ytd_rev = float(ytd_rows['Amount'].sum() or 0)
+                if 'Status' in inv_rows.columns and 'Amount Remaining' in inv_rows.columns:
+                    open_rows = inv_rows[inv_rows['Status'].str.strip().str.lower() == 'open']
+                    open_ar = float(open_rows['Amount Remaining'].sum() or 0)
+
+        pipeline = 0.0
+        deal_count = 0
+        if not open_deals.empty:
+            match = pd.Series(False, index=open_deals.index)
+            if 'Company Name' in open_deals.columns:
+                match = match | (open_deals['Company Name'] == child)
+            if 'Company Name 2' in open_deals.columns:
+                match = match | (open_deals['Company Name 2'] == child)
+            matched = open_deals[match]
+            if not matched.empty:
+                if 'Amount' in matched.columns:
+                    pipeline = float(matched['Amount'].sum() or 0)
+                deal_count = len(matched)
+
+        if days_since is None:
+            status = 'never'
+        elif days_since <= 30:
+            status = 'active'
+        elif days_since <= 90:
+            status = 'at_risk'
+        else:
+            status = 'dormant'
+
+        rows.append({
+            'child': child,
+            'last_order_date': last_order if pd.notna(last_order) else None,
+            'days_since_last_order': days_since,
+            'ytd_revenue': ytd_rev,
+            'open_ar': open_ar,
+            'pipeline_value': pipeline,
+            'deal_count': deal_count,
+            'status': status,
+        })
+
+    return rows
+
+
 # ========== QBR SECTION FUNCTIONS ==========
 
 def render_pending_orders_section(customer_orders):
