@@ -12184,11 +12184,73 @@ def calculate_period_metrics(df, customer_col):
 
 def render_product_forecasting_tool():
     """Main render function for Product Forecasting Tool"""
-    
+
     st.title("📦 Product Forecasting Tool")
     st.caption("Quantity-based product pipeline analysis with actuals and pending orders")
-    
-    # Load data
+
+    # =========================================================================
+    # FILTER UI — show BEFORE loading data so user can configure first
+    # =========================================================================
+    ALLOWED_REPS = ['All Reps', 'Jake Lynch', 'Brad Sherman', 'Lance Mitton',
+                    'Alex Gonzalez', 'Dave Borkowski', 'Kyle Bissell', 'Owen Labombard']
+
+    KNOWN_CATEGORIES = sorted([
+        'Metal Cartridges', 'Plastic Cartridges', 'Glass Containers', 'Plastic Containers',
+        'Concentrate Packaging', 'Flower Packaging', 'Labels', 'Caps & Closures',
+        'Boxes', 'Tubes', 'Bags', 'Other'
+    ])
+
+    KNOWN_STATUSES = ['Commit', 'Expect', 'Best Case', 'Opportunity', 'Closed Won', 'Closed Lost']
+
+    st.markdown("### Configure Forecast")
+    st.caption("Select your filters below, then click **Run Forecast** to load data.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        pf_rep = st.selectbox("SALES REP", ALLOWED_REPS, key="pf_rep_selector")
+    with col2:
+        pf_categories = st.multiselect(
+            "PRODUCT CATEGORY", KNOWN_CATEGORIES,
+            placeholder="All Categories", key="pf_category_selector"
+        )
+    with col3:
+        pf_statuses = st.multiselect(
+            "DEAL STATUS", KNOWN_STATUSES,
+            placeholder="All Statuses", key="pf_status_selector"
+        )
+
+    col_period, _ = st.columns([1, 2])
+    with col_period:
+        pf_period = st.selectbox(
+            "TIME PERIOD",
+            ["This Quarter", "This Month", "This Year", "Next Quarter",
+             "Next 6 Months", "All Time", "Custom Range"],
+            key="pf_period_type"
+        )
+
+    pf_custom_start = None
+    pf_custom_end = None
+    if pf_period == "Custom Range":
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            pf_custom_start = st.date_input("Start Date", key="pf_custom_start")
+        with cc2:
+            pf_custom_end = st.date_input("End Date", key="pf_custom_end")
+
+    st.markdown("")
+    run_clicked = st.button("🚀 Run Forecast", type="primary", use_container_width=True, key="pf_run_btn")
+
+    # Only load + render if user has clicked Run in this session
+    if run_clicked:
+        st.session_state["pf_has_run"] = True
+
+    if not st.session_state.get("pf_has_run", False):
+        st.info("👆 Choose your filters above and click **Run Forecast** to generate the analysis. Data loading can take 10-20 seconds.")
+        return
+
+    # =========================================================================
+    # DATA LOADING — only runs after user clicks Run Forecast
+    # =========================================================================
     with qbr_loading("Loading pipeline data..."):
         deals_line_items_df = load_deals_line_items()
         deals_line_items_df = process_deals_line_items(deals_line_items_df)
@@ -12370,63 +12432,14 @@ def render_product_forecasting_tool():
                     'Alex Gonzalez', 'Dave Borkowski', 'Kyle Bissell']
     
     if 'Deal Owner' in deals_line_items_df.columns:
-        rep_list = deals_line_items_df['Deal Owner'].dropna().unique().tolist()
-        rep_list = [r for r in rep_list if r in ALLOWED_REPS]
-        rep_list = ["All Reps"] + sorted(rep_list)
-    else:
-        rep_list = ["All Reps"]
-    
-    categories = sorted(deals_line_items_df['Product Category'].dropna().unique().tolist())
-    
-    # Close Status options
-    if 'Close Status' in deals_line_items_df.columns:
-        status_options = sorted(deals_line_items_df['Close Status'].dropna().unique().tolist())
-    else:
-        status_options = []
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        selected_rep = st.selectbox("SALES REP", rep_list, key="pf_rep_selector")
-    
-    with col2:
-        selected_categories = st.multiselect(
-            "PRODUCT CATEGORY", 
-            categories, 
-            placeholder="All Categories",
-            key="pf_category_selector"
-        )
-    
-    with col3:
-        selected_statuses = st.multiselect(
-            "DEAL STATUS", 
-            status_options, 
-            placeholder="All Statuses",
-            key="pf_status_selector"
-        )
-    
-    # Date Filter
-    st.markdown("""
-        <div style="
-            background: linear-gradient(90deg, #0f172a 0%, #1e293b 100%);
-            padding: 0.75rem 1.5rem;
-            border-radius: 10px;
-            border-left: 4px solid #f59e0b;
-            margin: 1rem 0;
-        ">
-            <h3 style="color: #f1f5f9; margin: 0; font-size: 1.1rem; border: none !important;">📅 Date Range Filter</h3>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    col_period, col_range = st.columns([1, 2])
-    
-    with col_period:
-        period_type = st.selectbox(
-            "TIME PERIOD",
-            ["All Time", "This Month", "This Quarter", "This Year", "Next Quarter", "Next 6 Months", "Custom Range"],
-            key="pf_period_type"
-        )
-    
+        pass  # rep_list no longer needed (filters defined at top)
+
+    # Read filter values from session state (set by widgets at top of function)
+    selected_rep = st.session_state.get("pf_rep_selector", "All Reps")
+    selected_categories = st.session_state.get("pf_category_selector", [])
+    selected_statuses = st.session_state.get("pf_status_selector", [])
+    period_type = st.session_state.get("pf_period_type", "All Time")
+
     # Calculate date range
     today = datetime.now()
     
@@ -12473,43 +12486,20 @@ def render_product_forecasting_tool():
         end_date = None
         date_label = "Custom"
     
-    with col_range:
-        if period_type == "Custom Range":
-            date_col1, date_col2 = st.columns(2)
-            with date_col1:
-                custom_start = st.date_input("START DATE", value=today - timedelta(days=90), key="pf_custom_start")
-            with date_col2:
-                custom_end = st.date_input("END DATE", value=today + timedelta(days=90), key="pf_custom_end")
+    if period_type == "Custom Range":
+        # Values already captured by top-of-function date inputs
+        custom_start = st.session_state.get("pf_custom_start")
+        custom_end = st.session_state.get("pf_custom_end")
+        if custom_start and custom_end:
             start_date = datetime.combine(custom_start, datetime.min.time())
             end_date = datetime.combine(custom_end, datetime.max.time())
             date_label = f"{custom_start.strftime('%b %d, %Y')} - {custom_end.strftime('%b %d, %Y')}"
-        else:
-            if start_date and end_date:
-                st.markdown(f"""
-                    <div style="
-                        background: #1e293b;
-                        padding: 0.75rem 1rem;
-                        border-radius: 8px;
-                        margin-top: 1.5rem;
-                        color: #94a3b8;
-                    ">
-                        <span style="color: #f59e0b; font-weight: 600;">📆 {date_label}</span><br>
-                        <span style="font-size: 0.85rem;">{start_date.strftime('%b %d, %Y')} → {end_date.strftime('%b %d, %Y')}</span>
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                    <div style="
-                        background: #1e293b;
-                        padding: 0.75rem 1rem;
-                        border-radius: 8px;
-                        margin-top: 1.5rem;
-                        color: #94a3b8;
-                    ">
-                        <span style="color: #f59e0b; font-weight: 600;">📆 All Time</span><br>
-                        <span style="font-size: 0.85rem;">No date filter applied</span>
-                    </div>
-                """, unsafe_allow_html=True)
+
+    # Show active filter summary
+    if start_date and end_date:
+        st.info(f"📆 **{date_label}** · {start_date.strftime('%b %d, %Y')} → {end_date.strftime('%b %d, %Y')} · Rep: **{selected_rep}**")
+    else:
+        st.info(f"📆 **{date_label}** · No date filter · Rep: **{selected_rep}**")
     
     # =========================================================================
     # APPLY FILTERS
