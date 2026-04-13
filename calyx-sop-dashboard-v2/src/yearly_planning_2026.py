@@ -3743,6 +3743,49 @@ def get_inventory_for_skus(inventory_df, target_skus):
     return inventory_by_sku
 
 
+from contextlib import contextmanager
+
+@contextmanager
+def qbr_loading(message="Loading data..."):
+    """Context manager that shows a friendly explainer banner + spinner during loads.
+
+    Usage:
+        with qbr_loading("Crunching invoice history..."):
+            data = load_expensive_data()
+    """
+    placeholder = st.empty()
+    placeholder.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+        border: 1px solid #93c5fd;
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin: 16px 0;
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
+    ">
+        <div style="font-size: 2rem; line-height: 1;">⏳</div>
+        <div style="flex: 1;">
+            <div style="font-size: 1rem; font-weight: 700; color: #1e3a8a; margin-bottom: 6px;">
+                {message}
+            </div>
+            <div style="font-size: 0.88rem; color: #1e40af; line-height: 1.5;">
+                Hey there — believe it or not, this pulls from <strong>a lot</strong> of data.
+                We're parsing historical line-item reports, normalizing SKUs, matching customers,
+                and building analytics across multiple sheets. It's a lot of work, so give it a few seconds. 🚀
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    try:
+        with st.spinner(message):
+            yield
+    finally:
+        placeholder.empty()
+
+
 @st.cache_data(ttl=3600, show_spinner="Loading QBR data...")
 def load_qbr_data():
     """Load all data needed for QBR generation"""
@@ -6810,7 +6853,7 @@ def render_sku_order_history_tool():
     """, unsafe_allow_html=True)
     
     # Load data
-    with st.spinner("Loading data..."):
+    with qbr_loading("Loading SKU order history..."):
         invoice_line_items_df = load_google_sheets_data("Invoice Line Item", "A:Z", version=CACHE_VERSION, silent=True)
         sku_display_names = load_sku_display_names()
     
@@ -7980,7 +8023,7 @@ def render_qbr_generator_content():
     st.caption("Generate Quarterly Business Review reports for customer meetings")
     
     # Load data
-    with st.spinner("Loading data..."):
+    with qbr_loading("Loading QBR data..."):
         sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df = load_qbr_data()
     
     # Check if data loaded
@@ -8598,7 +8641,7 @@ def render_qbr_generator_content():
     # FAST PATH: For Company Overview, use ALL data directly instead of looping per-customer
     if is_company_overview:
         # Use all filtered data directly - no per-customer filtering needed
-        with st.spinner(f"Loading company-wide data ({len(selected_customers)} accounts)..."):
+        with qbr_loading(f"Loading company-wide data ({len(selected_customers)} accounts)..."):
             all_orders = filtered_orders_df.copy() if not filtered_orders_df.empty else pd.DataFrame()
             all_invoices = filtered_invoices_df.copy() if not filtered_invoices_df.empty else pd.DataFrame()
             all_deals = filtered_deals_df.copy() if not filtered_deals_df.empty else pd.DataFrame()
@@ -10587,7 +10630,7 @@ def render_calyx_cure_forecast_section(deals_line_items_df, sales_order_line_ite
     
     if show_cure_forecast:
         # Load Raw Inventory data
-        with st.spinner("Loading inventory data..."):
+        with qbr_loading("Loading inventory data..."):
             raw_inventory_df = load_raw_inventory()
             inventory_by_sku = get_inventory_for_skus(raw_inventory_df, CALYX_CURE_CONFIG['TARGET_SKUS'])
         
@@ -11763,7 +11806,7 @@ def render_period_comparison_tool():
     st.caption("Compare two time periods and generate an executive narrative explaining the differences")
     
     # Load data
-    with st.spinner("Loading invoice data..."):
+    with qbr_loading("Loading invoice data..."):
         invoice_line_items_df = load_google_sheets_data("Invoice Line Item", "A:Z", version=CACHE_VERSION, silent=True)
     
     if invoice_line_items_df.empty:
@@ -11877,7 +11920,7 @@ def render_period_comparison_tool():
     
     # Generate comparison button
     if st.button("🔄 Generate Comparison Report", type="primary", use_container_width=True):
-        with st.spinner("Analyzing periods..."):
+        with qbr_loading("Analyzing periods..."):
             # Filter data for each period
             period1_df = invoice_line_items_df[
                 (invoice_line_items_df['Date'] >= pd.Timestamp(period1_start)) &
@@ -12146,7 +12189,7 @@ def render_product_forecasting_tool():
     st.caption("Quantity-based product pipeline analysis with actuals and pending orders")
     
     # Load data
-    with st.spinner("Loading pipeline data..."):
+    with qbr_loading("Loading pipeline data..."):
         deals_line_items_df = load_deals_line_items()
         deals_line_items_df = process_deals_line_items(deals_line_items_df)
     
@@ -12165,7 +12208,7 @@ def render_product_forecasting_tool():
     #          Actual Ship Date, Date Created, Date Billed, Date Closed, Customer Companyname,
     #          HubSpot Pipeline, Calyx | Item Type, Status
     # =========================================================================
-    with st.spinner("Loading sales order line items..."):
+    with qbr_loading("Loading sales order line items..."):
         sales_order_line_items_df = load_google_sheets_data("Sales Order Line Item", "A:Z", version=CACHE_VERSION, silent=True)
         
         if not sales_order_line_items_df.empty:
@@ -12215,7 +12258,7 @@ def render_product_forecasting_tool():
     # LOAD INVOICE LINE ITEMS (for YTD Actuals by SKU)
     # Same pattern as QBR section - reference load_qbr_data() logic
     # =========================================================================
-    with st.spinner("Loading invoice line items..."):
+    with qbr_loading("Loading invoice line items..."):
         invoice_line_items_df = load_google_sheets_data("Invoice Line Item", "A:Z", version=CACHE_VERSION, silent=True)
         
         if not invoice_line_items_df.empty:
