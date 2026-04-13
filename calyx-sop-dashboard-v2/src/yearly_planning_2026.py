@@ -3573,6 +3573,7 @@ def generate_combined_summary_html(customers_data, rep_name, date_label="All Tim
 
 # ========== DATA LOADING ==========
 @st.cache_data
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_google_sheets_data(sheet_name, range_name, version=CACHE_VERSION, silent=False):
     """Load data from Google Sheets with caching"""
     try:
@@ -3742,6 +3743,7 @@ def get_inventory_for_skus(inventory_df, target_skus):
     return inventory_by_sku
 
 
+@st.cache_data(ttl=3600, show_spinner="Loading QBR data...")
 def load_qbr_data():
     """Load all data needed for QBR generation"""
     
@@ -9128,6 +9130,7 @@ def render_qbr_generator_content():
 
 # ========== PRODUCT FORECASTING TOOL ==========
 
+@st.cache_data(ttl=3600, show_spinner="Loading deals line items...")
 def load_deals_line_items():
     """Load Deals Line Item data from Google Sheets - headers in Row 2"""
     try:
