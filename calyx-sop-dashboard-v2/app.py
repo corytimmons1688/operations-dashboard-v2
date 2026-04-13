@@ -6,7 +6,7 @@ Unified Sales & Operations Planning and Quality Management System
 Sections:
 - S&OP: Sales Rep View, Operations View, Scenario Planning, PO Forecast, Deliveries
 - Quality: NC Dashboard (Status, Aging, Cost, Customer, Pareto Analysis)
-- Revenue Snapshots: Q4, Q1, 2026 Yearly Planning
+- Revenue Snapshots: Q4, Q1, QBR Generator
 - Revenue Operations Playground: QBR Generator & Ad-hoc Analysis
 
 Author: Xander @ Calyx Containers
@@ -408,13 +408,13 @@ def render_sidebar():
             "Planning",
             options=[
                 "S&OP Planning",
-                "2026 Yearly Planning",
+                "QBR Generator",
             ],
             label_visibility="collapsed",
             key="main_nav_planning",
             format_func=lambda x: {
                 "S&OP Planning":       "📋  S&OP Planning",
-                "2026 Yearly Planning": "📅  2026 Yearly Plan",
+                "QBR Generator": "📄  QBR Generator",
             }.get(x, x)
         )
 
@@ -497,7 +497,7 @@ def render_sidebar():
     }
     planning_map = {
         "S&OP Planning": "📊 S&OP Planning",
-        "2026 Yearly Planning": "📅 2026 Yearly Planning",
+        "QBR Generator": "📄 QBR Generator",
     }
     ops_map = {
         "Quality Management": "🛡️ Quality Management",
@@ -788,23 +788,23 @@ def render_q2_revenue_section():
 
 
 def render_2026_yearly_planning_section():
-    """Render 2026 Yearly Planning section."""
+    """Render QBR Generator section."""
     if YEARLY_MODULE_LOADED:
         try:
             render_yearly_planning_2026()
         except Exception as e:
-            st.error(f"Error loading 2026 Yearly Planning: {str(e)}")
+            st.error(f"Error loading QBR Generator: {str(e)}")
             import traceback
             st.code(traceback.format_exc())
     else:
         st.markdown("""
         <div style='text-align: center; padding: 15px; background: linear-gradient(135deg, #ec4899 0%, #db2777 100%); 
                      color: white; border-radius: 16px; margin-bottom: 25px; box-shadow: 0 10px 30px rgba(236, 72, 153, 0.3);'>
-            <h2 style='margin: 0; color: white !important;'>📅 2026 Yearly Planning</h2>
+            <h2 style='margin: 0; color: white !important;'>📄 QBR Generator</h2>
             <p style='font-size: 0.9rem; margin: 8px 0 0 0; opacity: 0.9; color: white !important;'>Annual Strategic Planning & Capacity</p>
         </div>
         """, unsafe_allow_html=True)
-        st.info("📌 **2026 Yearly Planning module not yet loaded.**")
+        st.info("📌 **QBR Generator module not yet loaded.**")
 
 
 # =============================================================================
@@ -872,7 +872,7 @@ def main():
         render_quality_section_wrapper()
     elif section == "📉 Q4 Revenue Snapshot":
         render_q4_revenue_section()
-    elif section == "📅 2026 Yearly Planning":
+    elif section == "📄 QBR Generator":
         render_2026_yearly_planning_section()
     elif section == "🎮 Revenue Operations Playground":
         render_rev_ops_playground_section()
