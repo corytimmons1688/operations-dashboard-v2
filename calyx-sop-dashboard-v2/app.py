@@ -311,13 +311,108 @@ def inject_custom_css():
 # SIDEBAR NAVIGATION
 # =============================================================================
 def render_sidebar():
-    """Render a clean SaaS-grade sidebar — dark navy style."""
+    """Render a clean SaaS-grade sidebar — button-based navigation."""
+
+    # Initialize active section (single source of truth)
+    if "active_section" not in st.session_state:
+        st.session_state.active_section = "📈 Q2 Revenue Snapshot"
+    if "q2_view" not in st.session_state:
+        st.session_state.q2_view = "Team Overview"
+
+    # Inject nav button styles — scoped to sidebar only
+    st.markdown("""
+    <style>
+    /* Nav buttons — full-width rectangular cards */
+    [data-testid="stSidebar"] .nav-btn .stButton > button {
+        width: 100% !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+        background: transparent !important;
+        color: #94a3b8 !important;
+        border: 1px solid transparent !important;
+        border-radius: 8px !important;
+        padding: 10px 14px !important;
+        font-weight: 500 !important;
+        font-size: 0.85rem !important;
+        box-shadow: none !important;
+        margin: 2px 0 !important;
+    }
+    [data-testid="stSidebar"] .nav-btn .stButton > button:hover {
+        background: rgba(255,255,255,0.04) !important;
+        border-color: rgba(255,255,255,0.06) !important;
+        color: #e2e8f0 !important;
+    }
+    [data-testid="stSidebar"] .nav-btn-active .stButton > button {
+        background: rgba(99,102,241,0.18) !important;
+        border: 1px solid rgba(129,140,248,0.35) !important;
+        color: #e0e7ff !important;
+        font-weight: 600 !important;
+        box-shadow: 0 2px 8px rgba(99,102,241,0.15) !important;
+    }
+    [data-testid="stSidebar"] .nav-btn-active .stButton > button:hover {
+        background: rgba(99,102,241,0.25) !important;
+    }
+    /* Sub-nav — indented with left border */
+    [data-testid="stSidebar"] .nav-sub .stButton > button {
+        margin-left: 16px !important;
+        width: calc(100% - 16px) !important;
+        border-left: 2px solid rgba(129,140,248,0.25) !important;
+        border-radius: 0 6px 6px 0 !important;
+        padding-left: 14px !important;
+        font-size: 0.82rem !important;
+    }
+    [data-testid="stSidebar"] .nav-sub-active .stButton > button {
+        background: rgba(99,102,241,0.18) !important;
+        border-left-color: #818cf8 !important;
+        color: #e0e7ff !important;
+        font-weight: 600 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+    def nav_button(label, section_key, css_class="nav-btn"):
+        """Render a nav button. Returns True if clicked."""
+        active = (st.session_state.active_section == section_key)
+        wrapper = f"{css_class}-active" if active else css_class
+        st.markdown(f'<div class="{wrapper}">', unsafe_allow_html=True)
+        clicked = st.button(label, key=f"navbtn_{section_key}", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        if clicked:
+            st.session_state.active_section = section_key
+            st.rerun()
+        return active
+
+    def sub_button(label, view_key):
+        """Render a sub-nav button (Q2 views). Returns True if clicked."""
+        active = (st.session_state.q2_view == view_key)
+        wrapper = "nav-sub-active" if active else "nav-sub"
+        st.markdown(f'<div class="{wrapper}">', unsafe_allow_html=True)
+        clicked = st.button(label, key=f"subbtn_{view_key}", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        if clicked:
+            st.session_state.q2_view = view_key
+            st.session_state.active_section = "📈 Q2 Revenue Snapshot"
+            st.rerun()
+
+    def section_label(text, color):
+        st.markdown(f"""
+        <p style="
+            color: {color};
+            font-size: 0.62rem;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            margin: 18px 0 4px 14px;
+            padding: 0;
+        ">{text}</p>
+        """, unsafe_allow_html=True)
+
     with st.sidebar:
-        # Brand header — Calyx Containers logo block
+        # Brand header
         st.markdown("""
         <div style="
             padding: 20px 16px 20px 16px;
-            margin-bottom: 16px;
+            margin-bottom: 8px;
             border-bottom: 1px solid rgba(255,255,255,0.06);
         ">
             <div style="display: flex; align-items: center; gap: 12px;">
@@ -337,136 +432,35 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
 
-        # Nav section label — INSIGHTS / REVENUE
-        st.markdown("""
-        <p style="
-            color: #3b82f6;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-            margin: 0 0 6px 16px;
-            padding: 0;
-        ">Revenue</p>
-        """, unsafe_allow_html=True)
+        # REVENUE
+        section_label("Revenue", "#3b82f6")
+        q2_active = nav_button("📈  Q2 2026 Forecast", "📈 Q2 Revenue Snapshot")
 
-        # Navigation — current quarter
-        section = st.radio(
-            "Navigation",
-            options=["Q2 2026 Forecast"],
-            label_visibility="collapsed",
-            key="main_nav",
-            format_func=lambda x: "📈  Q2 2026 Forecast"
-        )
+        # Q2 sub-nav — only shown when Q2 is active
+        if q2_active:
+            sub_button("👥 Team Overview", "Team Overview")
+            sub_button("👤 Individual Rep", "Individual Rep")
+            sub_button("📊 CRO Scorecard", "CRO Scorecard")
 
-        # Q2 sub-navigation — indented via CSS targeting the specific radio key
-        if section == "Q2 2026 Forecast":
-            st.markdown("""
-            <style>
-            /* Indent the Q2 sub-nav radio group */
-            [data-testid="stSidebar"] [data-testid="element-container"]:has([data-testid="stRadio"] [key="q2_app_view_selector"]),
-            [data-testid="stSidebar"] div:has(> [data-testid="stRadio"] div[data-baseweb="radio"] + div[data-baseweb="radio"] + div[data-baseweb="radio"]) {
-                margin-left: 18px !important;
-                padding-left: 12px !important;
-                border-left: 2px solid rgba(129,140,248,0.3) !important;
-                margin-top: -8px !important;
-                margin-bottom: 4px !important;
-            }
-            </style>
-            """, unsafe_allow_html=True)
-            q2_view = st.radio(
-                "Q2 View",
-                options=["Team Overview", "Individual Rep", "CRO Scorecard"],
-                label_visibility="collapsed",
-                key="q2_app_view_selector",
-                format_func=lambda x: {
-                    "Team Overview": "👥 Team Overview",
-                    "Individual Rep": "👤 Individual Rep",
-                    "CRO Scorecard": "📊 CRO Scorecard",
-                }.get(x, x)
-            )
+        # PAST QUARTERS
+        section_label("Past Quarters", "#06b6d4")
+        nav_button("📊  Q1 2026", "🎯 Q1 2026 Review")
+        nav_button("📉  Q4 2025", "📉 Q4 Revenue Snapshot")
 
-        # Past quarters section
-        st.markdown("""
-        <p style="
-            color: #06b6d4;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-            margin: 20px 0 6px 16px;
-            padding: 0;
-        ">Past Quarters</p>
-        """, unsafe_allow_html=True)
+        # PLANNING
+        section_label("Planning", "#a78bfa")
+        nav_button("📋  S&OP Planning", "📊 S&OP Planning")
+        nav_button("📄  QBR Generator", "📄 QBR Generator")
 
-        section_hist = st.radio(
-            "History",
-            options=["Q1 2026 Review", "Q4 2025 Review"],
-            label_visibility="collapsed",
-            key="main_nav_history",
-            format_func=lambda x: {
-                "Q1 2026 Review": "📊  Q1 2026",
-                "Q4 2025 Review": "📉  Q4 2025",
-            }.get(x, x)
-        )
+        # OPERATIONS
+        section_label("Operations", "#10b981")
+        nav_button("🛡️  Quality Management", "🛡️ Quality Management")
+        nav_button("🎮  Rev Ops Playground", "🎮 Revenue Operations Playground")
 
-        # Planning section
-        st.markdown("""
-        <p style="
-            color: #a78bfa;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-            margin: 20px 0 6px 16px;
-            padding: 0;
-        ">Planning</p>
-        """, unsafe_allow_html=True)
+        # Spacer
+        st.markdown('<div style="height: 20px;"></div>', unsafe_allow_html=True)
 
-        section2 = st.radio(
-            "Planning",
-            options=[
-                "S&OP Planning",
-                "QBR Generator",
-            ],
-            label_visibility="collapsed",
-            key="main_nav_planning",
-            format_func=lambda x: {
-                "S&OP Planning":       "📋  S&OP Planning",
-                "QBR Generator": "📄  QBR Generator",
-            }.get(x, x)
-        )
-
-        # Operations section
-        st.markdown("""
-        <p style="
-            color: #10b981;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-            margin: 20px 0 6px 16px;
-            padding: 0;
-        ">Operations</p>
-        """, unsafe_allow_html=True)
-
-        section3 = st.radio(
-            "Operations",
-            options=[
-                "Quality Management",
-                "Rev Ops Playground",
-            ],
-            label_visibility="collapsed",
-            key="main_nav_ops",
-            format_func=lambda x: {
-                "Quality Management": "🛡️  Quality Management",
-                "Rev Ops Playground": "🎮  Rev Ops Playground",
-            }.get(x, x)
-        )
-
-        st.markdown("""<div style="height: 16px;"></div>""", unsafe_allow_html=True)
-
-        # Quick info cards — compact
+        # MST time card
         current_time = get_mst_time()
         st.markdown(f"""
         <div style="
@@ -483,14 +477,14 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
 
-        st.markdown("""<div style="height: 8px;"></div>""", unsafe_allow_html=True)
+        st.markdown('<div style="height: 8px;"></div>', unsafe_allow_html=True)
 
         # Refresh
         if st.button("↻  Refresh Data", use_container_width=True, key="refresh_btn"):
             st.cache_data.clear()
             st.rerun()
 
-        # Version
+        # Footer
         st.markdown("""
         <div style="
             text-align: center;
@@ -502,61 +496,10 @@ def render_sidebar():
         </div>
         """, unsafe_allow_html=True)
 
-    # Determine which section is active — only one radio group should be "active"
-    # Streamlit keeps state for all radio groups independently, so we use a
-    # session-state flag to track which group was last clicked.
-    # On each run, check which radios changed from their defaults.
+    # Sync q2_view with the legacy key used by q2_revenue_snapshot module
+    st.session_state["q2_app_view_selector"] = st.session_state.q2_view
 
-    # Map sections to a canonical key
-    revenue_map = {
-        "Q2 2026 Forecast": "📈 Q2 Revenue Snapshot",
-    }
-    history_map = {
-        "Q1 2026 Review": "🎯 Q1 2026 Review",
-        "Q4 2025 Review": "📉 Q4 Revenue Snapshot",
-    }
-    planning_map = {
-        "S&OP Planning": "📊 S&OP Planning",
-        "QBR Generator": "📄 QBR Generator",
-    }
-    ops_map = {
-        "Quality Management": "🛡️ Quality Management",
-        "Rev Ops Playground": "🎮 Revenue Operations Playground",
-    }
-
-    # Track last active group
-    if "last_nav_group" not in st.session_state:
-        st.session_state.last_nav_group = "revenue"
-
-    # Detect which group the user just interacted with
-    prev_revenue = st.session_state.get("_prev_main_nav", section)
-    prev_history = st.session_state.get("_prev_main_nav_history", section_hist)
-    prev_planning = st.session_state.get("_prev_main_nav_planning", section2)
-    prev_ops = st.session_state.get("_prev_main_nav_ops", section3)
-
-    if section != prev_revenue:
-        st.session_state.last_nav_group = "revenue"
-    elif section_hist != prev_history:
-        st.session_state.last_nav_group = "history"
-    elif section2 != prev_planning:
-        st.session_state.last_nav_group = "planning"
-    elif section3 != prev_ops:
-        st.session_state.last_nav_group = "ops"
-
-    st.session_state["_prev_main_nav"] = section
-    st.session_state["_prev_main_nav_history"] = section_hist
-    st.session_state["_prev_main_nav_planning"] = section2
-    st.session_state["_prev_main_nav_ops"] = section3
-
-    group = st.session_state.last_nav_group
-    if group == "revenue":
-        return revenue_map.get(section, "📈 Q2 Revenue Snapshot")
-    elif group == "history":
-        return history_map.get(section_hist, "🎯 Q1 2026 Review")
-    elif group == "planning":
-        return planning_map.get(section2, "📊 S&OP Planning")
-    else:
-        return ops_map.get(section3, "🛡️ Quality Management")
+    return st.session_state.active_section
 
 
 # =============================================================================
