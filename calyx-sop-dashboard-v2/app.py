@@ -809,36 +809,47 @@ def main():
     inject_custom_css()
     section = render_sidebar()
 
-    # Cleanup: remove any stale fixed-position elements from previous pages
-    # (like the Q2 sticky forecast bar) so they don't bleed into other views
-    if section != "📈 Q2 Revenue Snapshot":
+    # Detect section change — force a clean rerun when switching sections
+    # This prevents DOM bleed between different dashboard views
+    prev = st.session_state.get("_last_rendered_section")
+    if prev != section:
+        st.session_state["_last_rendered_section"] = section
+        # On section change, clear any persistent DOM elements from prior view
         st.markdown("""
         <script>
         (function() {
-            const stale = window.parent.document.querySelectorAll('#q2-sticky-forecast-bar');
-            stale.forEach(el => el.remove());
+            const doc = window.parent.document;
+            // Remove any known fixed/sticky elements from other pages
+            doc.querySelectorAll('#q2-sticky-forecast-bar').forEach(el => el.remove());
         })();
         </script>
+        """, unsafe_allow_html=True)
+
+    # Belt-and-suspenders: always hide the Q2 sticky bar when not on Q2
+    if section != "📈 Q2 Revenue Snapshot":
+        st.markdown("""
         <style>
         #q2-sticky-forecast-bar { display: none !important; }
         </style>
         """, unsafe_allow_html=True)
 
-    # Map the navigation options
-    if section == "📈 Q2 Revenue Snapshot":
-        render_q2_revenue_section()
-    elif section == "🎯 Q1 2026 Review":
-        render_q1_revenue_section()
-    elif section == "📊 S&OP Planning":
-        render_sop_section()
-    elif section == "🛡️ Quality Management":
-        render_quality_section_wrapper()
-    elif section == "📉 Q4 Revenue Snapshot":
-        render_q4_revenue_section()
-    elif section == "📄 QBR Generator":
-        render_2026_yearly_planning_section()
-    elif section == "🎮 Revenue Operations Playground":
-        render_rev_ops_playground_section()
+    # Route into a single container so content clears cleanly between views
+    content_container = st.container()
+    with content_container:
+        if section == "📈 Q2 Revenue Snapshot":
+            render_q2_revenue_section()
+        elif section == "🎯 Q1 2026 Review":
+            render_q1_revenue_section()
+        elif section == "📊 S&OP Planning":
+            render_sop_section()
+        elif section == "🛡️ Quality Management":
+            render_quality_section_wrapper()
+        elif section == "📉 Q4 Revenue Snapshot":
+            render_q4_revenue_section()
+        elif section == "📄 QBR Generator":
+            render_2026_yearly_planning_section()
+        elif section == "🎮 Revenue Operations Playground":
+            render_rev_ops_playground_section()
 
 
 if __name__ == "__main__":
