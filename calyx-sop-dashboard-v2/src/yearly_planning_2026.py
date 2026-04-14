@@ -7246,24 +7246,35 @@ def compute_account_kpis(customers, bounds, sales_orders_df, invoices_df, deals_
     return result
 
 
-def build_customers_export_tuples(customers, sales_orders_df, invoices_df, deals_df, bounds):
-    """Build ``customers_data`` list of (name, orders, invoices, deals) tuples for generate_combined_qbr_html."""
+def build_customers_export_tuples(customers, sales_orders_df, invoices_df, deals_df, bounds,
+                                  invoice_line_items_df=None, ncr_df=None):
+    """Build the 6-tuple list expected by generate_qbr_html / generate_combined_qbr_html /
+    generate_combined_summary_html.
+
+    Each tuple: (customer_name, orders, invoices, deals, line_items, ncrs) — matches the
+    legacy QBR Generator's ``all_customers_data`` format exactly.
+    """
     tuples = []
     start, end, _ = bounds if bounds else (None, None, "")
     for c in customers:
         c_orders = pd.DataFrame()
         c_invoices = pd.DataFrame()
         c_deals = pd.DataFrame()
+        c_line_items = pd.DataFrame()
+        c_ncrs = pd.DataFrame()
+
         if sales_orders_df is not None and not sales_orders_df.empty \
                 and "Corrected Customer Name" in sales_orders_df.columns:
             c_orders = sales_orders_df[sales_orders_df["Corrected Customer Name"] == c].copy()
             if start is not None and "Order Start Date" in c_orders.columns:
                 c_orders = c_orders[(c_orders["Order Start Date"] >= start) & (c_orders["Order Start Date"] <= end)]
+
         if invoices_df is not None and not invoices_df.empty \
                 and "Corrected Customer" in invoices_df.columns:
             c_invoices = invoices_df[invoices_df["Corrected Customer"] == c].copy()
             if start is not None and "Date" in c_invoices.columns:
                 c_invoices = c_invoices[(c_invoices["Date"] >= start) & (c_invoices["Date"] <= end)]
+
         if deals_df is not None and not deals_df.empty:
             m = pd.Series(False, index=deals_df.index)
             if "Company Name" in deals_df.columns:
@@ -7271,7 +7282,20 @@ def build_customers_export_tuples(customers, sales_orders_df, invoices_df, deals
             if "Company Name 2" in deals_df.columns:
                 m = m | (deals_df["Company Name 2"] == c)
             c_deals = deals_df[m].copy()
-        tuples.append((c, c_orders, c_invoices, c_deals))
+
+        if invoice_line_items_df is not None and not invoice_line_items_df.empty \
+                and "Correct Customer" in invoice_line_items_df.columns:
+            c_line_items = invoice_line_items_df[invoice_line_items_df["Correct Customer"] == c].copy()
+            if start is not None and "Date" in c_line_items.columns:
+                c_line_items = c_line_items[(c_line_items["Date"] >= start) & (c_line_items["Date"] <= end)]
+
+        if ncr_df is not None and not ncr_df.empty:
+            if "Matched Customer" in ncr_df.columns:
+                c_ncrs = ncr_df[ncr_df["Matched Customer"] == c].copy()
+            if c_ncrs.empty and "Corrected Customer Name" in ncr_df.columns:
+                c_ncrs = ncr_df[ncr_df["Corrected Customer Name"] == c].copy()
+
+        tuples.append((c, c_orders, c_invoices, c_deals, c_line_items, c_ncrs))
     return tuples
 
 
@@ -7555,30 +7579,17 @@ def render_unified_account_overview(sales_orders_df, invoices_df, deals_df,
         "Custom Range"
     )
 
-    # ---- Export button ----
+    # ---- Export region ----
     with export_col:
         st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
-        customers_data = build_customers_export_tuples(
-            customers, sales_orders_df, invoices_df, deals_df, bounds,
-        )
-        try:
-            html_bytes = generate_combined_qbr_html(
-                customers_data,
-                selected_rep if selected_rep != "All Reps" else "Leadership",
-                date_label=bounds[2],
-            ).encode("utf-8")
-            safe_name = re.sub(r"[^A-Za-z0-9]+", "_", selected_account)[:40]
-            safe_period = re.sub(r"[^A-Za-z0-9]+", "_", bounds[2])[:20]
-            st.download_button(
-                "📥 Download",
-                data=html_bytes,
-                file_name=f"{safe_name}_QBR_{safe_period}.html",
-                mime="text/html",
-                key="ov_download",
-                use_container_width=True,
-            )
-        except Exception as e:
-            st.caption(f"Export unavailable: {e}")
+        st.caption("📥 Exports appear below")
+
+    _render_export_region(
+        selected_account, selected_rep, customers, is_parent,
+        bounds,
+        sales_orders_df, invoices_df, deals_df,
+        invoice_line_items_df, ncr_df,
+    )
 
     st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
@@ -7637,6 +7648,122 @@ def render_unified_account_overview(sales_orders_df, invoices_df, deals_df,
         customers, selected_rep, bounds,
         sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df,
     )
+
+
+def _render_export_region(account, rep, customers, is_parent, bounds,
+                          sales_orders_df, invoices_df, deals_df,
+                          invoice_line_items_df, ncr_df):
+    """Render the 3 legacy export options: aggregated summary, state-by-state,
+    and per-location individual reports.
+
+    When the account is a rolled-up parent, all three are offered. For a single
+    customer (standalone or parent-in-single-location-scope), just one
+    "Download Report" button is shown.
+    """
+    customers_data = build_customers_export_tuples(
+        customers, sales_orders_df, invoices_df, deals_df, bounds,
+        invoice_line_items_df=invoice_line_items_df, ncr_df=ncr_df,
+    )
+    if not customers_data:
+        return
+
+    rep_display = rep if rep and rep != "All Reps" else "Leadership"
+    period_label = bounds[2] if bounds else "All Time"
+    stamp = datetime.now().strftime("%Y%m%d")
+    safe_account = re.sub(r"[^A-Za-z0-9]+", "_", account)[:40]
+    safe_period = re.sub(r"[^A-Za-z0-9]+", "_", period_label)[:20]
+
+    st.markdown(
+        "<div style='background:#0f172a;border:1px solid #334155;border-radius:10px;"
+        "padding:14px 18px;margin:10px 0 6px 0;'>"
+        "<div style='color:#f1f5f9;font-size:0.95rem;font-weight:700;margin-bottom:10px;'>"
+        "📥 Export Options</div>",
+        unsafe_allow_html=True,
+    )
+
+    # Single customer path — one button
+    if len(customers_data) == 1:
+        name, orders, invs, deals, line_items, ncrs = customers_data[0]
+        try:
+            html_single = generate_qbr_html(
+                name, rep_display, orders, invs, deals, line_items, ncrs,
+                date_label=period_label,
+            )
+            st.download_button(
+                f"📄 Download Report — {name}",
+                data=html_single,
+                file_name=f"Account_Summary_{re.sub(r'[^A-Za-z0-9]+', '_', name)[:40]}_{stamp}.html",
+                mime="text/html",
+                key="ov_export_single",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.caption(f"Export unavailable: {e}")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    # Multi-child (parent roll-up) path — three options
+    col_agg, col_state = st.columns(2)
+    num_children = len(customers_data)
+
+    with col_agg:
+        try:
+            agg_html = generate_combined_summary_html(
+                customers_data, rep_display, date_label=period_label,
+            )
+            st.download_button(
+                f"📊 Aggregated Report ({num_children} locations)",
+                data=agg_html,
+                file_name=f"Aggregated_{safe_account}_{safe_period}_{stamp}.html",
+                mime="text/html",
+                key="ov_export_aggregated",
+                use_container_width=True,
+            )
+            st.caption("Rolled-up metrics + breakdown table")
+        except Exception as e:
+            st.caption(f"Aggregated export unavailable: {e}")
+
+    with col_state:
+        try:
+            state_html = generate_combined_qbr_html(
+                customers_data, rep_display, date_label=period_label,
+            )
+            st.download_button(
+                f"📑 State-by-State Report ({num_children})",
+                data=state_html,
+                file_name=f"StateByState_{safe_account}_{safe_period}_{stamp}.html",
+                mime="text/html",
+                key="ov_export_state",
+                use_container_width=True,
+            )
+            st.caption("Each location's full report, one file")
+        except Exception as e:
+            st.caption(f"State-by-state export unavailable: {e}")
+
+    # Per-location individual downloads
+    with st.expander(f"📄 Download Individual Reports ({num_children})"):
+        cols = st.columns(min(3, num_children))
+        for idx, (name, orders, invs, deals, line_items, ncrs) in enumerate(customers_data):
+            try:
+                h = generate_qbr_html(
+                    name, rep_display, orders, invs, deals, line_items, ncrs,
+                    date_label=period_label,
+                )
+                short = name[:24] + ("…" if len(name) > 24 else "")
+                with cols[idx % len(cols)]:
+                    st.download_button(
+                        f"📄 {short}",
+                        data=h,
+                        file_name=f"Account_Summary_{re.sub(r'[^A-Za-z0-9]+', '_', name)[:40]}_{stamp}.html",
+                        mime="text/html",
+                        key=f"ov_export_individual_{idx}",
+                        use_container_width=True,
+                    )
+            except Exception as e:
+                with cols[idx % len(cols)]:
+                    st.caption(f"{name}: {e}")
+
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_overview_sections(customers, rep, bounds, sales_orders_df, invoices_df,
