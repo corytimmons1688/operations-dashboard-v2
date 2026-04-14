@@ -4420,10 +4420,16 @@ def get_customer_deals(customer_name, rep_name, deals_df):
 
 
 def _crm_extract_parent(customer_name):
-    """Return the parent portion of a 'Parent : Child' name, or None.
+    """Return the parent portion of a customer name, or None if it's a standalone.
 
-    Standalone customers (no ' : ' delimiter) return None so callers can treat
-    them as non-rolled-up accounts.
+    Two strategies, in order:
+    1. Literal ``Parent : Child`` delimiter (HubSpot / NetSuite convention for
+       groups like "AYR Wellness, Inc. : Ayr Wellness (OH)").
+    2. Known MSO-parent prefix match for groups that appear in NetSuite as
+       flat names like "Curaleaf NJ", "TerrAscend PA", "Trulieve - Tampa" —
+       see ``_KNOWN_MSO_PARENTS``.
+
+    Returns None for standalone customers (no colon, no known-MSO match).
     """
     if not customer_name or pd.isna(customer_name):
         return None
@@ -4432,6 +4438,73 @@ def _crm_extract_parent(customer_name):
         parent = name.split(' : ')[0].strip()
         if parent:
             return parent
+    mso = _match_mso_parent(name)
+    if mso:
+        return mso
+    return None
+
+
+# Canonical MSO parent → list of name prefixes that should roll up under it.
+# All matching is case-insensitive; a customer name is classified as a child
+# when its normalized form STARTS WITH one of the aliases followed by a
+# separator character (space, dash, colon, paren, or the end of the string
+# with extra location text after). Exact matches against the parent are
+# treated as the parent itself, not as a child.
+_KNOWN_MSO_PARENTS = {
+    "Curaleaf": ["Curaleaf"],
+    "TerrAscend": ["TerrAscend", "Terrascend", "Terra Ascend"],
+    "Trulieve": ["Trulieve"],
+    "Verano": ["Verano"],
+    "Green Thumb Industries": ["Green Thumb Industries", "Green Thumb", "GTI"],
+    "Cresco Labs": ["Cresco Labs", "Cresco"],
+    "Columbia Care / Cannabist": ["Columbia Care", "Cannabist"],
+    "Jushi Holdings": ["Jushi Holdings", "Jushi"],
+    "Ascend Wellness Holdings": ["Ascend Wellness Holdings", "Ascend Wellness", "AWH"],
+    "AYR Wellness, Inc.": ["AYR Wellness, Inc.", "AYR Wellness", "Ayr Wellness", "AYR"],
+    "Acreage Holdings": ["Acreage Holdings", "Acreage"],
+    "Glass House Brands": ["Glass House Brands", "Glass House"],
+    "4Front Ventures": ["4Front Ventures", "4Front"],
+    "Planet 13": ["Planet 13"],
+    "MedMen": ["MedMen"],
+    "Schwazze": ["Schwazze"],
+    "Harvest Health & Recreation": ["Harvest Health", "Harvest HOC"],
+    "StateHouse Holdings": ["StateHouse Holdings", "StateHouse"],
+    "Holistic Industries": ["Holistic Industries"],
+    "Revolutionary Clinics": ["Revolutionary Clinics"],
+    "Parallel": ["Parallel Cannabis", "Surterra"],
+    "The Cannabist Company": ["The Cannabist Company"],
+    "Goodness Growth Holdings": ["Goodness Growth", "Vireo Health", "Vireo"],
+    "Lowell Farms": ["Lowell Farms", "Lowell Herb Co"],
+}
+
+
+def _match_mso_parent(customer_name):
+    """Return the canonical MSO parent for a flat customer name, or None.
+
+    The name is classified as a child when, after lowercasing and collapsing
+    whitespace, it STARTS WITH any alias followed by a separator (space, dash,
+    colon, comma, paren, slash) — or is ``<alias> <state-code>``.
+    An exact equality with the alias is treated as the parent itself, not a
+    child (so the parent doesn't get listed as a child of itself).
+    """
+    if not customer_name or pd.isna(customer_name):
+        return None
+    raw = str(customer_name).strip()
+    if not raw:
+        return None
+    name_lower = re.sub(r'\s+', ' ', raw.lower())
+    separators = (' ', '-', ':', ',', '(', '/', '.')
+    for canonical, aliases in _KNOWN_MSO_PARENTS.items():
+        for alias in aliases:
+            a_lower = alias.lower()
+            # Exact match → this IS the parent, not a child
+            if name_lower == a_lower:
+                return None
+            # Prefix match followed by a separator → this is a child location
+            if name_lower.startswith(a_lower):
+                rest = name_lower[len(a_lower):]
+                if rest and rest[0] in separators:
+                    return canonical
     return None
 
 
