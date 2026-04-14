@@ -7022,79 +7022,731 @@ def render_ncr_section(customer_ncrs, customer_orders, customer_name):
         st.info(f"📊 NCR rate of {ncr_rate:.1f}% - moderate. Monitor for patterns in issue types.")
 
 
+# =========================================================================
+# UNIFIED ACCOUNT OVERVIEW — period resolver, KPI calc, export builder
+# =========================================================================
+
+OV_PERIOD_OPTIONS = [
+    "All Time", "YTD", "This Quarter", "Last Year", "Last 90 Days", "Custom Range",
+]
+
+
+def compute_period_bounds(period_label, custom_start=None, custom_end=None, today=None):
+    """Return (start_date, end_date, label). ``start`` may be None to mean open-ended."""
+    if today is None:
+        try:
+            today = datetime.now(ZoneInfo("America/New_York")).replace(tzinfo=None)
+        except Exception:
+            today = datetime.now()
+    today = today.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if period_label == "All Time":
+        return None, None, "All Time"
+    if period_label == "YTD":
+        return datetime(today.year, 1, 1), today, f"YTD {today.year}"
+    if period_label == "This Quarter":
+        q_idx = (today.month - 1) // 3
+        start = datetime(today.year, q_idx * 3 + 1, 1)
+        return start, today, f"Q{q_idx + 1} {today.year}"
+    if period_label == "Last Year":
+        return datetime(today.year - 1, 1, 1), datetime(today.year - 1, 12, 31), f"FY {today.year - 1}"
+    if period_label == "Last 90 Days":
+        return today - timedelta(days=90), today, "Last 90 Days"
+    if period_label == "Custom Range":
+        if custom_start is None or custom_end is None:
+            return None, None, "Custom Range"
+        s = datetime.combine(custom_start, datetime.min.time()) if hasattr(custom_start, "year") else custom_start
+        e = datetime.combine(custom_end, datetime.min.time()) if hasattr(custom_end, "year") else custom_end
+        return s, e, f"{s.strftime('%b %d, %Y')} – {e.strftime('%b %d, %Y')}"
+    return None, None, period_label
+
+
+def compute_comparison_bounds(bounds, compare_mode):
+    """Given a (start, end, label) tuple and 'off'/'prior'/'yoy', return the comparison window."""
+    start, end, _ = bounds
+    if compare_mode == "off" or compare_mode is None:
+        return None
+    if start is None or end is None:
+        return None  # Can't compare against "All Time"
+    span_days = (end - start).days
+    if compare_mode == "prior":
+        c_end = start - timedelta(days=1)
+        c_start = c_end - timedelta(days=span_days)
+        return c_start, c_end, f"Prior {span_days + 1}d"
+    if compare_mode == "yoy":
+        try:
+            c_start = start.replace(year=start.year - 1)
+            c_end = end.replace(year=end.year - 1)
+        except ValueError:  # Feb 29 edge case
+            c_start = start - timedelta(days=365)
+            c_end = end - timedelta(days=365)
+        return c_start, c_end, f"{c_start.year}"
+    return None
+
+
+def _filter_df_by_date(df, date_col, bounds):
+    """Return df filtered to the bounds window; no-op if bounds start/end are None."""
+    if df is None or df.empty or date_col not in df.columns:
+        return df if df is not None else pd.DataFrame()
+    start, end, _ = bounds if bounds else (None, None, "")
+    out = df
+    if start is not None:
+        out = out[out[date_col] >= start]
+    if end is not None:
+        out = out[out[date_col] <= end]
+    return out
+
+
+def compute_account_kpis(customers, bounds, sales_orders_df, invoices_df, deals_df):
+    """Return a dict of KPI metrics for a list of customer names within the period bounds."""
+    result = {
+        "revenue": 0.0,
+        "pipeline": 0.0,
+        "open_ar": 0.0,
+        "last_order_date": None,
+        "most_recent_child": None,
+        "days_since_last_order": None,
+        "avg_order_value": 0.0,
+        "order_count": 0,
+        "deals_won_amt": 0.0,
+        "deals_won_count": 0,
+    }
+    if not customers:
+        return result
+
+    # Revenue + avg order value from invoices within bounds
+    if invoices_df is not None and not invoices_df.empty and "Corrected Customer" in invoices_df.columns:
+        inv = invoices_df[invoices_df["Corrected Customer"].isin(customers)]
+        if not inv.empty:
+            inv_p = _filter_df_by_date(inv, "Date", bounds)
+            if not inv_p.empty and "Amount" in inv_p.columns:
+                result["revenue"] = float(inv_p["Amount"].sum() or 0)
+                if "SO Number" in inv_p.columns:
+                    unique_so = inv_p["SO Number"].dropna().nunique()
+                    result["order_count"] = int(unique_so)
+                    result["avg_order_value"] = (
+                        result["revenue"] / unique_so if unique_so else 0.0
+                    )
+            # Open AR is NOT period-filtered (balance as-of now)
+            if "Status" in inv.columns and "Amount Remaining" in inv.columns:
+                open_inv = inv[inv["Status"].str.strip().str.lower() == "open"]
+                result["open_ar"] = float(open_inv["Amount Remaining"].sum() or 0)
+
+    # Last order date — period-filtered
+    if sales_orders_df is not None and not sales_orders_df.empty \
+            and "Corrected Customer Name" in sales_orders_df.columns \
+            and "Order Start Date" in sales_orders_df.columns:
+        so = sales_orders_df[sales_orders_df["Corrected Customer Name"].isin(customers)]
+        so_p = _filter_df_by_date(so, "Order Start Date", bounds).dropna(subset=["Order Start Date"])
+        if not so_p.empty:
+            idx = so_p["Order Start Date"].idxmax()
+            result["last_order_date"] = so_p.loc[idx, "Order Start Date"]
+            result["most_recent_child"] = so_p.loc[idx, "Corrected Customer Name"]
+            try:
+                today = datetime.now()
+                result["days_since_last_order"] = (
+                    today - pd.Timestamp(result["last_order_date"]).to_pydatetime()
+                ).days
+            except Exception:
+                pass
+
+    # Pipeline (open deals, not period-filtered) + Deals Won (period-filtered on Close Date)
+    if deals_df is not None and not deals_df.empty:
+        match = pd.Series(False, index=deals_df.index)
+        if "Company Name" in deals_df.columns:
+            match = match | deals_df["Company Name"].isin(customers)
+        if "Company Name 2" in deals_df.columns:
+            match = match | deals_df["Company Name 2"].isin(customers)
+        matched = deals_df[match]
+        if not matched.empty and "Close Status" in matched.columns:
+            cs = matched["Close Status"].fillna("").astype(str).str.strip().str.lower()
+            open_deals = matched[~cs.isin(["won", "lost", "closed won", "closed lost"])]
+            if not open_deals.empty and "Amount" in open_deals.columns:
+                result["pipeline"] = float(open_deals["Amount"].sum() or 0)
+            won = matched[cs.isin(["won", "closed won"])]
+            if not won.empty:
+                won_p = _filter_df_by_date(won, "Close Date", bounds) if "Close Date" in won.columns else won
+                if "Amount" in won_p.columns:
+                    result["deals_won_amt"] = float(won_p["Amount"].sum() or 0)
+                result["deals_won_count"] = int(len(won_p))
+
+    return result
+
+
+def build_customers_export_tuples(customers, sales_orders_df, invoices_df, deals_df, bounds):
+    """Build ``customers_data`` list of (name, orders, invoices, deals) tuples for generate_combined_qbr_html."""
+    tuples = []
+    start, end, _ = bounds if bounds else (None, None, "")
+    for c in customers:
+        c_orders = pd.DataFrame()
+        c_invoices = pd.DataFrame()
+        c_deals = pd.DataFrame()
+        if sales_orders_df is not None and not sales_orders_df.empty \
+                and "Corrected Customer Name" in sales_orders_df.columns:
+            c_orders = sales_orders_df[sales_orders_df["Corrected Customer Name"] == c].copy()
+            if start is not None and "Order Start Date" in c_orders.columns:
+                c_orders = c_orders[(c_orders["Order Start Date"] >= start) & (c_orders["Order Start Date"] <= end)]
+        if invoices_df is not None and not invoices_df.empty \
+                and "Corrected Customer" in invoices_df.columns:
+            c_invoices = invoices_df[invoices_df["Corrected Customer"] == c].copy()
+            if start is not None and "Date" in c_invoices.columns:
+                c_invoices = c_invoices[(c_invoices["Date"] >= start) & (c_invoices["Date"] <= end)]
+        if deals_df is not None and not deals_df.empty:
+            m = pd.Series(False, index=deals_df.index)
+            if "Company Name" in deals_df.columns:
+                m = m | (deals_df["Company Name"] == c)
+            if "Company Name 2" in deals_df.columns:
+                m = m | (deals_df["Company Name 2"] == c)
+            c_deals = deals_df[m].copy()
+        tuples.append((c, c_orders, c_invoices, c_deals))
+    return tuples
+
+
+def _fmt_money(v, compact=False):
+    if v is None or pd.isna(v):
+        return "—"
+    v = float(v)
+    if compact:
+        if abs(v) >= 1_000_000:
+            return f"${v / 1_000_000:.1f}M"
+        if abs(v) >= 1_000:
+            return f"${v / 1_000:.0f}K"
+    return f"${v:,.0f}"
+
+
+def _fmt_delta(current, compare):
+    if compare is None or compare == 0:
+        return ""
+    delta = current - compare
+    pct = (delta / abs(compare)) * 100 if compare else 0
+    sign = "+" if delta >= 0 else ""
+    color = "#10b981" if delta >= 0 else "#ef4444"
+    arrow = "▲" if delta >= 0 else "▼"
+    return (
+        f"<div style='margin-top:6px;font-size:0.78rem;color:{color};font-weight:600;'>"
+        f"{arrow} {sign}{_fmt_money(delta, compact=True)} ({sign}{pct:.1f}%)</div>"
+    )
+
+
+def _kpi_tile(label, value_html, delta_html=""):
+    return f"""
+    <div style="background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+                border: 1px solid #334155; border-radius: 12px; padding: 18px 20px;
+                min-height: 120px;">
+      <div style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em;
+                  font-weight:600;margin-bottom:8px;">{label}</div>
+      <div style="color:#f8fafc;font-size:1.6rem;font-weight:700;line-height:1.1;">{value_html}</div>
+      {delta_html}
+    </div>
+    """
+
+
+def _render_unified_css():
+    """One style block that forces readable text on every background the unified overview uses."""
+    st.markdown(
+        """
+        <style>
+        /* === Unified QBR overview visibility guard === */
+        /* Any light-background container must use dark text for its children. */
+        .qbr-light, .qbr-light * { color: #0f172a; }
+        .qbr-light h1, .qbr-light h2, .qbr-light h3, .qbr-light h4 { color: #0f172a; }
+        .qbr-muted { color: #475569 !important; }
+
+        /* Dark surfaces keep light text. */
+        .qbr-dark, .qbr-dark * { color: #f1f5f9; }
+        .qbr-dark .qbr-muted { color: #94a3b8 !important; }
+
+        /* Period chip row — rendered via st.radio horizontal */
+        div[data-testid="stHorizontalBlock"] label[data-baseweb="radio"] {
+            background: #1e293b; border: 1px solid #334155; border-radius: 999px;
+            padding: 6px 14px; margin-right: 8px; transition: all 0.15s;
+        }
+        div[data-testid="stHorizontalBlock"] label[data-baseweb="radio"]:hover {
+            border-color: #3b82f6; background: #334155;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_child_breakdown_table(parent_name, breakdown_rows):
+    if not breakdown_rows:
+        return
+    rows_html = ""
+    for row in breakdown_rows:
+        status_color = {
+            "active": "#10b981", "at_risk": "#f59e0b",
+            "dormant": "#ef4444", "never": "#64748b",
+        }.get(row["status"], "#64748b")
+        last = row["last_order_date"]
+        last_str = pd.Timestamp(last).strftime("%b %d, %Y") if last is not None else "—"
+        days = row["days_since_last_order"]
+        days_str = f"{days}d ago" if days is not None else "no orders"
+        rows_html += f"""
+        <tr>
+          <td style="padding:10px 14px;color:#f1f5f9;font-weight:500;">
+            <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
+                         background:{status_color};margin-right:8px;"></span>
+            {row['child']}
+          </td>
+          <td style="padding:10px 14px;color:#cbd5e1;font-size:0.9rem;">{last_str}<br/>
+              <span style="color:#94a3b8;font-size:0.8rem;">{days_str}</span></td>
+          <td style="padding:10px 14px;color:#f1f5f9;text-align:right;">{_fmt_money(row['ytd_revenue'])}</td>
+          <td style="padding:10px 14px;color:#f1f5f9;text-align:right;">{_fmt_money(row['open_ar'])}</td>
+          <td style="padding:10px 14px;color:#f1f5f9;text-align:right;">{_fmt_money(row['pipeline_value'])}
+              <br/><span style="color:#94a3b8;font-size:0.8rem;">{row['deal_count']} deals</span></td>
+        </tr>
+        """
+    st.markdown(
+        f"""
+        <div style="background:#0f172a;border:1px solid #334155;border-radius:12px;
+                    padding:16px;margin-bottom:20px;">
+          <div style="color:#f1f5f9;font-size:1.05rem;font-weight:700;margin-bottom:12px;">
+            🏢 Locations rolled up — {parent_name}
+          </div>
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="background:#1e293b;">
+                <th style="padding:10px 14px;text-align:left;color:#94a3b8;font-size:0.78rem;
+                           text-transform:uppercase;letter-spacing:0.05em;">Location</th>
+                <th style="padding:10px 14px;text-align:left;color:#94a3b8;font-size:0.78rem;
+                           text-transform:uppercase;letter-spacing:0.05em;">Last Order</th>
+                <th style="padding:10px 14px;text-align:right;color:#94a3b8;font-size:0.78rem;
+                           text-transform:uppercase;letter-spacing:0.05em;">YTD Revenue</th>
+                <th style="padding:10px 14px;text-align:right;color:#94a3b8;font-size:0.78rem;
+                           text-transform:uppercase;letter-spacing:0.05em;">Open AR</th>
+                <th style="padding:10px 14px;text-align:right;color:#94a3b8;font-size:0.78rem;
+                           text-transform:uppercase;letter-spacing:0.05em;">Pipeline</th>
+              </tr>
+            </thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_revenue_trend(customers, invoices_df, bounds, compare_bounds):
+    """Monthly revenue bar chart for the current period, with optional comparison overlay."""
+    if invoices_df is None or invoices_df.empty or "Corrected Customer" not in invoices_df.columns:
+        return
+    inv = invoices_df[invoices_df["Corrected Customer"].isin(customers)]
+    if inv.empty or "Date" not in inv.columns or "Amount" not in inv.columns:
+        st.info("No revenue data in the selected period.")
+        return
+
+    cur = _filter_df_by_date(inv, "Date", bounds).copy()
+    if cur.empty:
+        st.info("No revenue data in the selected period.")
+        return
+    cur["_month"] = cur["Date"].dt.to_period("M").dt.to_timestamp()
+    monthly = cur.groupby("_month")["Amount"].sum().reset_index()
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=monthly["_month"], y=monthly["Amount"],
+        name=bounds[2], marker_color="#3b82f6",
+        hovertemplate="%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>",
+    ))
+
+    if compare_bounds is not None:
+        cmp_df = _filter_df_by_date(inv, "Date", compare_bounds).copy()
+        if not cmp_df.empty:
+            cmp_df["_month"] = cmp_df["Date"].dt.to_period("M").dt.to_timestamp()
+            cmp_monthly = cmp_df.groupby("_month")["Amount"].sum().reset_index()
+            fig.add_trace(go.Scatter(
+                x=cmp_monthly["_month"], y=cmp_monthly["Amount"],
+                name=compare_bounds[2], mode="lines+markers",
+                line=dict(color="#f59e0b", dash="dash", width=2),
+                hovertemplate="%{x|%b %Y}<br>$%{y:,.0f}<extra></extra>",
+            ))
+
+    fig.update_layout(
+        height=280, margin=dict(l=0, r=0, t=20, b=0),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#cbd5e1"),
+        xaxis=dict(gridcolor="#1e293b"),
+        yaxis=dict(gridcolor="#1e293b", tickformat="$,.0f"),
+        legend=dict(bgcolor="rgba(15,23,42,0.8)", bordercolor="#334155", borderwidth=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def render_unified_account_overview(sales_orders_df, invoices_df, deals_df,
+                                    invoice_line_items_df, ncr_df, parent_map):
+    """The one-screen account overview: selectors, period chips, KPI hero, trend,
+    child breakdown, export, then the section bodies."""
+    # ---- Rep + account selectors ----
+    ALLOWED_REPS = [
+        "Jake Lynch", "Brad Sherman", "Lance Mitton", "Owen Labombard",
+        "Alex Gonzalez", "Dave Borkowski", "Kyle Bissell",
+    ]
+    rep_list = [r for r in get_rep_list(sales_orders_df, invoices_df) if r in ALLOWED_REPS]
+    rep_list = ["All Reps"] + sorted(rep_list)
+
+    col_rep, col_account = st.columns([1, 2])
+    with col_rep:
+        selected_rep = st.selectbox("Sales Rep", rep_list, key="ov_rep")
+
+    # Build the rep's account roster (parents rolled up)
+    roster = build_rep_account_roster(
+        selected_rep, sales_orders_df, invoices_df, deals_df, parent_map,
+        group_by_parent=True,
+    )
+    account_options = [r["account"] for r in roster]
+    if not account_options:
+        st.warning(f"No customers found for {selected_rep}.")
+        return
+
+    with col_account:
+        default_idx = 0
+        if st.session_state.get("ov_account") in account_options:
+            default_idx = account_options.index(st.session_state["ov_account"])
+        selected_account = st.selectbox(
+            "Account", account_options, index=default_idx, key="ov_account",
+        )
+
+    # Parent vs standalone
+    account_info = next((r for r in roster if r["account"] == selected_account), None)
+    is_parent = bool(account_info and account_info["is_parent"])
+    children = account_info["children"] if account_info else [selected_account]
+
+    # Scope toggle for parents
+    if is_parent:
+        scope_col1, scope_col2 = st.columns([1, 2])
+        with scope_col1:
+            scope_mode = st.radio(
+                f"🏢 {len(children)} locations",
+                ["Rolled up", "Single location"],
+                horizontal=True, key="ov_scope_mode_radio",
+            )
+        if scope_mode == "Single location":
+            with scope_col2:
+                selected_child = st.selectbox("Location", children, key="ov_selected_child")
+            customers = [selected_child]
+            scope_desc = f"{selected_account} — {selected_child}"
+        else:
+            customers = list(children)
+            scope_desc = f"{selected_account} · {len(children)} locations rolled up"
+    else:
+        customers = [selected_account]
+        scope_desc = selected_account
+
+    st.markdown(
+        f"<div style='color:#94a3b8;font-size:0.85rem;margin:4px 0 12px 2px;'>Scope: "
+        f"<span style='color:#f1f5f9;font-weight:600;'>{scope_desc}</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    # ---- Period chips + comparison ----
+    period_col, compare_col, export_col = st.columns([3, 2, 1])
+    with period_col:
+        period_label = st.radio(
+            "Period", OV_PERIOD_OPTIONS, horizontal=True, key="ov_period",
+            label_visibility="collapsed",
+        )
+    with compare_col:
+        compare_display = st.radio(
+            "Compare", ["Off", "Prior Period", "Same Period Last Year"],
+            horizontal=True, key="ov_compare_display", label_visibility="collapsed",
+        )
+        compare_mode = {
+            "Off": "off", "Prior Period": "prior", "Same Period Last Year": "yoy",
+        }.get(compare_display, "off")
+
+    custom_start = None
+    custom_end = None
+    if period_label == "Custom Range":
+        today = datetime.now().date()
+        cs_col, ce_col = st.columns(2)
+        with cs_col:
+            custom_start = st.date_input(
+                "Start", value=today - timedelta(days=90), key="ov_custom_start",
+            )
+        with ce_col:
+            custom_end = st.date_input("End", value=today, key="ov_custom_end")
+
+    bounds = compute_period_bounds(period_label, custom_start, custom_end)
+    compare_bounds = compute_comparison_bounds(bounds, compare_mode) if compare_mode != "off" else None
+
+    # Mirror to legacy keys so existing exporters & legacy tools keep working
+    st.session_state["qbr_customer_selector"] = list(customers)
+    st.session_state["qbr_rep_selector"] = selected_rep
+    st.session_state["qbr_period_type"] = (
+        "All Time" if period_label == "All Time" else
+        "This Year" if period_label == "YTD" else
+        "This Quarter" if period_label == "This Quarter" else
+        "Last Year" if period_label == "Last Year" else
+        "Custom Range"
+    )
+
+    # ---- Export button ----
+    with export_col:
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+        customers_data = build_customers_export_tuples(
+            customers, sales_orders_df, invoices_df, deals_df, bounds,
+        )
+        try:
+            html_bytes = generate_combined_qbr_html(
+                customers_data,
+                selected_rep if selected_rep != "All Reps" else "Leadership",
+                date_label=bounds[2],
+            ).encode("utf-8")
+            safe_name = re.sub(r"[^A-Za-z0-9]+", "_", selected_account)[:40]
+            safe_period = re.sub(r"[^A-Za-z0-9]+", "_", bounds[2])[:20]
+            st.download_button(
+                "📥 Download",
+                data=html_bytes,
+                file_name=f"{safe_name}_QBR_{safe_period}.html",
+                mime="text/html",
+                key="ov_download",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.caption(f"Export unavailable: {e}")
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+    # ---- KPI hero ----
+    metrics_cur = compute_account_kpis(customers, bounds, sales_orders_df, invoices_df, deals_df)
+    metrics_cmp = (
+        compute_account_kpis(customers, compare_bounds, sales_orders_df, invoices_df, deals_df)
+        if compare_bounds is not None else None
+    )
+
+    def _d(key):
+        return _fmt_delta(metrics_cur[key], metrics_cmp[key]) if metrics_cmp else ""
+
+    last_order = metrics_cur["last_order_date"]
+    last_order_display = (
+        pd.Timestamp(last_order).strftime("%b %d, %Y") if last_order is not None else "—"
+    )
+    days_tag = (
+        f"<div style='color:#94a3b8;font-size:0.78rem;margin-top:6px;'>"
+        f"{metrics_cur['days_since_last_order']}d ago"
+        + (f" · {metrics_cur['most_recent_child']}" if is_parent and metrics_cur["most_recent_child"] else "")
+        + "</div>"
+        if metrics_cur["days_since_last_order"] is not None else ""
+    )
+
+    tiles_html = "".join([
+        _kpi_tile("Revenue", _fmt_money(metrics_cur["revenue"]), _d("revenue")),
+        _kpi_tile("Pipeline", _fmt_money(metrics_cur["pipeline"]), _d("pipeline")),
+        _kpi_tile("Open AR", _fmt_money(metrics_cur["open_ar"]), ""),
+        _kpi_tile("Last Order", f"<span style='font-size:1.1rem;'>{last_order_display}</span>", days_tag),
+        _kpi_tile("Avg Order Value", _fmt_money(metrics_cur["avg_order_value"]), _d("avg_order_value")),
+        _kpi_tile(
+            "Deals Won",
+            f"{metrics_cur['deals_won_count']} <span style='font-size:0.95rem;color:#cbd5e1;'>· {_fmt_money(metrics_cur['deals_won_amt'], compact=True)}</span>",
+            _d("deals_won_amt"),
+        ),
+    ])
+    st.markdown(
+        f"<div style='display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px;'>{tiles_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ---- Revenue trend ----
+    st.markdown("#### 📈 Revenue Trend")
+    _render_revenue_trend(customers, invoices_df, bounds, compare_bounds)
+
+    # ---- Child breakdown (parent roll-up only) ----
+    if is_parent and len(customers) > 1:
+        breakdown = build_child_breakdown(
+            selected_account, sales_orders_df, invoices_df, deals_df, parent_map,
+        )
+        _render_child_breakdown_table(selected_account, breakdown)
+
+    # ---- Section bodies ----
+    _render_overview_sections(
+        customers, selected_rep, bounds,
+        sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df,
+    )
+
+
+def _render_overview_sections(customers, rep, bounds, sales_orders_df, invoices_df,
+                              deals_df, invoice_line_items_df, ncr_df):
+    """Render the collapsible report sections in a single scroll."""
+    start, end, _label = bounds
+
+    # Filter per-customer dataframes for the period
+    if sales_orders_df is not None and not sales_orders_df.empty \
+            and "Corrected Customer Name" in sales_orders_df.columns:
+        customer_orders = sales_orders_df[sales_orders_df["Corrected Customer Name"].isin(customers)].copy()
+    else:
+        customer_orders = pd.DataFrame()
+
+    if invoices_df is not None and not invoices_df.empty \
+            and "Corrected Customer" in invoices_df.columns:
+        customer_invoices = invoices_df[invoices_df["Corrected Customer"].isin(customers)].copy()
+        if start is not None and "Date" in customer_invoices.columns:
+            customer_invoices_period = customer_invoices[
+                (customer_invoices["Date"] >= start) & (customer_invoices["Date"] <= end)
+            ]
+        else:
+            customer_invoices_period = customer_invoices
+    else:
+        customer_invoices = pd.DataFrame()
+        customer_invoices_period = pd.DataFrame()
+
+    # --- Pending Orders ---
+    with st.expander("📦 Pending Orders", expanded=True):
+        if not customer_orders.empty:
+            render_pending_orders_section(customer_orders)
+        else:
+            st.info("No order data for this account.")
+
+    # --- Open Invoices & AR ---
+    with st.expander("💰 Open Invoices & AR", expanded=True):
+        if not customer_invoices.empty and "Status" in customer_invoices.columns:
+            open_inv = customer_invoices[
+                customer_invoices["Status"].str.strip().str.lower() == "open"
+            ].copy()
+            if open_inv.empty:
+                st.success("✅ No open invoices — account is current.")
+            else:
+                total_open = open_inv["Amount Remaining"].sum() if "Amount Remaining" in open_inv.columns else 0
+                c1, c2 = st.columns(2)
+                c1.metric("Open Invoices", len(open_inv))
+                c2.metric("Total Outstanding", _fmt_money(total_open))
+                show_cols = [c for c in ["Document Number", "Date", "Due Date", "Amount", "Amount Remaining", "Corrected Customer"]
+                             if c in open_inv.columns]
+                if show_cols:
+                    st.dataframe(
+                        open_inv[show_cols].sort_values(
+                            "Due Date" if "Due Date" in show_cols else show_cols[0]
+                        ),
+                        use_container_width=True, hide_index=True,
+                    )
+        else:
+            st.info("No invoice data for this account.")
+
+    # --- Revenue (period) ---
+    with st.expander(f"📊 Revenue — {_label}", expanded=True):
+        if not customer_invoices_period.empty and "Amount" in customer_invoices_period.columns:
+            total_rev = customer_invoices_period["Amount"].sum()
+            invoice_count = len(customer_invoices_period)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Revenue", _fmt_money(total_rev))
+            c2.metric("Invoices", f"{invoice_count:,}")
+            c3.metric(
+                "Avg Invoice",
+                _fmt_money(total_rev / invoice_count) if invoice_count else "—",
+            )
+        else:
+            st.info(f"No revenue in {_label}.")
+
+    # --- Pipeline / open deals ---
+    with st.expander("📈 Pipeline & Open Deals", expanded=False):
+        if deals_df is not None and not deals_df.empty:
+            match = pd.Series(False, index=deals_df.index)
+            if "Company Name" in deals_df.columns:
+                match = match | deals_df["Company Name"].isin(customers)
+            if "Company Name 2" in deals_df.columns:
+                match = match | deals_df["Company Name 2"].isin(customers)
+            account_deals = deals_df[match].copy()
+            if account_deals.empty:
+                st.info("No deals on record for this account.")
+            else:
+                cs = account_deals["Close Status"].fillna("").astype(str).str.strip().str.lower() \
+                    if "Close Status" in account_deals.columns else pd.Series("", index=account_deals.index)
+                open_deals = account_deals[~cs.isin(["won", "lost", "closed won", "closed lost"])]
+                c1, c2 = st.columns(2)
+                c1.metric("Open Deals", len(open_deals))
+                c2.metric(
+                    "Pipeline Value",
+                    _fmt_money(open_deals["Amount"].sum()) if "Amount" in open_deals.columns else "—",
+                )
+                show_cols = [c for c in ["Deal Name", "Deal Stage", "Amount", "Close Date", "Deal Owner"]
+                             if c in open_deals.columns]
+                if show_cols and not open_deals.empty:
+                    st.dataframe(
+                        open_deals[show_cols].sort_values(
+                            "Close Date" if "Close Date" in show_cols else show_cols[0]
+                        ),
+                        use_container_width=True, hide_index=True,
+                    )
+        else:
+            st.info("Deal data unavailable.")
+
+    # --- SKU History (period-filtered) ---
+    with st.expander("🔄 SKU Order History", expanded=False):
+        if invoice_line_items_df is not None and not invoice_line_items_df.empty \
+                and "Correct Customer" in invoice_line_items_df.columns:
+            items = invoice_line_items_df[
+                invoice_line_items_df["Correct Customer"].isin(customers)
+            ].copy()
+            if start is not None and "Date" in items.columns:
+                items = items[(items["Date"] >= start) & (items["Date"] <= end)]
+            if items.empty:
+                st.info(f"No line items in {_label}.")
+            else:
+                if "Item" in items.columns and "Quantity" in items.columns and "Amount" in items.columns:
+                    agg = items.groupby("Item").agg(
+                        Qty=("Quantity", "sum"),
+                        Revenue=("Amount", "sum"),
+                        Orders=("Date", "nunique"),
+                    ).sort_values("Revenue", ascending=False).reset_index()
+                    agg["Revenue"] = agg["Revenue"].apply(lambda v: _fmt_money(v))
+                    st.dataframe(agg, use_container_width=True, hide_index=True)
+                else:
+                    st.dataframe(items.head(100), use_container_width=True, hide_index=True)
+        else:
+            st.info("Line-item data unavailable.")
+
+
 # ========== MAIN RENDER FUNCTION ==========
 
 def render_yearly_planning_2026():
-    """Main entry point - shows navigation tabs for QBR and Product Forecasting"""
-    
-    # Navigation tabs styling
+    """Main entry point — unified account overview (replaces the old 4-tab layout)."""
+    _render_unified_css()
+
+    # Gradient header
     st.markdown("""
-        <style>
-        /* Navigation tab styling */
-        .stTabs [data-baseweb="tab-list"] {
-            gap: 8px;
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            padding: 8px 16px;
-            border-radius: 12px;
-            border: 1px solid #334155;
-        }
-        .stTabs [data-baseweb="tab"] {
-            background: transparent;
-            border-radius: 8px;
-            color: #94a3b8;
-            font-weight: 600;
-            padding: 12px 24px;
-        }
-        .stTabs [data-baseweb="tab"]:hover {
-            background: #334155;
-            color: #f1f5f9;
-        }
-        .stTabs [aria-selected="true"] {
-            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%) !important;
-            color: white !important;
-        }
-        .stTabs [data-baseweb="tab-highlight"] {
-            display: none;
-        }
-        .stTabs [data-baseweb="tab-border"] {
-            display: none;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-    
-    # Header
-    st.markdown("""
-        <div style="
-            background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
-            padding: 1.25rem 2rem;
-            border-radius: 12px;
-            margin-bottom: 1rem;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-        ">
+        <div style="background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #06b6d4 100%);
+                    padding: 1.25rem 2rem; border-radius: 12px; margin-bottom: 1rem;
+                    display: flex; align-items: center; gap: 16px;">
             <div style="font-size: 2rem;">📊</div>
             <div>
-                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">2026 Yearly Planning</h1>
-                <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 0.85rem;">QBR Generation & Product Forecasting Tools</p>
+                <h1 style="color: white; margin: 0; font-size: 1.5rem; font-weight: 700;">
+                    Account Overview
+                </h1>
+                <p style="color: rgba(255,255,255,0.85); margin: 0; font-size: 0.85rem;">
+                    Unified QBR · Pipeline · Orders · AR · SKUs — all in one scroll
+                </p>
             </div>
         </div>
     """, unsafe_allow_html=True)
-    
-    # Navigation tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📋 QBR Generator", "📦 Product Forecasting Tool", "🔄 SKU Order History", "📊 Period Comparison"])
-    
-    with tab1:
-        render_qbr_generator_content()
-    
-    with tab2:
-        render_product_forecasting_tool()
-    
-    with tab3:
-        render_sku_order_history_tool()
-    
-    with tab4:
-        render_period_comparison_tool()
+
+    # Load data once
+    with qbr_loading("Loading account data..."):
+        sales_orders_df, invoices_df, deals_df, invoice_line_items_df, ncr_df = load_qbr_data()
+
+    # Parent/child map so corporate roll-ups work
+    parent_map = build_parent_child_map(sales_orders_df, invoices_df, deals_df)
+
+    render_unified_account_overview(
+        sales_orders_df, invoices_df, deals_df,
+        invoice_line_items_df, ncr_df, parent_map,
+    )
+
+    # Legacy reports (kept for any rep who needs the old tabbed flow)
+    with st.expander("🗂 Legacy reports (QBR Generator · Forecasting · SKU History · Period Comparison)", expanded=False):
+        legacy_tab = st.radio(
+            "Legacy tool",
+            ["QBR Generator", "Product Forecasting", "SKU Order History", "Period Comparison"],
+            horizontal=True, key="ov_legacy_tab", label_visibility="collapsed",
+        )
+        if legacy_tab == "QBR Generator":
+            render_qbr_generator_content()
+        elif legacy_tab == "Product Forecasting":
+            render_product_forecasting_tool()
+        elif legacy_tab == "SKU Order History":
+            render_sku_order_history_tool()
+        elif legacy_tab == "Period Comparison":
+            render_period_comparison_tool()
 
 
 def render_sku_order_history_tool():
@@ -8063,10 +8715,10 @@ def generate_sku_order_history_html(customer_name, sku_histories, sku_display_na
             
             order_history_html += f"""
                 <tr style="background: #f8fafc;">
-                    <td style="padding: 8px 12px; color: #64748b; font-size: 0.85rem;">{ordinal}</td>
-                    <td style="padding: 8px 12px;">{date_str}</td>
-                    <td style="padding: 8px 12px; text-align: right;">{qty_str}</td>
-                    <td style="padding: 8px 12px; color: #94a3b8; font-size: 0.85rem;">{doc_str}</td>
+                    <td style="padding: 8px 12px; color: #475569; font-size: 0.85rem;">{ordinal}</td>
+                    <td style="padding: 8px 12px; color: #1e293b;">{date_str}</td>
+                    <td style="padding: 8px 12px; text-align: right; color: #1e293b;">{qty_str}</td>
+                    <td style="padding: 8px 12px; color: #475569; font-size: 0.85rem;">{doc_str}</td>
                 </tr>
             """
         
