@@ -1,0 +1,335 @@
+# Verified facts extracted from source — no paraphrase, no agents.
+meta:
+  generated: auto-extracted from source (no agents, no paraphrase)
+  repo_root: /home/user/operations-dashboard-v2/calyx-sop-dashboard-v2
+constants:
+  _KNOWN_MSO_PARENTS:
+    file: src/yearly_planning_2026.py
+    line: 4453
+    value:
+      Curaleaf:
+        - Curaleaf
+      TerrAscend:
+        - TerrAscend
+        - Terrascend
+        - Terra Ascend
+      Trulieve:
+        - Trulieve
+      Verano:
+        - Verano
+      Green Thumb Industries:
+        - Green Thumb Industries
+        - Green Thumb
+        - GTI
+      Cresco Labs:
+        - Cresco Labs
+        - Cresco
+      Columbia Care / Cannabist:
+        - Columbia Care
+        - Cannabist
+      Jushi Holdings:
+        - Jushi Holdings
+        - Jushi
+      Ascend Wellness Holdings:
+        - Ascend Wellness Holdings
+        - Ascend Wellness
+        - AWH
+      AYR Wellness, Inc.:
+        - AYR Wellness, Inc.
+        - AYR Wellness
+        - Ayr Wellness
+        - AYR
+      Acreage Holdings:
+        - Acreage Holdings
+        - Acreage
+      Glass House Brands:
+        - Glass House Brands
+        - Glass House
+      4Front Ventures:
+        - 4Front Ventures
+        - 4Front
+      Planet 13:
+        - Planet 13
+      MedMen:
+        - MedMen
+      Schwazze:
+        - Schwazze
+      Harvest Health & Recreation:
+        - Harvest Health
+        - Harvest HOC
+      StateHouse Holdings:
+        - StateHouse Holdings
+        - StateHouse
+      Holistic Industries:
+        - Holistic Industries
+      Revolutionary Clinics:
+        - Revolutionary Clinics
+      Parallel:
+        - Parallel Cannabis
+        - Surterra
+      The Cannabist Company:
+        - The Cannabist Company
+      Goodness Growth Holdings:
+        - Goodness Growth
+        - Vireo Health
+        - Vireo
+      Lowell Farms:
+        - Lowell Farms
+        - Lowell Herb Co
+  REP_QUOTAS:
+    file: src/q2_revenue_snapshot.py
+    line: 706
+    value:
+      Jake Lynch: 2739194
+      Dave Borkowski: 1013647
+      Brad Sherman: 566039
+      Lance Mitton: 241753
+      Alex Gonzalez: 0
+      Owen Labombard: 0
+      Shopify ECommerce: 0
+  QUARTER_LABEL:
+    file: src/q2_revenue_snapshot.py
+    line: 700
+    value: Q2 2026
+  QUARTER_START:
+    file: src/q2_revenue_snapshot.py
+    line: 701
+    value: 2026-04-01
+  QUARTER_END:
+    file: src/q2_revenue_snapshot.py
+    line: 702
+    value: 2026-06-30
+  Q1_REP_QUOTAS:
+    file: src/q1_revenue_snapshot.py
+    line: 42
+    value:
+      Jake Lynch: 2739194
+      Dave Borkowski: 1013647
+      Brad Sherman: 566039
+      Lance Mitton: 241753
+      Alex Gonzalez: 0
+      Owen Labombard: 0
+      Shopify ECommerce: 0
+  Q1_TEAM_QUOTA:
+    file: src/q1_revenue_snapshot.py
+    line: 40
+    value: 4560633
+sheets:
+  -
+    tab: Raw_Items
+    range: "A:C"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: Raw_Inventory
+    range: "A:Z"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: _NS_SalesOrders_Data
+    range: "A:AG"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: _NS_Invoices_Data
+    range: "A:U"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: All Reps All Pipelines
+    range: "A:Z"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: Invoice Line Item
+    range: "A:Z"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: Non-Conformance Details
+    range: "A:W"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: HB NCR
+    range: "A2:O"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: Sales Order Line Item
+    range: "A:Z"
+    loaded_in: src/yearly_planning_2026.py
+  -
+    tab: Dashboard Info
+    range: "A:B"
+    loaded_in: src/q2_revenue_snapshot.py
+  -
+    tab: _NS_Invoices_Data
+    range: "A:Y"
+    loaded_in: src/q2_revenue_snapshot.py
+  -
+    tab: Production Schedule
+    range: "A:R"
+    loaded_in: src/q2_revenue_snapshot.py
+  -
+    tab: Amie Update
+    range: "A:J"
+    loaded_in: src/q2_revenue_snapshot.py
+  -
+    tab: Dashboard Info
+    range: "A:C"
+    loaded_in: src/q1_revenue_snapshot.py
+  -
+    tab: 2026 Forecast
+    range: "A1:S80"
+    loaded_in: src/Rev_Ops_Playground.py
+  -
+    tab: Sales Order Line Item
+    range: "A:W"
+    loaded_in: src/Rev_Ops_Playground.py
+  -
+    tab: Copy of Deals Line Item
+    range: "A2:AB"
+    loaded_in: src/Rev_Ops_Playground.py
+  -
+    tab: Deals Line Item
+    range: "A2:V"
+    loaded_in: src/Rev_Ops_Playground.py
+functions:
+  generate_qbr_html:
+    file: src/yearly_planning_2026.py
+    line: 273
+  generate_combined_qbr_html:
+    file: src/yearly_planning_2026.py
+    line: 2658
+  generate_combined_summary_html:
+    file: src/yearly_planning_2026.py
+    line: 3519
+  clean_numeric:
+    file: src/q1_revenue_snapshot.py
+    line: 114
+  load_sku_display_names:
+    file: src/yearly_planning_2026.py
+    line: 3634
+  load_qbr_data:
+    file: src/yearly_planning_2026.py
+    line: 3745
+  get_rep_list:
+    file: src/yearly_planning_2026.py
+    line: 4339
+  get_customers_for_rep:
+    file: src/yearly_planning_2026.py
+    line: 4356
+  get_customer_deals:
+    file: src/yearly_planning_2026.py
+    line: 4388
+  _crm_extract_parent:
+    file: src/yearly_planning_2026.py
+    line: 4422
+  _match_mso_parent:
+    file: src/yearly_planning_2026.py
+    line: 4481
+  _crm_normalize:
+    file: src/yearly_planning_2026.py
+    line: 4511
+  build_parent_child_map:
+    file: src/yearly_planning_2026.py
+    line: 4521
+  resolve_account_customers:
+    file: src/yearly_planning_2026.py
+    line: 4575
+  build_rep_account_roster:
+    file: src/yearly_planning_2026.py
+    line: 4594
+  build_child_breakdown:
+    file: src/yearly_planning_2026.py
+    line: 4729
+  render_pending_orders_section:
+    file: src/yearly_planning_2026.py
+    line: 4816
+  categorize_product:
+    file: src/yearly_planning_2026.py
+    line: 5425
+  apply_product_categories:
+    file: src/yearly_planning_2026.py
+    line: 5701
+  rollup_dml_lids:
+    file: src/yearly_planning_2026.py
+    line: 5738
+  create_unified_product_view:
+    file: src/yearly_planning_2026.py
+    line: 5807
+  compute_period_bounds:
+    file: src/yearly_planning_2026.py
+    line: 7107
+  compute_comparison_bounds:
+    file: src/yearly_planning_2026.py
+    line: 7137
+  compute_account_kpis:
+    file: src/yearly_planning_2026.py
+    line: 7173
+  build_customers_export_tuples:
+    file: src/yearly_planning_2026.py
+    line: 7249
+  _kpi_tile:
+    file: src/yearly_planning_2026.py
+    line: 7328
+  _render_child_breakdown_table:
+    file: src/yearly_planning_2026.py
+    line: 7370
+  _render_revenue_trend:
+    file: src/yearly_planning_2026.py
+    line: 7428
+  render_unified_account_overview:
+    file: src/yearly_planning_2026.py
+    line: 7474
+  _render_export_region:
+    file: src/yearly_planning_2026.py
+    line: 7653
+  _render_overview_sections:
+    file: src/yearly_planning_2026.py
+    line: 7769
+  generate_sku_order_history_html_printable:
+    file: src/yearly_planning_2026.py
+    line: 8654
+  generate_period_comparison_html:
+    file: src/yearly_planning_2026.py
+    line: 12479
+  match_customer:
+    file: src/yearly_planning_2026.py
+    line: 4063
+  categorize_hubspot_ncr:
+    file: src/yearly_planning_2026.py
+    line: 4184
+  normalize_for_matching:
+    file: src/yearly_planning_2026.py
+    line: 4068
+  extract_base_company:
+    file: src/yearly_planning_2026.py
+    line: 4081
+  try_match:
+    file: src/yearly_planning_2026.py
+    line: 4113
+enums:
+  pending_order_statuses:
+    - Pending Approval
+    - Pending Fulfillment
+    - PA
+    - PF
+  sku_cadence_exclusions:
+    skus:
+      - AVATAX
+      - UPS GROUND
+      - UPS NEXT DAY SAVER
+      - Estes Express
+      - Convenience Fee 3.5%
+      - Tooling Fee - Labels
+      - Expedite Fee
+      - Ecommerce Shipping
+      - Ecommerce shipping
+    patterns:
+      - fee
+      - shipping
+      - freight
+      - "ups "
+      - fedex
+      - estes
+      - avatax
+      - tax
+      - tooling
+      - expedite
+      - convenience
+      - surcharge
+      - handling

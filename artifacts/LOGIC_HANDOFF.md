@@ -2,17 +2,13 @@
 
 > ## ⚠️ VERIFICATION STATUS — READ FIRST
 >
-> **This document is WIP and has NOT been fully code-verified.**
+> **This document is a narrative playbook. For anything specific, cross-reference with the two higher-trust artifacts:**
 >
-> Much of it was synthesized from (a) exploratory agent summaries and (b) session memory while the author was actively editing `yearly_planning_2026.py` — which means some `file:line` anchors have drifted and some claims are one-step removed from a direct read of the source.
+> 1. **`artifacts/facts.yaml`** — auto-extracted from source via AST/regex. Zero paraphrase. Use for column names, sheet tabs, status enums, hardcoded lists (MSO parents, quotas, rep allowlist, pending statuses, SKU exclusions), and function line numbers. **Trust this first.**
+> 2. **`artifacts/calculations.md`** — AST-extracted full source of every non-UI function (292 functions, ~11.7k lines). Use for exact implementations.
+> 3. **`artifacts/INDEX.md`** — thin "where to look" lookup table pointing at the right artifact+anchor for a given question.
 >
-> **Before trusting any specific claim:**
-> 1. Treat the **narrative explanations** as a starting map, not ground truth.
-> 2. Treat the **column names, sheet tabs, status enums, and hardcoded lists** (MSO parents, quotas, rep allowlist, pending statuses, NCR categories, SKU exclusions) as more reliable — they come from structured extraction.
-> 3. Cross-check any `file:line` anchor against the current source before quoting it back. Line numbers shift whenever `yearly_planning_2026.py` is edited.
-> 4. The companion file **`artifacts/calculations.md`** is AST-extracted (fully verified) and contains the actual source bodies of all 292 calculation functions. Prefer it when you need the exact implementation.
->
-> A follow-up pass will either (a) replace this prose with a structured YAML/JSON schema of facts plus a thin file-level index, or (b) re-verify every citation in place. See the session discussion for which route was chosen.
+> **This file is for the WHY — intent, rules, business logic.** Treat the narrative as a starting map. Some `file:line` anchors may drift if the source changes; always cross-check against the live source before quoting.
 
 ---
 
